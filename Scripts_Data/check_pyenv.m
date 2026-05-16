@@ -17,6 +17,7 @@ if(needToSetPyenv)
     try
         % Try windows default directory
         pyenv('Version','C:\Windows\py.exe');
+        pyenv('Version','C:\Users\smiller\AppData\Local\Programs\Python\Python310\python.exe')
     catch
         try
             % Try MATLAB Online setting

@@ -1,5 +1,5 @@
 %% Test Effect of Wind
-% Copyright 2021-2025 The MathWorks, Inc.
+% Copyright 2021-2026 The MathWorks, Inc.
 
 % Move to folder where script is saved
 cd(fileparts(which(mfilename)));
