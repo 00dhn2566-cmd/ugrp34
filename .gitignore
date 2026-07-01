@@ -1,0 +1,4 @@
+# EuRoC MAV / large dataset files
+visual_imaging/dataset/*
+!visual_imaging/dataset/.gitkeep
+!visual_imaging/dataset/README.md
