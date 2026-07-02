@@ -1,3 +1,6 @@
 [submodule "visual_imaging_taemin/openvins_source"]
 	path = visual_imaging_taemin/openvins_source
 	url = https://github.com/rpng/open_vins.git
+[submodule "control_seoungjin/controller/Quadcopter-Drone-Model-Simscape"]
+	path = control_seoungjin/controller/Quadcopter-Drone-Model-Simscape
+	url = https://github.com/mathworks/Quadcopter-Drone-Model-Simscape.git
