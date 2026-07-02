@@ -1,4 +1,4 @@
 # EuRoC MAV / large dataset files
-visual_imaging/dataset/*
-!visual_imaging/dataset/.gitkeep
-!visual_imaging/dataset/README.md
+visual_imaging_taemin/dataset/*
+!visual_imaging_taemin/dataset/.gitkeep
+!visual_imaging_taemin/dataset/README.md
