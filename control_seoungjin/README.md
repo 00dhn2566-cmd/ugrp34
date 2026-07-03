@@ -58,6 +58,7 @@ FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실
   ./control_seoungjin/sample/run_sample_sim.sh
   ```
   MATLAB 실행에는 **Simscape Driveline**이 필요합니다 (`Aerodynamic Propeller` 블록이 `sdl_lib`를 참조). 없으면 Add-On 관리자에서 설치해야 합니다.
+  MATLAB 실행파일은 자동으로 찾습니다 (PATH → `C:\Program Files\MATLAB\`의 최신 버전 순). 여러 버전이 깔려 있거나 다른 경로에 있으면 `MATLAB_EXE` 환경변수로 직접 지정하세요: `MATLAB_EXE="/c/Program Files/MATLAB/R2025b/bin/matlab.exe" ./run_sample_sim.sh`
 - **`run_sample_sim.m`** (`controller/Quadcopter-Drone-Model-Simscape/` 안에 위치): `trajectory.mat` 로드 → 파라미터/라이브러리 경로 설정 → `sim('quadcopter_package_delivery')` 실행.
 
 ## path_time.ipynb
