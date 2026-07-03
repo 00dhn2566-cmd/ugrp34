@@ -61,6 +61,12 @@ FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실
   MATLAB 실행파일은 자동으로 찾습니다 (PATH → `C:\Program Files\MATLAB\`의 최신 버전 순). 여러 버전이 깔려 있거나 다른 경로에 있으면 `MATLAB_EXE` 환경변수로 직접 지정하세요: `MATLAB_EXE="/c/Program Files/MATLAB/R2025b/bin/matlab.exe" ./run_sample_sim.sh`
 - **`run_sample_sim.m`** (`controller/Quadcopter-Drone-Model-Simscape/` 안에 위치): `trajectory.mat` 로드 → 파라미터/라이브러리 경로 설정 → `sim('quadcopter_package_delivery')` 실행.
 
+### 경로 관련 주의사항 (MATLAB)
+
+- **CAD 파일 경로**: `File Solid` 블록(Arm/Plate/Propeller 등)들은 `ExtGeomFileName`에 `quadcopter_drone_arm.stp`처럼 **파일명만** 저장하고 있어서, MATLAB path에서 파일을 찾습니다. `addpath('Scripts_Data')`, `addpath('Models')`, `addpath('Libraries')`뿐 아니라 **`addpath(genpath('CAD'))`도 반드시 필요**합니다 (안 하면 CAD를 안 건드린 프로펠러/로고 파일까지 전부 "파일을 찾을 수 없음" 오류가 남).
+- **`waypoints` 변수 방향**: `Ground/Trajectory/Waypoints` 블록은 `unique(waypoints','rows')`로 워크스페이스 변수를 사용하므로, `waypoints`는 **3×N** (x/y/z가 행, 각 열이 한 점) 이어야 합니다. `waypoints_to_maneuver_input.py`가 저장하는 `waypoints`는 N×3이라 MATLAB에서 꼭 전치(`S.waypoints'`)해서 써야 합니다. (반면 `spline_data`는 Lookup Table이 `spline_data(:,1)`처럼 열로 읽으므로 N×3 그대로 사용.)
+- **MATLAB 실행파일**: 하드코딩하지 않고 `run_sample_sim.sh`가 자동 탐지합니다 (위 참고).
+
 ## path_time.ipynb
 경로(x, y, z)에 시간을 부여해서 PID 컨트롤러에 넣을 feed(position/velocity/acceleration setpoint)를 생성하는 노트북입니다. 파이프라인은 다음과 같습니다.
 
