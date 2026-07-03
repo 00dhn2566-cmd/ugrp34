@@ -1,5 +1,22 @@
 # control_seoungjin
 
+## 요구사항 (Requirements)
+
+**MATLAB / Simulink** (`sample/run_sample_sim.sh` 및 `controller/` 시뮬레이션 실행용)
+- MATLAB R2025b 이상
+- Simulink
+- Simscape, Simscape Multibody, Simscape Electrical
+- **Simscape Driveline** — `Aerodynamic Propeller` 블록(`sdl_lib`)에 필요. 없으면 `Quadcopter/Propeller 1~4` 서브시스템에서 라이브러리 로드 오류가 남. Add-On 관리자에서 설치.
+- (선택) Simulink Control Design — PID 블록의 "Tune" 기능 사용 시
+
+**Python** (`path_time.py`, `sample/*.py` 실행용)
+- numpy
+- scipy (`scipy.interpolate`, `scipy.io`)
+- matplotlib (`sample/verify_sample_trajectory.py`만 해당)
+
+**CAD 툴** (FX450 CAD 교체/재작업 시)
+- SolidWorks (원본 `.SLDPRT`/`.SLDASM`) 또는 Fusion 360 (STEP 내보내기)
+
 ## controller/
 [Quadcopter-Drone-Model-Simscape](https://github.com/mathworks/Quadcopter-Drone-Model-Simscape.git) (MathWorks 공식)를 서브모듈로 가져와서 파라미터(질량, 관성, PID 게인 등) 튜닝을 진행하는 폴더입니다. 실제 컨트롤러에 적용하기 전에 여기서 시뮬레이션으로 값을 검증합니다.
 
