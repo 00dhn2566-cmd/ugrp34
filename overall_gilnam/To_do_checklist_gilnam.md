@@ -27,25 +27,24 @@
 
 ## 2. 색 판정 (통과 순서 식별)
 
-- [ ] **HSV 규칙 기반 색 판정 후처리 구현**
+- [x] **HSV 규칙 기반 색 판정 후처리 구현** — `vision/color_judge.py` (2026-07-03, 합성 이미지 테스트 통과)
   - red(order 0): H ∈ [0,10] ∪ [170,179], S ≥ 100, V ≥ 80
   - green(order 1): H ∈ [50,70], S ≥ 100, V ≥ 80
   - blue(order 2): H ∈ [110,130], S ≥ 100, V ≥ 80
-- [ ] **색↔순서 매핑을 config 파일로 분리**
-  - 하드코딩 금지, 색 추가 시 테이블만 갱신하는 구조로 설계
+- [x] **색↔순서 매핑을 config 파일로 분리** — `vision/color_order.yaml` (코드는 이 파일만 읽음, 하드코딩 없음)
 - [ ] **HSV 판정 구간을 실제 시뮬 렌더 색으로 검증·미세조정** (규격 §7 잔여 사항)
   - 조윤호의 시뮬 환경 완성 후 진행
   - 조명 밝기·방향 랜덤화 하에서도 오판정이 없는지 확인
 
 ## 3. VIO 전달 인터페이스
 
-- [ ] **§5 메시지 규격에 맞춘 출력 구현**
+- [x] **§5 메시지 규격에 맞춘 출력 구현** — `vision/vision_msg.py` (2026-07-03)
   - 포함 필드: timestamp(int, ns) / frame_id / windows 리스트
   - 창문별: order_index(필수) / color(디버깅용) / corners(720p 픽셀) / corner_vis / center / det_conf / color_conf
   - depth 미포함 — 3D 복원은 VIO/융합단(박태민) 몫
-- [ ] **det_conf와 color_conf 분리 산출**
+- [ ] **det_conf와 color_conf 분리 산출** — color_conf는 `color_judge.py`가 산출(완료), det_conf는 모델 학습 후 박스 conf 연결
   - 탐지 신뢰도와 색 판정 신뢰도를 각각 제공 → 하류 필터링 가능하게
-- [ ] **GT 스트림 호환 확인**
+- [x] **GT 스트림 호환 확인** — `vision/gt_stream.py` (§4.3 라벨 → §5 메시지, 테스트로 규격 일치 검증)
   - 모델 학습 완료 전 파이프라인 검증에는 시뮬 GT corner를 동일 규격으로 사용
   - 모델 교체 시 하류 수정이 없도록 인터페이스 일치 확인
 
