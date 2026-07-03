@@ -1,3 +1,6 @@
+# Python bytecode
+__pycache__/
+
 # EuRoC MAV / large dataset files
 visual_imaging_taemin/dataset/*
 !visual_imaging_taemin/dataset/.gitkeep
@@ -5,7 +8,6 @@ visual_imaging_taemin/dataset/*
 
 # control_seoungjin: distribution zip / generated verification artifacts
 control_seoungjin/*.zip
-control_seoungjin/**/__pycache__/
 control_seoungjin/**/trajectory.mat
 control_seoungjin/sample/sample_trajectory.png
 control_seoungjin/sample/output/
