@@ -1,1 +1,5 @@
 # List of untracked files to ignore
+*.slxc
+slprj/
+trajectory.mat
+run_sample_sim_result.png

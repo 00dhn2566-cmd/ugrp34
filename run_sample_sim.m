@@ -6,6 +6,7 @@
 addpath('Scripts_Data');
 addpath('Models');
 addpath('Libraries');
+addpath(genpath('CAD'));   % File Solid blocks store bare filenames (e.g. quadcopter_drone_arm.stp)
 load_system('quadcopter_library');
 
 quadcopter_package_parameters;   % drone_mass, propeller.*, qc_motor.*, PID gains, ...
@@ -14,7 +15,7 @@ S = load('trajectory.mat');
 timespot_spl = S.timespot_spl;
 spline_data  = S.spline_data;
 spline_yaw   = S.spline_yaw;
-waypoints    = S.waypoints;              % (5,3) key waypoints, for visualization only
+waypoints    = S.waypoints';             % (5,3) -> (3,5): Ground/Trajectory expects 3xN like quadcopter_package_select_trajectory.m
 
 wayp_path_vis = quadcopter_waypoints_to_path_vis(waypoints);
 
