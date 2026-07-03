@@ -60,7 +60,7 @@ FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실
   MATLAB 실행에는 **Simscape Driveline**이 필요합니다 (`Aerodynamic Propeller` 블록이 `sdl_lib`를 참조). 없으면 Add-On 관리자에서 설치해야 합니다.
   MATLAB 실행파일은 자동으로 찾습니다 (PATH → `C:\Program Files\MATLAB\`의 최신 버전 순). 여러 버전이 깔려 있거나 다른 경로에 있으면 `MATLAB_EXE` 환경변수로 직접 지정하세요: `MATLAB_EXE="/c/Program Files/MATLAB/R2025b/bin/matlab.exe" ./run_sample_sim.sh`
 - **`run_sample_sim.m`** (`controller/Quadcopter-Drone-Model-Simscape/` 안에 위치): `trajectory.mat` 로드 → 파라미터/라이브러리 경로 설정 → `sim('quadcopter_package_delivery')` 실행. 실행 도중 새로 생긴 워크스페이스 변수(`act_x1/y1/z1`, `des_x1/y1/z1` 등 로그 신호)를 `sim_result.mat`으로 저장합니다.
-- **`run_and_log.py`**: 정해진 입력 형식(`config.yaml`/`config.json`, `waypoints` + `limits` + `dt`)을 읽어서 궤적 생성 → `trajectory.mat` 생성/복사 → MATLAB 배치 실행 → 결과를 CSV로 저장하는 전체 파이프라인을 한 번에 실행합니다.
+- **`run_and_log.py`**: 정해진 입력 형식(`config.yaml`/`config.json`, `waypoints` + `limits` + `dt`)을 읽어서 궤적 생성 → `trajectory.mat` 생성/복사 → MATLAB 배치 실행 → 결과를 CSV로 저장하는 전체 파이프라인을 한 번에 실행합니다. 입력 파일 스펙(필수/선택 필드, 단위, 예시)은 [`sample/INPUT_FORMAT.md`](sample/INPUT_FORMAT.md) 참고.
   ```bash
   python control_seoungjin/sample/run_and_log.py --config control_seoungjin/sample/config.yaml
   ```
