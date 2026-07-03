@@ -22,7 +22,7 @@
 
 전체 시스템은 아래 흐름으로 구성된다.
 
-![전체 파이프라인과 담당자](overall_gilnam/pipeline_overview.svg)
+![전체 파이프라인과 담당자](overall_gilnam/docs/pipeline_overview.svg)
 
 ```
 카메라/IMU → [비전: 창문 탐지] → [VIO: 상태추정·3D 복원] → [경로계획: 강화학습(RL)] → [저수준 제어: PID] → 드론
