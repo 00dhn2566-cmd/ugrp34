@@ -14,6 +14,11 @@
 
   모터/모터캡/프로펠러 형상은 당분간 MathWorks 제네릭 CAD를 그대로 사용합니다.
 
+- **⚠️ 서브모듈 받는 법 (zip 배포)**: `controller/Quadcopter-Drone-Model-Simscape`는 아직 MathWorks 공식 저장소 주소를 그대로 가리키고 있어서, FX450 CAD로 교체한 커밋은 그 원격에 없습니다. 그래서 `git submodule update --init`으로는 안 받아지고, zip으로 따로 배포합니다.
+  1. 배포된 zip 파일을 받는다.
+  2. 저장소 루트 기준 **`control_seoungjin/controller/Quadcopter-Drone-Model-Simscape/`** 폴더 안에 압축을 풀어 덮어쓴다. (기존 폴더 내용 위에 그대로 압축 해제)
+  3. `git submodule update --init`은 실행하지 않는다 (실행하면 zip으로 넣은 내용이 지워지고 MathWorks 원본으로 되돌아갈 수 있음).
+
 - **PID 튜닝 위치**: `Models/quadcopter_package_delivery.slx`의 `Maneuver Controller` 서브시스템. 게인 값 자체는 `Scripts_Data/quadcopter_package_parameters.m`의 `kp_position/kp_attitude/kp_yaw/kp_altitude/kp_motor` 등 변수. 스크립트에서 값을 바꾸거나, Simulink에서 서브시스템 열어 PID 블록의 "Tune" 기능으로 조정 가능.
 
 - **모델 입력 형식**: `Maneuver Controller` 안 1-D Lookup Table 블록 4개(x/y/z/yaw)가 시뮬레이션 시간을 입력으로 받아 아래 워크스페이스 변수를 보간합니다.
