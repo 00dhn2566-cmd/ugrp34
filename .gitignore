@@ -9,3 +9,6 @@ control_seoungjin/**/__pycache__/
 control_seoungjin/**/trajectory.mat
 control_seoungjin/sample/sample_trajectory.png
 control_seoungjin/sample/output/
+
+# vision 학습 데이터셋 (로컬 전용, git 미포함)
+window_dataset/

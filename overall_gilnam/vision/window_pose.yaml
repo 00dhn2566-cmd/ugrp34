@@ -1,0 +1,28 @@
+# window_pose.yaml — YOLO-pose 학습용 데이터 정의
+# 근거: window_detection_spec_v0.2 §4.3 (라벨 포맷) + model_decisions.md #3·#4·#6
+# 사용: yolo pose train model=yolo11s-pose.pt data=window_pose.yaml imgsz=640 single_cls=True epochs=100
+
+# 데이터셋 루트 — 윤호 데이터셋 수령 후 본인 로컬 "절대경로"로 수정할 것.
+# (이미지·라벨 3,000장은 용량 문제로 git 미포함 — .gitignore 처리. 이 yaml만 커밋)
+path: /path/to/window_dataset
+
+train: images/train    # 80%
+val: images/val        # 10%
+test: images/test      # 10%
+# 라벨 txt는 Ultralytics 규칙(경로의 images/ → labels/ 치환)으로 자동 탐색:
+#   labels/{train,val,test}/*.txt
+
+# keypoint 정의 — §4.3: corner 4개 × (x, y, visibility)
+kpt_shape: [4, 3]
+
+# 좌우반전 증강 시 keypoint 인덱스 교환: 좌상(0)↔우상(1), 우하(2)↔좌하(3)
+# 미설정/오설정 시 반전된 절반의 데이터에서 corner 순서 의미가 오염됨 — 삭제 금지
+flip_idx: [1, 0, 3, 2]
+
+# 클래스 = order_index (§3.1 / §4.3 그대로 유지).
+# 단, 학습은 single_cls=True로 1클래스("창문") 취급 — 색·순서는 HSV 후처리 전담
+# (model_decisions.md #4 참조. 3클래스 회귀 시 플래그만 제거하면 됨)
+names:
+  0: window_red
+  1: window_green
+  2: window_blue
