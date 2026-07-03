@@ -8,3 +8,4 @@ control_seoungjin/*.zip
 control_seoungjin/**/__pycache__/
 control_seoungjin/**/trajectory.mat
 control_seoungjin/sample/sample_trajectory.png
+control_seoungjin/sample/output/
