@@ -56,6 +56,37 @@ waypoints    = S.waypoints';             % (5,3) -> (3,5): Ground/Trajectory exp
 
 wayp_path_vis = quadcopter_waypoints_to_path_vis(waypoints);
 
+% 우리 파트의 출력 경계: "각 모터에 들어가는 명령"(모터별 각속도 setpoint w1~w4)까지.
+% 그 다음(모터 전기/역학, 프로펠러 공력 등 실제 물리 응답)은 Isaac Sim 쪽 역할이라
+% 여기서는 Motor Mixer가 만든 w1~w4 신호만 To Workspace로 추가 로깅한다.
+% (배선은 안 건드리고 기존 신호에서 분기만 추가 — Add4/5/7/6 순서가 각각 w1/w2/w3/w4에 대응.)
+mixer = 'quadcopter_package_delivery/Maneuver Controller/Motor Mixer';
+motorCmdSrc  = {'Add4', 'Add5', 'Add7', 'Add6'};   % w1, w2, w3, w4
+motorCmdVars = {'motor_cmd_w1', 'motor_cmd_w2', 'motor_cmd_w3', 'motor_cmd_w4'};
+for i = 1:numel(motorCmdSrc)
+    twName = ['To Workspace ' motorCmdVars{i}];
+    if isempty(find_system(mixer, 'SearchDepth', 1, 'Name', twName))
+        twBlk = [mixer '/' twName];
+        add_block('simulink/Sinks/To Workspace', twBlk, ...
+            'VariableName', motorCmdVars{i}, 'SaveFormat', 'Array');
+        srcPh = get_param([mixer '/' motorCmdSrc{i}], 'PortHandles');
+        twPh  = get_param(twBlk, 'PortHandles');
+        add_line(mixer, srcPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
+    end
+end
+
+% motor_cmd_w1~w4는 Array 포맷이라 시간이 따로 안 붙어 있음 -> 같은 솔버 스텝마다
+% 값을 찍는 Clock을 하나 추가해서 sim_time으로 같이 로깅 (행 순서가 그대로 대응됨).
+mdl = 'quadcopter_package_delivery';
+if isempty(find_system(mdl, 'SearchDepth', 1, 'Name', 'Sim Time Clock'))
+    add_block('simulink/Sources/Clock', [mdl '/Sim Time Clock']);
+    add_block('simulink/Sinks/To Workspace', [mdl '/To Workspace sim_time'], ...
+        'VariableName', 'sim_time', 'SaveFormat', 'Array');
+    clockPh = get_param([mdl '/Sim Time Clock'], 'PortHandles');
+    twPh    = get_param([mdl '/To Workspace sim_time'], 'PortHandles');
+    add_line(mdl, clockPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
+end
+
 vars_before = who;
 simOut = sim('quadcopter_package_delivery');
 fprintf('Simulation finished successfully. class(simOut) = %s\n', class(simOut));
