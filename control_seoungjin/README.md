@@ -59,7 +59,21 @@ FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실
   ```
   MATLAB 실행에는 **Simscape Driveline**이 필요합니다 (`Aerodynamic Propeller` 블록이 `sdl_lib`를 참조). 없으면 Add-On 관리자에서 설치해야 합니다.
   MATLAB 실행파일은 자동으로 찾습니다 (PATH → `C:\Program Files\MATLAB\`의 최신 버전 순). 여러 버전이 깔려 있거나 다른 경로에 있으면 `MATLAB_EXE` 환경변수로 직접 지정하세요: `MATLAB_EXE="/c/Program Files/MATLAB/R2025b/bin/matlab.exe" ./run_sample_sim.sh`
-- **`run_sample_sim.m`** (`controller/Quadcopter-Drone-Model-Simscape/` 안에 위치): `trajectory.mat` 로드 → 파라미터/라이브러리 경로 설정 → `sim('quadcopter_package_delivery')` 실행.
+- **`run_sample_sim.m`** (`controller/Quadcopter-Drone-Model-Simscape/` 안에 위치): `trajectory.mat` 로드 → 파라미터/라이브러리 경로 설정 → `sim('quadcopter_package_delivery')` 실행. 실행 도중 새로 생긴 워크스페이스 변수(`act_x1/y1/z1`, `des_x1/y1/z1` 등 로그 신호)를 `sim_result.mat`으로 저장합니다.
+- **`run_and_log.py`**: 정해진 입력 형식(`config.yaml`/`config.json`, `waypoints` + `limits` + `dt`)을 읽어서 궤적 생성 → `trajectory.mat` 생성/복사 → MATLAB 배치 실행 → 결과를 CSV로 저장하는 전체 파이프라인을 한 번에 실행합니다.
+  ```bash
+  python control_seoungjin/sample/run_and_log.py --config control_seoungjin/sample/config.yaml
+  ```
+  출력은 `sample/output/`에 남습니다: `trajectory_feed.csv`(이 시간에 이 pos/yaw를 먹였다는 입력 스냅샷), `sim_result_*.csv`(로그된 각 신호별 결과, 예: `sim_result_act_x1.csv` vs `sim_result_des_x1.csv`로 실제/목표 위치 비교).
+
+### "택배 배송 드론" 예제 관련 (Package / Disengage Logic)
+
+`quadcopter_package_delivery`는 원래 MathWorks의 "짐을 배송하는 드론" 예제라서, 우리가 안 쓰는 짐(Package)/투하(Disengage) 로직이 딸려 있습니다. `run_sample_sim.m` 상단에 이걸 켜고 끄는 플래그 두 개가 있습니다 (배선은 그대로 두고 파라미터 값만 덮어써서 켜고 끕니다).
+
+| 플래그 | 기본값 | 설명 |
+|---|---|---|
+| `use_default_package_branding` | `false` | `true`면 MathWorks 기본 로고(Logo 1/2, `Basket_Logo.STL`)가 짐 위에 표시됨. `false`면 로고 없이 빈 박스만 표시(짐 본체 자체는 CAD 파일이 아니라 `BrickSolid` 단순 박스라 항상 그대로 있음). |
+| `enable_package_drop` | `true` | `false`면 `Distance to drop waypoint`의 거리 임계값(`dist_release`)을 `-1`로 덮어써서 투하 조건이 절대 만족되지 않게 함 (투하 로직 자체는 안 건드리고 조건만 비활성화). |
 
 ### 경로 관련 주의사항 (MATLAB)
 
