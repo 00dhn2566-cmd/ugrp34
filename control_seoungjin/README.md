@@ -64,7 +64,7 @@ FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실
   ```bash
   python control_seoungjin/sample/run_and_log.py --config control_seoungjin/sample/config.yaml
   ```
-  출력은 `sample/output/`에 남습니다: `trajectory_feed.csv`(이 시간에 이 pos/yaw를 먹였다는 입력 스냅샷), `sim_result_*.csv`(로그된 각 신호별 결과, 예: `sim_result_act_x1.csv` vs `sim_result_des_x1.csv`로 실제/목표 위치 비교).
+  출력은 `sample/output/`에 남습니다: `trajectory_feed.csv`(이 시간에 이 pos/yaw를 먹였다는 입력 스냅샷), `sim_result_*.csv`(로그된 각 신호별 결과, 예: `sim_result_act_x1.csv` vs `sim_result_des_x1.csv`로 실제/목표 위치 비교), `isaacsim_trajectory.json`(Isaac Sim용 프레임별 pose 목록 — 아직 Isaac Sim 쪽 정확한 입력 스키마가 정해지지 않아 일단 가장 단순한 형태: `{fps, frames: [{time, position:[x,y,z], yaw_rad, orientation_quat_wxyz}]}`로 출력. 스키마 확정되면 변환 로직만 바꾸면 됨).
 
 ### "택배 배송 드론" 예제 관련 (Package / Disengage Logic)
 

@@ -81,6 +81,41 @@ def save_feed_csv(path, timespot_spl, spline_data, spline_yaw):
     print(f"[save_feed_csv] 저장 완료: {path} ({len(timespot_spl)}행)")
 
 
+def save_feed_isaacsim_json(path, timespot_spl, spline_data, spline_yaw):
+    """Isaac Sim에서 바로 읽어 쓸 수 있는 프레임별 pose 목록(JSON).
+
+    형식 (아직 Isaac Sim 쪽 스키마가 정해지지 않아 가장 쉬운 형태로 결정):
+        {
+          "fps": ...,
+          "frames": [
+            {"time": t, "position": [x, y, z], "yaw_rad": yaw,
+             "orientation_quat_wxyz": [w, x, y, z]},
+            ...
+          ]
+        }
+
+    orientation_quat_wxyz는 yaw만 반영한 쿼터니언(roll=pitch=0)이라
+    Isaac Sim의 set_world_pose(position, orientation) 등에 바로 넣을 수 있다.
+    """
+    dt = float(timespot_spl[1] - timespot_spl[0]) if len(timespot_spl) > 1 else 0.0
+    fps = 1.0 / dt if dt > 0 else 0.0
+
+    frames = []
+    for t, (x, y, z), yaw in zip(timespot_spl, spline_data, spline_yaw):
+        half = yaw / 2.0
+        quat_wxyz = [float(np.cos(half)), 0.0, 0.0, float(np.sin(half))]
+        frames.append({
+            "time": float(t),
+            "position": [float(x), float(y), float(z)],
+            "yaw_rad": float(yaw),
+            "orientation_quat_wxyz": quat_wxyz,
+        })
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"fps": fps, "frames": frames}, f, indent=2)
+    print(f"[save_feed_isaacsim_json] 저장 완료: {path} ({len(frames)}프레임)")
+
+
 def find_matlab():
     """run_sample_sim.sh와 동일한 우선순위: MATLAB_EXE 환경변수 -> PATH -> 최신 설치버전."""
     env = os.environ.get("MATLAB_EXE")
@@ -150,6 +185,10 @@ def run_and_log(waypoints, v_max, a_max, j_max, snap_max, dt=0.01):
 
     save_feed_csv(
         os.path.join(OUTPUT_DIR, "trajectory_feed.csv"),
+        timespot_spl, spline_data, spline_yaw,
+    )
+    save_feed_isaacsim_json(
+        os.path.join(OUTPUT_DIR, "isaacsim_trajectory.json"),
         timespot_spl, spline_data, spline_yaw,
     )
 
