@@ -11,6 +11,43 @@ load_system('quadcopter_library');
 
 quadcopter_package_parameters;   % drone_mass, propeller.*, qc_motor.*, PID gains, ...
 
+% 짐(Package) 로고 CAD 선택: true = MathWorks 기본 예제 로고, false = 빈 패키지(로고 없음)
+% Package 본체(BrickSolid, pkgSize 기반 단순 박스)는 두 경우 모두 그대로이고,
+% Disengage Logic(투하 로직)도 영향 없음 — 순수 장식용 Logo 1/2 지오메트리만 켜고 끔.
+use_default_package_branding = false;
+
+load_system('quadcopter_package_delivery');
+logo_blocks = {
+    'quadcopter_package_delivery/Quadcopter/Load/Package/Logo 1'
+    'quadcopter_package_delivery/Quadcopter/Load/Package/Logo 2'
+};
+if use_default_package_branding
+    logo_state = 'off';
+else
+    logo_state = 'on';
+end
+for i = 1:numel(logo_blocks)
+    set_param(logo_blocks{i}, 'Commented', logo_state);
+end
+
+% 투하(Disengage) 로직 on/off: true = 원래대로 dist_release/spd_release 조건에서 투하,
+% false = 거리 임계값을 음수로 덮어써서 절대 투하 조건이 만족되지 않게 함.
+% 배선(포트 연결)은 그대로 두고 Constant 블록 값만 바꾸는 방식이라 안전함.
+enable_package_drop = true;
+
+drop_dist_blocks = {
+    'quadcopter_package_delivery/Quadcopter/Load/Disengage Logic/Distance to drop waypoint/Constant'
+    'quadcopter_package_delivery/Quadcopter/Load/Disengage Logic/Distance to drop waypoint/Constant1'
+};
+if enable_package_drop
+    drop_dist_value = 'dist_release';
+else
+    drop_dist_value = '-1';   % 거리는 항상 0 이상이라 -1보다 작을 수 없음 -> 투하 조건 영원히 불만족
+end
+for i = 1:numel(drop_dist_blocks)
+    set_param(drop_dist_blocks{i}, 'Value', drop_dist_value);
+end
+
 S = load('trajectory.mat');
 timespot_spl = S.timespot_spl;
 spline_data  = S.spline_data;
