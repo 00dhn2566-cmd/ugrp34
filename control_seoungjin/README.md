@@ -28,16 +28,20 @@
   | `spline_data` | (N, 3) | x, y, z 위치 [m] |
   | `spline_yaw` | (N,) | yaw [rad] |
 
-## waypoints_to_maneuver_input.py
-`path_time.ipynb`의 `plan_waypoints`(waypoint를 하나씩 순서대로 최소시간 7차 다항식으로 잇는 궤적 계획)를 재사용해서, 위 `Maneuver Controller` 입력 형식(`timespot_spl`, `spline_data`, `spline_yaw`)에 맞는 `.mat` 파일을 생성하는 스크립트입니다. yaw는 진행 방향(속도 벡터의 heading)으로 자동 계산합니다.
+## path_time.py
+`path_time.ipynb`의 핵심 함수(arc-length 재매개변수화, 곡률, 속도 프로파일, `plan_waypoints` 등)만 검증/플롯 코드 없이 정리한 재사용 가능한 모듈입니다. `sample/`의 스크립트들이 이 모듈을 import해서 씁니다.
 
-```
-python waypoints_to_maneuver_input.py   # trajectory.mat 생성
-```
-```matlab
-load('trajectory.mat')                  % timespot_spl, spline_data, spline_yaw 로드
-sim('quadcopter_package_delivery')
-```
+## sample/
+FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실행 폴더입니다.
+
+- **`waypoints_to_maneuver_input.py`**: `path_time.py`의 `plan_waypoints`(waypoint를 하나씩 순서대로 최소시간 7차 다항식으로 잇는 궤적 계획)를 재사용해서, `Maneuver Controller` 입력 형식(`timespot_spl`, `spline_data`, `spline_yaw`, 시각화용 `waypoints`)에 맞는 `trajectory.mat`을 생성합니다. yaw는 진행 방향(속도 벡터의 heading)으로 자동 계산합니다.
+- **`verify_sample_trajectory.py`**: 위 궤적이 `v_max`/`a_max`/`j_max` 제약을 실제로 만족하는지 파이썬에서 검증하고 3D 경로 + 속도/가속도/저크 그래프(`sample_trajectory.png`)를 저장합니다. (참고: 이 제약은 x/y/z 축별로 적용되어서, 대각선 이동 시 벡터 크기 기준 속도/가속도가 축별 한계보다 커질 수 있습니다.)
+- **`run_sample_sim.sh`**: 위 궤적 생성 → `controller/Quadcopter-Drone-Model-Simscape/`로 복사 → MATLAB 배치 모드로 `run_sample_sim.m` 실행까지 한 번에 처리합니다.
+  ```bash
+  ./control_seoungjin/sample/run_sample_sim.sh
+  ```
+  MATLAB 실행에는 **Simscape Driveline**이 필요합니다 (`Aerodynamic Propeller` 블록이 `sdl_lib`를 참조). 없으면 Add-On 관리자에서 설치해야 합니다.
+- **`run_sample_sim.m`** (`controller/Quadcopter-Drone-Model-Simscape/` 안에 위치): `trajectory.mat` 로드 → 파라미터/라이브러리 경로 설정 → `sim('quadcopter_package_delivery')` 실행.
 
 ## path_time.ipynb
 경로(x, y, z)에 시간을 부여해서 PID 컨트롤러에 넣을 feed(position/velocity/acceleration setpoint)를 생성하는 노트북입니다. 파이프라인은 다음과 같습니다.
