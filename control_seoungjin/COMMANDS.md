@@ -63,6 +63,8 @@ DIAG_DIR=$(cygpath -w "$(pwd)/control_seoungjin/controller/Quadcopter-Drone-Mode
 - **`diagnose_motor_mixer.m`**: `Motor Mixer` 서브시스템의 입출력 포트와 `Maneuver Controller` ↔ `Quadcopter` 간 연결 확인.
 - **`diagnose_goto.m`**: Goto/From 태그로 연결된 신호(`ref`, `Roll`/`Pitch`/`Yaw`/`Thrust` 등) 추적, `Motor Mixer` 내부 블록 목록.
 
+이후 PID 재튜닝 디버깅 과정에서 추가된 스크립트(포트 번호/Element, 마스크 tunable 플래그, CAD 질량/관성, `linearize()`+`pidtune()` 시도 등)는 개수가 많아 여기 일일이 나열하지 않고 [`TUNING_STATUS.md`](controller/Quadcopter-Drone-Model-Simscape/TUNING_STATUS.md)에 각각 무엇을 확인했는지 정리해뒀다.
+
 ## 알려진 이슈
 
 - **Simscape Driveline 필수**: `Aerodynamic Propeller` 블록이 `sdl_lib`(Simscape Driveline)를 참조. 없으면 `Propeller 1~4` 서브시스템에서 라이브러리 로드 오류.
