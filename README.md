@@ -38,14 +38,15 @@
 ### 공통 / 인프라
 - [ ] Isaac Sim 시뮬레이션 환경 구축 (창문 배치·드론·물리)
 - [ ] 시뮬레이션 내 합성 데이터셋 자동 생성 (Replicator)
-- [ ] 데이터셋·인터페이스 규격 문서 확정 (진행 중, v0.1 작성됨)
+- [x] 데이터셋·인터페이스 규격 문서 확정 (`window_detection_spec_v0.2.md` 확정본)
 - [ ] 전체 파이프라인 통합 검증 (초기엔 ground-truth 값으로 흐름 확인)
 
 ### 비전 / 이미지 처리기
-- [ ] 창문 검출 모델 방식 확정 → **4-corner keypoint 검출** (YOLO-pose 기반)
-- [ ] 색 판정 (HSV 규칙 기반 후처리) 구현
-- [ ] 데이터셋으로 검출 모델 학습 → corner 정밀화
-- [ ] VIO 전달 규격에 맞춘 출력 인터페이스 구현
+- [x] 창문 검출 모델 방식 확정 → **4-corner keypoint 검출** (YOLO-pose 기반, 구조 확정 7건)
+- [x] 색 판정 (HSV 규칙 기반 후처리) 구현
+- [ ] 데이터셋으로 검출 모델 학습 → corner 정밀화 (데이터 대기 — 학습 루프는 토이 리허설로 검증 완료)
+- [x] VIO 전달 규격에 맞춘 출력 인터페이스 구현 (+ 태민용 합성 샘플 스트림 제공)
+- 비전 파트 상세: [overall_gilnam/README.md](overall_gilnam/README.md)
 
 ### 상태추정 (VIO)
 1. 시물레이션에서 사용하는 카메라와 imu에 대한 아래의 정보 수령(from 윤호)
@@ -81,6 +82,7 @@
 
 ### 학습
 - [ ] 강화학습 환경 조성 및 모델 훈련 (방학 중 checkpoint)
+- 시뮬·RL 파트 상세: [reinforcement_yunho/docs/To_do_checklist_yunho.md](reinforcement_yunho/docs/To_do_checklist_yunho.md)
 
 ## 5. 역할 분담 (Roles)
 

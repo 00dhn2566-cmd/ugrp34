@@ -5,5 +5,6 @@ opencv-python==5.0.0.93
 PyYAML==6.0.3
 pytest==9.1.1
 
-# 학습 단계에서 추가 예정 (model_decisions #1: 버전 핀 고정 필수)
-# ultralytics==<학습 시작 시 최신 안정 버전으로 확정>
+# 학습 의존성 (model_decisions #1: 버전 핀 고정 — 2026-07-04 리허설에서 확정)
+# torch는 ultralytics의 전이 의존성이라 별도 핀 불필요 (리허설 당시 2.12.1+cpu)
+ultralytics==8.4.87
