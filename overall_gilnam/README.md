@@ -36,7 +36,7 @@
 - **대기 (의존)**:
   - 윤호 — 데이터셋 생성, 시뮬 렌더 색 확인(HSV 구간 미세조정), intrinsics 기입(spec §6)
   - 태민 — 샘플 스트림으로 삼각측량 융합 착수·인터페이스 검증
-  - 팀 — 본 학습용 CUDA GPU 확보 논의 (윤호 시뮬 머신 겸용 여부 포함)
+  - 팀 — 본 학습용 CUDA GPU 확보 논의 (윤호 시뮬 머신 겸용 여부 포함) → 윤호 GPU 클러스터(40GB×20)로 해소, [gpu_jobs_yunho.md](../reinforcement_yunho/docs/gpu_jobs_yunho.md) 참조
 - 상세 체크리스트: [docs/To_do_checklist_gilnam.md](docs/To_do_checklist_gilnam.md)
 
 ## 다음 계획

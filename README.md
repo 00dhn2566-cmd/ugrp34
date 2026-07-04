@@ -82,6 +82,7 @@
 
 ### 학습
 - [ ] 강화학습 환경 조성 및 모델 훈련 (방학 중 checkpoint)
+- 시뮬·RL 파트 상세: [reinforcement_yunho/docs/To_do_checklist_yunho.md](reinforcement_yunho/docs/To_do_checklist_yunho.md)
 
 ## 5. 역할 분담 (Roles)
 
