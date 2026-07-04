@@ -13,13 +13,20 @@
 | `vision_msg.py` | §5 메시지 빌더 — 모든 출력(모델·GT)이 여길 거쳐 규격 준수 보장 |
 | `gt_stream.py` | GT 라벨(§4.3 txt) → §5 메시지 어댑터 (spec §4.4, 모델 학습 전 파이프라인 검증용) |
 | `model_decisions.md` | 모델 구조 확정 기록 (7건) |
+| `synth_intrinsics.yaml` | 합성 스트림용 임시 intrinsics — 윤호가 spec §6 기입 시 숫자만 교체 |
+| `synth_scene.py` | 합성 씬(창문 3개)·궤적·투영 순수 로직 (spec §4.1 랜덤화 준수) |
+| `make_stream.py` | 합성 §5+pose 샘플 스트림 생성 CLI → `sample_stream/` |
+| `sample_stream/` | 태민(VIO)용 산출물: `sample_stream.jsonl` + `scene_gt.json` + `README_stream.md` |
 
 데이터 흐름:
 
 ```
 [학습 전]  시뮬 GT 라벨 ──ᐳ gt_stream ──┐
 [학습 후]  YOLO-pose 검출 ─ᐳ color_judge ─┴─ᐳ vision_msg ──ᐳ §5 JSON ──ᐳ VIO(태민)
+[합성]     synth_scene ──ᐳ §4.3 라인 ──ᐳ gt_stream (make_stream.py → sample_stream/)
 ```
+
+샘플 스트림 재생성: `python make_stream.py --seed 42 --out sample_stream/`
 
 ## 테스트
 
