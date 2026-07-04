@@ -1,6 +1,10 @@
 # Python bytecode
 __pycache__/
 
+# ultralytics 학습 산출물 (runs·가중치는 커밋 금지)
+runs/
+*.pt
+
 # EuRoC MAV / large dataset files
 visual_imaging_taemin/dataset/*
 !visual_imaging_taemin/dataset/.gitkeep

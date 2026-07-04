@@ -17,6 +17,8 @@
 | `synth_scene.py` | 합성 씬(창문 3개)·궤적·투영 순수 로직 (spec §4.1 랜덤화 준수) |
 | `make_stream.py` | 합성 §5+pose 샘플 스트림 생성 CLI → `sample_stream/` |
 | `sample_stream/` | 태민(VIO)용 산출물: `sample_stream.jsonl` + `scene_gt.json` + `README_stream.md` |
+| `make_toy_dataset.py` | 학습 리허설용 토이 데이터셋 생성 CLI (정책 A 정합 렌더, 80/10/10 + meta.jsonl) |
+| `eval_corners.py` | corner 픽셀 오차 평가 — 코어(거리 구간별 mean/p95) + ultralytics CLI 모드 |
 
 데이터 흐름:
 
@@ -37,6 +39,16 @@ python -m pytest tests/ -q        # 이 폴더(vision/)에서 실행
 
 합성 이미지로 HSV 판정(테두리 밴드가 개구부 내부 배경에 오염되지 않는지 포함),
 §5 메시지 규격, GT 라벨 역정규화(→720p)를 검증한다.
+
+## 학습 리허설 (토이)
+
+```
+python make_toy_dataset.py --seeds 11,22,33,44 --frames-per-scene 30 --out window_dataset/toy/
+yolo pose train model=yolo11n-pose.pt data=window_dataset/toy/window_pose_toy.yaml imgsz=640 single_cls=True epochs=5
+python eval_corners.py --model runs/pose/train/weights/best.pt --dataset window_dataset/toy/
+```
+
+실데이터 도착 시 `window_pose.yaml`의 `path:` 기입 후 동일 절차 (본 학습은 model=yolo11s-pose.pt, epochs=100 — model_decisions.md).
 
 ## 남은 일 (의존성 대기)
 

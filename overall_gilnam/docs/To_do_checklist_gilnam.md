@@ -26,8 +26,8 @@
   - 라벨 포맷은 1차부터 visibility 필드 포함이므로 포맷 변경 없음
 - [ ] **추론 래퍼: 검출 결과 → color_judge → vision_msg 연결** — 학습 후
   - det_conf = 박스 conf, unknown 색 창문 처리 정책 확정 포함 — 드롭 권장
-- [ ] **ultralytics 버전 핀 고정** (학습 시작 시 requirements.txt 갱신)
-- [ ] **평가 스크립트: corner 픽셀 오차(720p) 거리 구간별 측정** (model_decisions #7 목표치 검증)
+- [x] **ultralytics 버전 핀 고정** — ultralytics==8.4.87 (requirements.txt, 2026-07-04 리허설에서 확정)
+- [x] **평가 스크립트: corner 픽셀 오차(720p) 거리 구간별 측정** — `vision/eval_corners.py` (테스트 포함, model_decisions #7 목표치 검증)
 
 ## 2. 색 판정 (통과 순서 식별)
 
@@ -92,3 +92,4 @@
 *작성일: 2026-07-02*
 *2026-07-03 갱신: 비전 코드 골격(색 판정·§5 빌더·GT 어댑터) 완료 반영.*
 *2026-07-04 갱신: 합성 씬 생성기 + 태민용 샘플 스트림(sample_stream/) 커밋.*
+*2026-07-04 갱신: 학습 리허설(토이 120장, yolo11n-pose 5에폭) 완료 — 학습 루프 검증. 평가 스크립트 커밋.*
