@@ -36,7 +36,7 @@
 ## 4. 해야 할 일 (Tasks)
 
 ### 공통 / 인프라
-- [ ] Isaac Sim 시뮬레이션 환경 구축 (창문 배치·드론·물리)
+- [ ] Isaac Sim 시뮬레이션 환경 구축 (창문 배치·드론·물리 · 배경에 VIO 특징점용 패턴/사물 필수 — 단색 배경 금지, 태민 요청 07/03)
 - [ ] 시뮬레이션 내 합성 데이터셋 자동 생성 (Replicator)
 - [x] 데이터셋·인터페이스 규격 문서 확정 (`window_detection_spec_v0.2.md` 확정본)
 - [ ] 전체 파이프라인 통합 검증 (초기엔 ground-truth 값으로 흐름 확인)
@@ -49,31 +49,22 @@
 - 비전 파트 상세: [overall_gilnam/README.md](overall_gilnam/README.md)
 
 ### 상태추정 (VIO)
-1. 시물레이션에서 사용하는 카메라와 imu에 대한 아래의 정보 수령(from 윤호)
-[OpenVINS 설정 YAML 입력값 정리]
-
-① 카메라 스펙 (→ kalibr_imucam_chain.yaml)
-
-- intrinsics (fx, fy): 초점거리 — 픽셀 이동과 실제 각도 간 환산 비율 (예: 400.0, 400.0)
-- intrinsics (cx, cy): 이미지 중심점 — 렌즈가 똑바로 보는 픽셀 위치 (예: 320.0, 240.0)
-- resolution: 이미지 크기 (예: 640 x 480)
-- T_imu_cam: 카메라가 IMU에서 어느 위치에, 어느 방향을 보고 붙어 있는지 (4x4 변환행렬)
-
-
-② IMU 스펙 (→ kalibr_imu_chain.yaml)
-
-- gyroscope_noise_density: 자이로가 순간순간 얼마나 떨리는지
-- gyroscope_random_walk: 자이로 영점이 시간이 지나며 얼마나 흘러가는지
-- accelerometer_noise_density: 가속도계의 순간 떨림
-- accelerometer_random_walk: 가속도계의 영점 흐름
-- update_rate: IMU 주파수 (예: 200)
-
-2. 테스트용으로 사용할 임의의 시물레이션 비행 데이터 수령(from 윤호)
-해당 비행에 대한 카메라 이미지 데이터 + imu 측정값 및 groundtruth(측정값이 아닌 실제 드론의 위치와 가속도에 대한 정답지)
-
-3. 위의 내용들을 바탕으로 OpenVINS의 파라미터값들 조정 및 최적화
-
-4. OpenVINS를 실시간 구독으로 바꾸어 제어기 파트에 신뢰도 높은 위치 및 가속도 값 제공 목표
+- [x] OpenVINS 환경 구축(WSL2 + ROS2 Jazzy) 및 구동 검증 — 여러 데이터셋(EuRoC 등)에서 정상 구동 최종 확인 (07/03). 실행 → TUM 변환 → evo ATE 평가 절차 스크립트화: [visual_imaging_taemin/commands/](visual_imaging_taemin/commands/)
+- [ ] 시뮬레이션 카메라·IMU 스펙 수령 (from 윤호 — 시뮬 환경 완성 대기). OpenVINS 설정 YAML 입력값:
+  - ① 카메라 스펙 (→ kalibr_imucam_chain.yaml)
+    - intrinsics (fx, fy): 초점거리 — 픽셀 이동과 실제 각도 간 환산 비율 (예: 400.0, 400.0)
+    - intrinsics (cx, cy): 이미지 중심점 — 렌즈가 똑바로 보는 픽셀 위치 (예: 320.0, 240.0)
+    - resolution: 이미지 크기 (예: 640 x 480)
+    - T_imu_cam: 카메라가 IMU에서 어느 위치에, 어느 방향을 보고 붙어 있는지 (4x4 변환행렬)
+  - ② IMU 스펙 (→ kalibr_imu_chain.yaml)
+    - gyroscope_noise_density / random_walk: 자이로의 순간 떨림 / 영점 흐름
+    - accelerometer_noise_density / random_walk: 가속도계의 순간 떨림 / 영점 흐름
+    - update_rate: IMU 주파수 (예: 200)
+- [ ] 테스트용 시뮬레이션 비행 데이터 수령 (from 윤호) — 카메라 이미지 + IMU 측정값 + groundtruth(실제 드론 위치·가속도 정답지)
+- [ ] OpenVINS 파라미터 조정·최적화 (위 스펙·데이터 수령 후 — 실행·평가 루프는 EuRoC 리허설로 검증 완료)
+- [ ] 창문 3D 위치 복원 — corner(§5) + pose 삼각측량 융합 (착수: 창문 3D 좌표 가정 하 행렬 계산 검증(07/03) → 픽셀 좌표 기반 삼각측량 진행 중. 길남 합성 샘플 스트림([overall_gilnam/vision/sample_stream/](overall_gilnam/vision/sample_stream/), scene_gt.json으로 채점 가능)으로 시뮬 데이터 대기 없이 진행 가능)
+- [ ] OpenVINS 실시간 구독 전환 → 제어기 파트에 신뢰도 높은 위치·가속도 값 제공
+- VIO 파트 상세·진행 로그: [visual_imaging_taemin/README.md](visual_imaging_taemin/README.md)
 
 
 ### 경로계획 · 제어
@@ -90,7 +81,7 @@
 |---|---|---|
 | 류길남 | 202111056 | 파이프라인 전반 설계·감독 + 이미지 처리 상용모델 조사·파인튜닝 |
 | 박성진 | 202111068 | PID 제어기 설계 |
-| 박태민 | 202211085 | VIO 관련 논문 다수 공부 |
+| 박태민 | 202211085 | VIO(OpenVINS) 상태추정 + 창문 3D 복원(corner+pose 삼각측량 융합) |
 | 조윤호 | 202211191 | 시뮬레이션 환경 조성 및 강화학습 환경 조성 (데이터셋 생성 포함) |
 
 ## 6. 마일스톤 (Milestones)
