@@ -45,22 +45,41 @@ if isempty(find_system(scope, 'SearchDepth', 1, 'Name', 'To Workspace act_yaw'))
     add_line(scope, srcPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
 end
 
-% (2) Control Yaw로 들어가는 오차(Add3 출력) 및 Filter Yaw 출력(필터링된 실제 요)
+% (2) Control Pitch/Roll/Yaw 각각의 입력(오차) 소스를 실제로 찾아서 탭.
+% 이름을 짐작(Add/Add1)하지 않고, 각 Control 블록의 Inport 소스를 추적.
 ypr = [mdl '/Maneuver Controller/Altitude and  YPR Control'];
-add3 = [ypr '/Add3'];
-filtYaw = [ypr '/Filter Yaw'];
-taps = {add3, filtYaw};
-tapVars = {'yaw_error', 'filter_yaw_out'};
-for i = 1:numel(taps)
-    twName = ['To Workspace ' tapVars{i}];
+ctrlBlocks = {[ypr '/Control Pitch'], [ypr '/Control Roll'], [ypr '/Control Yaw']};
+tapVars = {'pitch_error', 'roll_error', 'yaw_error'};
+filtBlocks = {[ypr '/Filter Pitch'], [ypr '/Filter Roll'], [ypr '/Filter Yaw']};
+filtVars = {'filter_pitch_out', 'filter_roll_out', 'filter_yaw_out'};
+
+for i = 1:numel(ctrlBlocks)
+    cph = get_param(ctrlBlocks{i}, 'PortHandles');
+    lineH = get_param(cph.Inport(1), 'Line');
+    if lineH ~= -1
+        srcPortH = get_param(lineH, 'SrcPortHandle');
+        if srcPortH ~= -1
+            twName = ['To Workspace ' tapVars{i}];
+            if isempty(find_system(ypr, 'SearchDepth', 1, 'Name', twName))
+                twBlk = [ypr '/' twName];
+                add_block('simulink/Sinks/To Workspace', twBlk, 'VariableName', tapVars{i}, 'SaveFormat', 'Array');
+                twPh = get_param(twBlk, 'PortHandles');
+                add_line(ypr, srcPortH, twPh.Inport(1), 'autorouting', 'on');
+            end
+        end
+    end
+end
+for i = 1:numel(filtBlocks)
+    twName = ['To Workspace ' filtVars{i}];
     if isempty(find_system(ypr, 'SearchDepth', 1, 'Name', twName))
         twBlk = [ypr '/' twName];
-        add_block('simulink/Sinks/To Workspace', twBlk, 'VariableName', tapVars{i}, 'SaveFormat', 'Array');
-        srcPh = get_param(taps{i}, 'PortHandles');
+        add_block('simulink/Sinks/To Workspace', twBlk, 'VariableName', filtVars{i}, 'SaveFormat', 'Array');
+        srcPh = get_param(filtBlocks{i}, 'PortHandles');
         twPh  = get_param(twBlk, 'PortHandles');
         add_line(ypr, srcPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
     end
 end
+taps = {};
 
 vars_before = who;
 simOut = sim(mdl);
@@ -74,16 +93,23 @@ for i = 1:numel(new_vars)
     end
 end
 
-fprintf('=== act_yaw (Scope/Chassis.yaw) vs filter_yaw_out (Control Yaw가 실제 보는 값) ===\n');
+fprintf('=== act_yaw (Scope/Chassis.yaw, 실제 물리) ===\n');
 if isfield(result, 'act_yaw')
     v = result.act_yaw;
-    fprintf('act_yaw: first5=%s last5=%s (deg last=%g)\n', mat2str(v(1:5)'), mat2str(v(end-4:end)'), rad2deg(v(end)));
+    fprintf('  last=%g (deg=%g)\n', v(end), rad2deg(v(end)));
 end
-if isfield(result, 'filter_yaw_out')
-    v = result.filter_yaw_out;
-    fprintf('filter_yaw_out: first5=%s last5=%s (deg last=%g)\n', mat2str(v(1:5)'), mat2str(v(end-4:end)'), rad2deg(v(end)));
-end
-if isfield(result, 'yaw_error')
-    v = result.yaw_error;
-    fprintf('yaw_error: first5=%s last5=%s\n', mat2str(v(1:5)'), mat2str(v(end-4:end)'));
+
+fprintf('\n=== 각 축의 Filter 출력(컨트롤러가 실제 보는 측정값) vs 오차(error) ===\n');
+axes_ = {'pitch','roll','yaw'};
+for i = 1:numel(axes_)
+    fv = sprintf('filter_%s_out', axes_{i});
+    ev = sprintf('%s_error', axes_{i});
+    if isfield(result, fv)
+        v = result.(fv);
+        fprintf('  %s: min=%g max=%g last=%g (deg last=%g)\n', fv, min(v), max(v), v(end), rad2deg(v(end)));
+    end
+    if isfield(result, ev)
+        v = result.(ev);
+        fprintf('  %s: min=%g max=%g last=%g\n', ev, min(v), max(v), v(end));
+    end
 end
