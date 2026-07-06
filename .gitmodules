@@ -4,3 +4,6 @@
 [submodule "control_seoungjin/controller/Quadcopter-Drone-Model-Simscape"]
 	path = control_seoungjin/controller/Quadcopter-Drone-Model-Simscape
 	url = https://github.com/mathworks/Quadcopter-Drone-Model-Simscape.git
+[submodule "simul"]
+	path = simul
+	url = https://github.com/isaac-sim/IsaacSim.git
