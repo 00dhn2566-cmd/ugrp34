@@ -29,8 +29,8 @@ pkgDensity = 1/(pkgSize(1)*pkgSize(2)*pkgSize(3)); % kg/m^3
 
 %% Propeller parameters
 propeller.diameter = 0.254; % m
-propeller.Kthrust  = 0.1072; 
-propeller.Kdrag    = 0.01;
+propeller.Kthrust  = 9.79;   % 재보정(11차): Aerodynamic Propeller 블록 공식 기준 (표준계수 0.1072 x 91.3)
+propeller.Kdrag    = 0.597;  % 재보정(9차): APC 실측 토크 기준 (평형속도 검증됨)
 
 air_rho            = 1.225;  % kg/m^3
 air_temperature    = 273+25; % degK
@@ -70,23 +70,23 @@ filtD_position = 100;
 pos2attitude   = 2.4;
 
 filtM_attitude = 0.01;
-kp_attitude    = 128.505;
-ki_attitude    = 5.9203;
-kd_attitude    = 78.2000*2;
+kp_attitude    = -100;   % 재튜닝(11차): 플랜트 이득 음수(b=-0.0296) 실측 -> 음수 게인이 정답. pidtune+호버검증(RMS 0.56도)
+ki_attitude    = 0;
+kd_attitude    = -150;
 filtD_attitude = 1000;
 limit_attitude = 800;
 
 filtM_yaw      = 0.01;
-kp_yaw         = 25.7010*4*2;
-ki_yaw         = 5.9203*0.01;
-kd_yaw         = 78.2000*0.01;
+kp_yaw         = 3;      % 재튜닝(11차): 새 추력 스케일 기준 보수 게인 (검증 구성)
+ki_yaw         = 0;
+kd_yaw         = 1;
 filtD_yaw      = 100;
 limit_yaw      = 20;
 
 filtM_altitude = 0.05;
-kp_altitude    = 0.27;
-ki_altitude    = 0.07;
-kd_altitude    = 0.35;
+kp_altitude    = 0.5;    % 재튜닝(11차): 검증 구성
+ki_altitude    = 0.1;
+kd_altitude    = 0.3;
 filtD_altitude = 10000;
 limit_altitude = 10;
 
