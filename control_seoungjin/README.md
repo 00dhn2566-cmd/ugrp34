@@ -36,6 +36,13 @@
   2. 저장소 루트 기준 **`control_seoungjin/controller/Quadcopter-Drone-Model-Simscape/`** 폴더 안에 압축을 풀어 덮어쓴다. (기존 폴더 내용 위에 그대로 압축 해제)
   3. `git submodule update --init`은 실행하지 않는다 (실행하면 zip으로 넣은 내용이 지워지고 MathWorks 원본으로 되돌아갈 수 있음).
 
+- **⚠️ CAD 방향 사고 + CoM 보정 (2026-07 해결, `fix/plate-orientation-cg` 브랜치)**: FX450 플레이트 STEP 두 개(`plate_top`/`plate_bottom`)가 MathWorks 원본 대비 X축 90° 회전(세워진 상태)으로 저장돼 있었고, 이 때문에 `plate_bottom`의 지오메트리 기반 프레임(`Bot`)이 밀리면서 몸체 스택 전체가 y −30mm 이동 → 추력선이 전체 CoM을 15.7mm 빗나가 **이륙 즉시 roll 플립**이 발생했습니다. 애니메이션에서는 멀쩡해 보임 — Simscape는 시각 형상·관성값·장착 프레임이 서로 분리돼 있어서 셋이 어긋나도 겉으로 티가 안 납니다.
+  - 조치: 플레이트 STEP 2개를 스크립트(`diagnose/rotate_step.py`)로 눕혀 재저장(STEP 엔티티 순서 보존 → 프레임이 참조하는 surface 번호 유지) + `Plate Anchor Comp`(Rigid Transform, `[-30.77 30.12 0.78]`mm) 보정 삽입. CoM 잔차 0.04mm.
+  - **`quadcopter_drone_arm.stp`는 절대 회전 금지** — 팔은 Transform의 ZXZ 회전과 Custom 관성이 현재 파일 방향 기준으로 이미 정합돼 있어서, 건드리면 오히려 깨집니다.
+  - 원인 추적/실험 전 과정 기록: `controller/Quadcopter-Drone-Model-Simscape/TUNING_STATUS.md`
+- **PID 재튜닝 완료 (2026-07)**: 실측한 플랜트 이득이 음수(u→pitch 가속 b=−0.0296)로 확인되어 **자세 게인이 음수인 게 정상**입니다 (`kp_attitude=-100, kd_attitude=-150`). `propeller.Kthrust=9.79`, `Kdrag=0.597` 재보정 포함. 최종 구성은 `Models/quadcopter_package_delivery.slx`에 구워져(save_system) 있어 별도 스크립트 없이 파일만으로 안정 호버합니다 (10초, 자세 RMS 0.56° — `diagnose/verify_hover.m`으로 언제든 재검증 가능).
+- **⚠️ 실행 환경 (RAM)**: 배치 시뮬 1회당 2~4GB, 모델 굽기(컴파일 2회 포함)는 6~8GB+ 사용. 16GB 머신에서는 **시뮬을 동시에 여러 개 돌리지 말 것** — 실제로 시스템 다운을 겪었습니다. 상세는 TUNING_STATUS.md 상단 경고 참고.
+- **`diagnose/`** (서브모듈 안): 위 디버깅/튜닝에 쓴 일회성 진단·검증 스크립트 모음이며 파이프라인의 일부가 아닙니다. 주요 파일: `verify_hover.m`(구운 모델 자립 검증), `bake_tuned_model.m`(검증 구성을 .slx에 굽기), `rotate_step.py`(STEP 회전), 나머지는 CG 추적/플랜트 식별/게인 스윕/외란 테스트용.
 - **PID 튜닝 위치**: `Models/quadcopter_package_delivery.slx`의 `Maneuver Controller` 서브시스템. 게인 값 자체는 `Scripts_Data/quadcopter_package_parameters.m`의 `kp_position/kp_attitude/kp_yaw/kp_altitude/kp_motor` 등 변수. 스크립트에서 값을 바꾸거나, Simulink에서 서브시스템 열어 PID 블록의 "Tune" 기능으로 조정 가능.
 
 - **모델 입력 형식**: `Maneuver Controller` 안 1-D Lookup Table 블록 4개(x/y/z/yaw)가 시뮬레이션 시간을 입력으로 받아 아래 워크스페이스 변수를 보간합니다.
