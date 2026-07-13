@@ -1,5 +1,11 @@
 # PID 튜닝 / 모터 명령 파이프라인 진행 상황 (2026-07-03 기준)
 
+## ⚠ 실행 환경 경고 — RAM (2026-07-13 크래시 사례)
+
+- 이 모델의 MATLAB 배치 시뮬(`matlab -batch`)은 **판당 컴파일 피크 포함 2~4GB**를 먹고, `bake_tuned_model.m`처럼 **한 세션에서 모델을 두 번 컴파일하는 스크립트는 6~8GB+**까지 올라감.
+- **16GB RAM 머신에서 세션 후반(연속 시뮬 15판+, OneDrive/VS Code/브라우저 동시 구동) 시스템 전체가 다운된 사례 있음** (2026-07-13, bake 2단계 검증 중 — .slx 저장은 완료된 후라 유실은 없었음).
+- 권고: ① MATLAB 인스턴스는 한 번에 하나만 ② 긴 스윕/굽기 실행 전 브라우저 등 대형 앱 종료 ③ 16GB 머신에서는 2회 컴파일 스크립트(bake 등) 실행 시 특히 주의, **32GB 권장** ④ 검증은 세션을 나눠서 (`bake_tuned_model.m` 실행 후 `verify_hover.m`을 별도 실행).
+
 ## Git 상태 / 브랜치 참고 (2026-07-06 기준, 다음 세션 필독)
 
 - **이 서브모듈(`Quadcopter-Drone-Model-Simscape`)의 `origin`은 MathWorks 공식 저장소**(`mathworks/Quadcopter-Drone-Model-Simscape.git`)라서 여기로 push 불가/부적절. 대신 본인 소유 `ugrp34` 저장소를 `ugrp34-backup`이라는 이름의 별도 remote로 추가해서 사용 중.
