@@ -77,9 +77,9 @@ filtD_attitude = 1000;
 limit_attitude = 800;
 
 filtM_yaw      = 0.01;
-kp_yaw         = 3;      % 재튜닝(11차): 새 추력 스케일 기준 보수 게인 (검증 구성)
-ki_yaw         = 0;
-kd_yaw         = 1;
+kp_yaw         = 15;     % 재튜닝(12차): yaw 스윙 11.4도->2.5도. 스윕+외란결선 전지표 1위 (kp=20은 수확역전)
+ki_yaw         = 0;      % I 금지: 외란 결선에서 와인드업 역스윙(-13.6도) 실측. anti-windup 구현 전까지 0 유지
+kd_yaw         = 4;
 filtD_yaw      = 100;
 limit_yaw      = 20;
 
