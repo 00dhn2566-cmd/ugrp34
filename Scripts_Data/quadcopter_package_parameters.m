@@ -88,8 +88,9 @@ limit_yaw      = 20;
 filtM_altitude = 0.05;
 kp_altitude    = 0.5;    % 재튜닝(11차): 검증 구성
 ki_altitude    = 0.1;
-kd_altitude    = 0.3;
-filtD_altitude = 10000;
+kd_altitude    = 0.15;   % 재조정(12차): 지터 4~5차 수사 - 고도 미분경로가 6.87Hz 가진원이었음.
+filtD_altitude = 1000;   % 0.3/10000 -> 0.15/1000: 자세 RMS 0.48->0.098도(스펙 R4 통과), z 진동 2.5mm->0.2mm.
+                         % 외란 감쇠 회귀는 z 돌풍/지속바람 배터리로 검증(diagnose_robust_xy.m)
 limit_altitude = 10;
 
 kp_motor       = 0.00375;
