@@ -20,10 +20,9 @@ tau = min(max((tt-tStep)/0.67,0),1);
 xk = A * (10*tau.^3 - 15*tau.^4 + 6*tau.^5);
 smBase = traj_smoother(tt, [xk, zeros(N,1), ones(N,1)], VMAX, AMAX, JMAX);
 
-% --- ZV 셰이퍼: y(t) = 0.5*u(t) + 0.5*u(t - T/2) ---
+% --- ZV 셰이퍼 (정식 모듈 Scripts_Data/traj_zv.m 사용) ---
 dHalf = round(1/(2*FSWING)/dt);
-zv = @(P) 0.5*P + 0.5*[repmat(P(1,:), dHalf, 1); P(1:end-dHalf, :)];
-smZV = zv(smBase);
+smZV = traj_zv(tt, smBase, FSWING, 'zv');
 
 load_system('quadcopter_library');
 quadcopter_package_parameters;
