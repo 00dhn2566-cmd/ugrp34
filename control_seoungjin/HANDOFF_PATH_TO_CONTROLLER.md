@@ -115,6 +115,27 @@ path_time.py는 snap까지 고려해 시간을 늘이는 최정밀 층이므로 
 
 근거 데이터(§W): 기준 채널은 예방(온건 이동 20배 저감, ZV −65%)에 강하고 온라인 소거(7mm 펌핑 널)에 약함 — 사전 성형 쪽이 물리적으로 유리한 채널.
 
+### 피드백 JSON 프로토콜 (사용자 설계, 2026-07-15 — 반복 학습형 경로 보정)
+
+비행마다 롤·피치 데이터를 JSON으로 남기고, 경로 생성기가 그걸 읽고 추론해 다음 경로를 살짝씩 수정하며 진동을 수렴시킨다:
+
+- **쓰기 (비행 후처리, 컨트롤러 측)**: `control_seoungjin/output/attitude_feedback.json`에 기록, `"used": false`로 씀 (새 데이터 = used 태그 제거 상태)
+- **읽기 (path_time 워핑 단계)**: `used: false`인 파일만 소비 → 추론·경로 보정 반영 → **`"used": true`로 재기록** (같은 데이터 이중 보정 방지 핸드셰이크). `used: true`면 건너뜀.
+- **내용(안)**:
+```json
+{
+  "flight_id": "2026-07-15T23-40-00",
+  "used": false,
+  "trajectory_hash": "성형 궤적 식별자",
+  "mode_freq_hz": 1.80,
+  "tail": { "pitch_rms_deg": 4.26, "roll_rms_deg": 0.46,
+            "amp_deg": 6.0, "phase_rad": 2.76, "t_ref_s": 7.0 },
+  "moving": { "att_peak_deg": 13.2, "track_rms_cm": 2.8 }
+}
+```
+- **추론(1차 구현 후보, 단순한 것부터)**: ① tail RMS > 임계 → 다음 궤적의 해당 구간 Tm 연장(온건화 — 20배 저감 실증 경로) ② 실측 mode_freq로 traj_zv의 f0 갱신(ZV 상쇄 정밀화 — 잔여 1.5°의 주범이 주파수 오차) ③ 수렴하면 손대지 않음. 고급(구간별 워핑·위상 보정)은 그 다음.
+- 측정치 산출은 기존 분석 코드 재사용 (`diagnose_smoother_tail.m`의 창 분할 RMS/영교차 주파수 로직).
+
 ## 참고 문서
 
 - `controller/Quadcopter-Drone-Model-Simscape/TUNING_STATUS.md` — CoM 사고 원인 추적 + 튜닝 전 과정 (가장 상세)
