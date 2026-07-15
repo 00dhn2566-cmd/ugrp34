@@ -77,7 +77,8 @@ sim(mdl);
 
 ## 명령 스무더 설계 스펙 (사용자 확정, 2026-07-14 — **같은 날 구현·검증 완료**)
 
-> **구현됨**: `controller/.../Scripts_Data/traj_gate.m` + `traj_smoother.m`, 검증 `diagnose/diagnose_smoother.m`.
+> **구현됨**: `controller/.../Scripts_Data/traj_gate.m` + `traj_smoother.m` + `traj_zv.m`(잔류진동 소거 셰이퍼, ZV/ZVD), 검증 `diagnose/diagnose_smoother.m`·`diagnose_zv_shaper.m`.
+> **파이프라인 순서(고정)**: path_time → traj_smoother(물리 한계) → **traj_zv(1.8Hz 모드 상쇄)** → 컨트롤러. ZV는 볼록 결합이라 스무더의 v/a/j 한계를 보존 — 순서 역전 금지 (스무더가 임펄스 간격을 뭉개면 상쇄 조건 깨짐). 실증: 도착 후 pitch RMS 4.26→1.51°.
 > 발산 확정 궤적(1m/0.67s)이 성형 후 안정 비행 (모터 81%, 자세 13.2°, RMS 2.8cm — 원본은 포화·발산).
 > 구현 교훈 2개(후방차분 상태 원칙, 정확 정지거리 트리거)는 TUNING_STATUS §V 참고.
 > 남은 일: `run_traj_baked.m` 입구에 traj_gate 호출 연결 (run_traj_baked 자체가 미실행이라 그 검증과 함께).
