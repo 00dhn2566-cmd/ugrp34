@@ -93,11 +93,27 @@ sM  = m_tot_now / m_tot_ref;                 % 총질량 스케일 (현재 1)
 filtM_position = 0.005;
 % 위치 게인은 물성 스케일 없음 (17차): 위치루프 플랜트 = 기울기->수평가속 = g·sinθ 라
 % 질량/관성/추력계수와 무관 (자세 내부루프가 sT·sIa로 정규화된다는 전제).
-kp_position    = 8;    % 17차 §Z: 후보 24/10.8이 이동지표 3배 우수했으나 호버 관문에서
-                       % 자세 지터 0.002->0.26도 퇴행(16차 지터 킬 무효화)으로 반려.
-                       % r8 호버 지터 스윕으로 안전 최대 게인 재선정 중 - 그때까지 현행 유지.
-ki_position    = 0.04; % r7 스윕 {0.02,0.04,0.08} 완전 동률 - 유지 (와인드업 신호 없음)
-kd_position    = 3.2;
+%
+% --- 컨트롤러 프로파일 (17차 사용자 설계): 상위 계층(경로계획)이 임무 특성으로 선택 ---
+% r8 실측: 호버 지터(범인=kp, 평탄부 없음)와 이동 추종이 구조적 맞교환 -> 단일 최적점
+% 대신 검증된 선택지를 제공하고 선택권을 상위로. 전환은 임무 단위(비행 전) - v1.
+%   precision: 호버 지터 0.002도 / 이동 4.1cm  (16차 지터 킬 보존, 기본값)
+%   balanced : 호버 지터 0.10도  / 이동 2.7cm
+%   agile    : 호버 지터 0.25도  / 이동 1.3cm  (r6 승자 24/10.8 - 이동 검증, 외란/질량 관문 대기)
+% 사용: 시뮬 전 base 워크스페이스에 ctrl_profile='agile' 지정 (미지정 = precision).
+% 상위 인터페이스: 경로 JSON controller_profile 필드 (INTERFACE_SPEC 협의 중 - 상황판 ★).
+if ~exist('ctrl_profile', 'var'); ctrl_profile = 'precision'; end
+switch ctrl_profile
+    case 'precision'
+        kp_position = 8;   kd_position = 3.2;
+    case 'balanced'
+        kp_position = 12;  kd_position = 4.8;
+    case 'agile'
+        kp_position = 24;  kd_position = 10.8;
+    otherwise
+        error('ctrl_profile 미지원: %s (precision|balanced|agile)', ctrl_profile);
+end
+ki_position    = 0.04; % r7 스윕 {0.02,0.04,0.08} 완전 동률 - 전 프로파일 공통 (와인드업 신호 없음)
 filtD_position = 100;
 pos2attitude   = 2.4;
 posErrSat      = 1.2 / kp_position;  % 오차 클램프 (사용자 설계, 15차): 곱 불변식 C x kp = 1.2
