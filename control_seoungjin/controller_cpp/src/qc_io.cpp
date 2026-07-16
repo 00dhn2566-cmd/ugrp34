@@ -380,4 +380,58 @@ bool write_attitude_feedback(const std::string& path, const FlightLogger::Feedba
     return atomic_write(path, buf, err);
 }
 
+// ---------- §6 param_estimate 소비 ----------
+
+static bool est_field(const mj::Value& estimates, const char* key,
+                      double& val, bool& confident) {
+    const mj::Value* e = estimates.find(key);
+    if (!e) return false;
+    const mj::Value* v = e->find("value");
+    const mj::Value* c = e->find("confident");
+    if (!v || v->t != mj::Value::T::Num) return false;
+    val = v->n;
+    confident = c && c->t == mj::Value::T::Bool && c->b;
+    return true;
+}
+
+bool apply_param_estimate(const std::string& path,
+                          double prevLumpedThrust, double prevLumpedDrag,
+                          double maxStepFrac, bool allowMassInertia,
+                          double& kThrustInOut, double& kDragInOut,
+                          ParamEstimateApply& out, std::string& err) {
+    out = ParamEstimateApply{};
+    mj::Value root;
+    if (!mj::parse_file(path, root, err)) return false;
+    const mj::Value* est = root.find("estimates");
+    if (!est) { err = "estimates 키 누락: " + path; return false; }
+
+    auto clampRatio = [&](double r) {
+        const double lo = 1.0 - maxStepFrac, hi = 1.0 + maxStepFrac;
+        return r < lo ? lo : (r > hi ? hi : r);   // 급변 방지 램프
+    };
+
+    double v; bool conf;
+    // 가드레일 3: 집중계수는 '직전 추정 대비 비율'로만 — 절대값 대입 금지
+    if (est_field(*est, "k_thrust_lumped", v, conf) && conf && prevLumpedThrust > 0) {
+        const double r = clampRatio(v / prevLumpedThrust);
+        kThrustInOut *= r;                        // 현재값만 갱신 (가드레일 1: ref 불변)
+        out.appliedThrust = true; out.thrustRatio = r;
+    }
+    if (est_field(*est, "k_drag_lumped", v, conf) && conf && prevLumpedDrag > 0) {
+        const double r = clampRatio(v / prevLumpedDrag);
+        kDragInOut *= r;
+        out.appliedDrag = true; out.dragRatio = r;
+    }
+    // 가드레일 2: 질량/관성은 기본 미적용 — 시뮬 플랜트(CAD)와 따로 놀면 미스매치.
+    // allowMassInertia=true는 실기(플랜트=현실) 전용이며, 여기서도 기록만 남긴다
+    // (자동 대입은 상위 판단으로 — 함수가 몰래 물성을 바꾸지 않는다).
+    if (allowMassInertia && est_field(*est, "mass_kg", v, conf) && conf) {
+        out.appliedMass = false;
+        out.note = "mass_kg confident=" + std::to_string(v) + " (기록만 — 수동 반영)";
+    }
+    if (!out.appliedThrust && !out.appliedDrag && out.note.empty())
+        out.note = "적용 항목 없음 (confident 미달 또는 직전 추정 부재)";
+    return true;
+}
+
 } // namespace qcio

@@ -77,4 +77,22 @@ bool write_attitude_feedback(const std::string& path, const FlightLogger::Feedba
 // 현재 시각 문자열 "%Y-%m-%dT%H-%M-%S" (+ withMs면 ".mmm")
 std::string now_string(bool withMs);
 
+// ---------- §6 플랜트 상수 추정 소비 ----------
+// INTERFACE_SPEC §6 가드레일 3종을 코드로 강제:
+//   1) 앵커(*Ref) 불변 — 이 함수는 현재값만 갱신, ref는 절대 안 건드림
+//   2) 질량/관성은 기본 미적용 (시뮬 플랜트 일관성) — allowMassInertia는 실기 전용
+//   3) 비율로만 — k_*_lumped(집중계수)는 이전 추정 대비 '비율'로 kThrust/kDrag에 적용
+// confident:true(R²>=문턱) 항목만 반영. maxStepFrac로 급변 방지 램프 (기본 ±10%/호출).
+struct ParamEstimateApply {
+    bool appliedThrust = false, appliedDrag = false, appliedMass = false;
+    double thrustRatio = 1.0, dragRatio = 1.0;   // 이번 호출로 곱해진 비율
+    std::string note;
+};
+// prevLumpedThrust/Drag: 직전 추정값 (비율의 분모). 최초 호출이면 <=0 → 기록만 하고 미적용.
+bool apply_param_estimate(const std::string& path,
+                          double prevLumpedThrust, double prevLumpedDrag,
+                          double maxStepFrac, bool allowMassInertia,
+                          double& kThrustInOut, double& kDragInOut,
+                          ParamEstimateApply& out, std::string& err);
+
 } // namespace qcio

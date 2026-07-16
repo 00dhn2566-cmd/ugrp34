@@ -94,9 +94,39 @@ static int run_io_test(const char* trajPath, const char* outDir) {
     return ok ? 0 : 1;
 }
 
+// --est-test <param_estimate.json>: §6 소비 가드레일 검증
+static int run_est_test(const char* path) {
+    std::string err;
+    double kT = 9.79, kQ = 0.597;
+    qcio::ParamEstimateApply ap;
+
+    // 1) 직전 추정 부재(prev<=0) → 아무것도 적용 안 됨 (기록만)
+    if (!qcio::apply_param_estimate(path, -1, -1, 0.10, false, kT, kQ, ap, err)) {
+        std::fprintf(stderr, "로드 실패: %s\n", err.c_str());
+        return 1;
+    }
+    const bool g1 = !ap.appliedThrust && !ap.appliedDrag && kT == 9.79;
+    std::printf("케이스1 (직전 추정 없음): 적용=%d/%d kT=%.4f -> %s\n",
+                (int)ap.appliedThrust, (int)ap.appliedDrag, kT, g1 ? "합격(미적용)" : "불합격");
+
+    // 2) 직전 추정 = 현재 추정의 절반 (2배 튐) → ±10% 램프에 걸려 1.10배로 제한돼야 함
+    //    (파일의 k_thrust_lumped 값을 분모로 절반을 주입)
+    qcio::Trajectory dummy;
+    double kT2 = 9.79, kQ2 = 0.597;
+    // 파일에서 confident 여부에 따라 적용이 갈리므로 결과 비율만 확인
+    qcio::apply_param_estimate(path, 1e-10, 1e-10, 0.10, false, kT2, kQ2, ap, err);
+    const double r = kT2 / 9.79;
+    const bool g2 = !ap.appliedThrust || (r > 1.0999 && r < 1.1001);
+    std::printf("케이스2 (2배 초과 추정): 비율=%.4f -> %s (램프 ±10%% 상한)\n",
+                r, g2 ? "합격(클램프)" : "불합격");
+    std::printf("note: %s\n", ap.note.c_str());
+    return (g1 && g2) ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--smoke") == 0) return run_smoke();
     if (argc >= 4 && std::strcmp(argv[1], "--io-test") == 0) return run_io_test(argv[2], argv[3]);
+    if (argc >= 3 && std::strcmp(argv[1], "--est-test") == 0) return run_est_test(argv[2]);
     if (argc < 3) {
         std::fprintf(stderr, "사용: qc_trace <input.csv> <output.csv> | --smoke | --io-test <trajectory.json> <out_dir>\n");
         return 2;
