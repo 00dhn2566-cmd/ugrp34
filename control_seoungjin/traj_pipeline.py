@@ -356,7 +356,11 @@ def splice_waypoints_from_state(state, remaining_waypoints, emergency=False):
         base = state["ref_state"]
     wp = np.vstack([np.asarray(base["pos"], float),
                     np.asarray(remaining_waypoints, float)])
-    return wp, np.asarray(base["vel"], float), np.asarray(base["acc"], float)
+    # jerk: v0.2 스키마 (7차 경계조건이 p/v/a/j — j까지 승계해야 C³ 연속.
+    # 구 스키마/비상 측정 상태에는 없으므로 0 폴백)
+    j0 = np.asarray(base.get("jerk", [0.0, 0.0, 0.0]), float)
+    return (wp, np.asarray(base["vel"], float),
+            np.asarray(base["acc"], float), j0)
 
 
 def _rdp(points, eps):

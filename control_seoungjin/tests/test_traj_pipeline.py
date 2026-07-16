@@ -406,7 +406,7 @@ class TestCurrentState:
         p = str(tmp_path / "current_state.json")
         self._write_state(p, datetime.now().strftime(tp.TS_FMT + ".%f")[:-3])
         st = tp.load_current_state(p)
-        wp, v0, a0 = tp.splice_waypoints_from_state(st, [[3.0, 3.0, 2.0]])
+        wp, v0, a0, j0 = tp.splice_waypoints_from_state(st, [[3.0, 3.0, 2.0]])
         np.testing.assert_allclose(wp[0], [1.02, 1.0, 2.0])   # ref, 측정(1.0) 아님
         np.testing.assert_allclose(v0, [0.5, 0.0, 0.0])
         assert wp.shape == (2, 3)
@@ -416,7 +416,7 @@ class TestCurrentState:
         p = str(tmp_path / "current_state.json")
         self._write_state(p, datetime.now().strftime(tp.TS_FMT + ".%f")[:-3])
         st = tp.load_current_state(p)
-        wp, v0, a0 = tp.splice_waypoints_from_state(
+        wp, v0, a0, j0 = tp.splice_waypoints_from_state(
             st, [[3.0, 3.0, 2.0]], emergency=True)
         np.testing.assert_allclose(wp[0], [1.0, 1.0, 2.0])    # 측정 pos
 
@@ -425,7 +425,7 @@ class TestCurrentState:
         _, cfg = mission
         st = {"ref_state": {"pos": [0.0, 0.0, 1.0], "vel": [0.3, 0.0, 0.0],
                             "acc": [0.0, 0.0, 0.0]}}
-        wp, v0, a0 = tp.splice_waypoints_from_state(st, cfg["waypoints"][1:])
+        wp, v0, a0, j0 = tp.splice_waypoints_from_state(st, cfg["waypoints"][1:])
         res = tp.build_trajectory(cfg, wp, 1.8, v0=v0, a0=a0)
         assert res["gate_report"]["vxyPk"] <= tp.PHYS_VMAX * 1.001
 
