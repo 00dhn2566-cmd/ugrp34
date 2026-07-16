@@ -448,7 +448,7 @@ Simscape는 [지오메트리 파일(렌더링·파생 프레임)] × [관성값(
   - 구운 모델 내부 블록을 수정하려면 LinkStatus **'none'**(완전 해제)이 필요 — 'inactive'로는 "비활성화된 라이브러리 링크에 수정된 요소 불가" 오류로 시뮬 거부.
 - **로깅 공백**: yaw는 아직 미로깅 (Scope의 yaw Element 번호 미확정 — 추측 태핑 금지 규칙 준수). `run_traj_baked.m`이 실행 시 In Bus Element 전체 매핑을 출력하므로, 다음 세션 첫 작업으로 번호 확정 후 강건성 스크립트에 yaw 로깅 추가할 것.
 - **yaw 제어 구조 논의 (사용자 관찰: "yaw 안 잡는 것 같다")**: 현재 yaw는 각도 단일 루프 PD(kp=3, kd=1, ki=0). 각도 루프에 PD는 정상 구성(이중적분 플랜트라 순수 PI는 불안정; "보통 PI"는 캐스케이드의 각속도 루프 얘기). 단 **ki=0이라 반토크 불균형의 상수 외란이 정상상태 yaw 오차로 남을 수 있음**. 순서: ① yaw 로깅 확정 → ② 10s 호버에서 드리프트/정상상태 오차 실측 → ③ 실측되면 ki_yaw 0.1~0.3 소량 추가 + anti-windup 확인 후 재검증. 실측 전에 게인부터 바꾸지 말 것 (과거 "yaw 폭주"도 가짜 신호였음).
-- 남은 배터리: **③패키지 드롭(1kg 질량 스텝) ④바람(wind_speed, 단 height_min_wind=2m라 z>2m 호버로 테스트)**. JSON path→컨트롤러 명령 파이프라인은 별도 세션 몫 — `../../HANDOFF_PATH_TO_CONTROLLER.md` 참고 (글루 코드 `run_traj_baked.m` 작성됨, 미실행).
+- 남은 배터리: **③패키지 드롭(1kg 질량 스텝) ④바람(wind_speed, 단 height_min_wind=2m라 z>2m 호버로 테스트)**. JSON path→컨트롤러 명령 파이프라인은 별도 세션 몫 — `../../docs/HANDOFF_PATH_TO_CONTROLLER.md` 참고 (글루 코드 `run_traj_baked.m` 작성됨, 미실행).
 
 ### (R) 12차 세션 후반: yaw 재튜닝 완료 — kp_yaw=15/ki=0/kd=4 (11.4°→2.5°)
 사용자 관찰("yaw 안 잡는 것 같다")에서 출발, 측정→스윕→외란 결선→확정의 풀 사이클 (`diagnose_yaw_check.m` → `diagnose_yaw_tune.m` → `diagnose_yaw_verify.m`):

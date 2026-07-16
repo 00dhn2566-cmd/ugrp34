@@ -12,7 +12,7 @@ function [pos_s, info] = traj_smoother(t, pos, vmax, amax, jmax)
 %   순간 기준으로 잡으면 정상 입력에도 동적 랙 발생. 스트리밍(C코드) 이식
 %   시엔 lookahead 구간 극값으로 대체할 것.
 %
-% 핵심 원칙 (HANDOFF_PATH_TO_CONTROLLER.md 스펙):
+% 핵심 원칙 (docs/HANDOFF_PATH_TO_CONTROLLER.md 스펙):
 %  1) v, a는 성형기 내부 상태이되 반드시 "출력의 후방차분"으로 정의.
 %     v_k=(r_k-r_{k-1})/dt, a_k=(v_k-v_{k-1})/dt. 저크 적분으로 병렬 전파하면
 %     상태-출력 괴리가 누적돼 한계 사이클 발생 (0.37m 개입 + 미정착 실측).
