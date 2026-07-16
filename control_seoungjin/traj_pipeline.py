@@ -41,10 +41,8 @@ from scipy.io import savemat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from path_time import (                         # noqa: E402
-    compute_curvature_and_kN,
-    generate_pid_reference,
     plan_waypoints,
-    reparameterize_by_arc_length,
+    plan_waypoints_flythrough,
 )
 from traj_shaping import (                      # noqa: E402
     smooth_with_axis_sharing,
@@ -395,7 +393,7 @@ def _rdp(points, eps):
 
 
 def normalize_waypoints(waypoints, merge_dist=0.01, collinear_tol=None,
-                        max_seg_len=None):
+                        max_seg_len=None, divide_mode="linear"):
     """상위 waypoint 집합 전처리: merge(병합) / divide(분할).
 
     성능 목적 (사용자 확정: reference 추종 성능 좋게 시간 부여 + 촘촘한
@@ -420,12 +418,24 @@ def normalize_waypoints(waypoints, merge_dist=0.01, collinear_tol=None,
         wp = _rdp(wp, float(collinear_tol))
 
     if max_seg_len is not None and len(wp) >= 2:
+        # divide_mode: "linear"=폴리라인 의도 그대로 / "spline"=원점들을 지나는
+        # 곡선(호길이 매개 CubicSpline) 위에 삽입 — 성긴 곡선 입력에서 인위적
+        # 꺾임 방지 (사용자 제안: 곡률 돌려주기). 촘촘 입력은 linear로 충분.
+        use_spline = (divide_mode == "spline" and len(wp) >= 3)
+        if use_spline:
+            s = np.concatenate([[0.0], np.cumsum(
+                np.linalg.norm(np.diff(wp, axis=0), axis=1))])
+            cs = [CubicSpline(s, wp[:, i]) for i in range(3)]
         out = [wp[0]]
-        for a, b in zip(wp[:-1], wp[1:]):
+        for k, (a, b) in enumerate(zip(wp[:-1], wp[1:])):
             d = np.linalg.norm(b - a)
             n_div = int(np.ceil(d / max_seg_len))
             for i in range(1, n_div + 1):
-                out.append(a + (b - a) * i / n_div)
+                if use_spline and i < n_div:
+                    si = s[k] + (s[k + 1] - s[k]) * i / n_div
+                    out.append(np.array([c(si) for c in cs]))
+                else:
+                    out.append(a + (b - a) * i / n_div)
         wp = np.array(out)
     if len(wp) < 2:
         raise ValueError("normalize_waypoints: 병합 후 waypoint가 2개 미만 - "
@@ -564,10 +574,9 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     wp_mode = cfg.get("waypoint_mode", "stop")
     if waypoints is not None:
         prep = cfg.get("waypoint_prep", {})
-        # fly_through 기본 분할 1.0m: 긴 직선에서 스플라인 휨 방지 (정지형은
-        # 분할 = 불필요한 정지라 기본 없음)
-        max_seg = prep.get("max_seg_len",
-                           1.0 if wp_mode == "fly_through" else None)
+        # divide 기본 없음: fly_through는 다항식 통과 속도가 곡률을 만들어
+        # 분할이 불필요(오히려 통과점만 늘림), 정지형은 분할 = 정지 = 성능 손실
+        max_seg = prep.get("max_seg_len")
         if max_seg is not None and wp_mode == "stop":
             print("[경고] 정지형 + divide: 분할점마다 정지 -> 가용 성능 미달"
                   " (실측 +40% 소요시간). fly_through 모드 검토 권장")
@@ -576,28 +585,22 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
             waypoints,
             merge_dist=float(prep.get("merge_dist", 0.01)),
             collinear_tol=prep.get("collinear_tol"),
-            max_seg_len=max_seg)
+            max_seg_len=max_seg,
+            divide_mode=prep.get("divide_mode", "linear"))
         if len(waypoints) != n_before:
             print(f"[전처리] waypoint {n_before} -> {len(waypoints)}개 "
                   "(merge/divide)")
     if waypoints is not None and wp_mode == "fly_through":
-        # 1a') 무정지 통과: waypoint를 스플라인 연속 경로로 잇고 arc-length
-        #      재매개화 → 곡률 제한(v ≤ √(a_max/κ)) 속도 프로파일 → 시간 부여.
-        #      중간점에서 정지하지 않는다 (시작·종점만 정지).
-        #      한계는 노름 의미로 해석 — 축별 리스트면 최솟값 사용 (보수적).
+        # 1a') 무정지 통과 (다항식판): 중간점마다 통과 속도 경계조건 —
+        #      정확 통과 + v/a/j/snap 다항식 보장 + 가용 성능 유지
+        #      (구 arc-length판은 코너 성형 개입 82cm/snap 비보장으로 대체)
         if v0 is not None or a0 is not None:
             raise ValueError("fly_through는 아직 재계획 초기조건(v0/a0) 미지원"
                              " - waypoint_mode='stop' 사용")
-        vmax_n = float(np.min(lim["v_max"]))
-        amax_n = float(np.min(lim["a_max"]))
-        jmax_n = float(np.min(lim["j_max"]))
-        xs, ys, zs, s = reparameterize_by_arc_length(
-            waypoints[:, 0], waypoints[:, 1], waypoints[:, 2], ds=0.02)
-        kappa, *_ = compute_curvature_and_kN(xs, ys, zs, s)
-        t, pos_raw, *_ = generate_pid_reference(
-            xs, ys, zs, s, kappa, total_time=0.0,
-            v_max=vmax_n, a_max=amax_n, j_max=jmax_n, dt=dt)
-        base = pos_raw.T                            # (3,N) -> (N,3), 이미 균일 t
+        t_raw, pos_raw, *_ = plan_waypoints_flythrough(
+            waypoints, lim["v_max"], lim["a_max"], lim["j_max"],
+            lim["snap_max"], dt=dt)
+        t, base = _resample_uniform(t_raw, pos_raw, dt)
     elif waypoints is not None:
         # 1a) 정지형: waypoint마다 정지 후 재출발 (snap까지 제약 7차 최소시간)
         t_raw, pos_raw, *_ = plan_waypoints(
@@ -684,14 +687,13 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     #    snap 검사는 계획층 경로(waypoint)만 강제 — 다항식이 snap_max를 보장하는
     #    경로라 위반=버그. 원시 궤적 백스톱 경로는 스무더가 v/a/j까지만
     #    보장(뱅뱅 저크 = snap 임펄스가 정상 동작)이라 snap은 리포트 마진으로만.
-    #    fly_through도 시간 스플라인이 C²(저크 불연속 = snap 스파이크)라 측정만.
-    #    v0/a0≠0(비상 단독 재계획)도 측정만 — 스무더가 정지 초기상태 가정이라
+    #    fly_through도 다항식판이라 snap 보장 → 강제 대상.
+    #    v0/a0≠0(비상 단독 재계획)만 측정 전용 — 스무더가 정지 초기상태 가정이라
     #    개입 스파이크가 정상 동작 (비행 중 이어붙임 정식 경로는 replan_splice:
     #    결합 타임라인이라 snap까지 강제됨).
     ic_rest = ((v0 is None or not np.any(v0))
                and (a0 is None or not np.any(a0)))
-    smax = (PHYS_SNAP if (waypoints is not None and wp_mode != "fly_through"
-                          and ic_rest) else None)
+    smax = PHYS_SNAP if (waypoints is not None and ic_rest) else None
     ok, gate_rep = traj_gate(t, shaped, PHYS_VMAX, PHYS_AMAX,
                              do_error=gate_error, jmax=PHYS_JMAX, smax=smax)
 

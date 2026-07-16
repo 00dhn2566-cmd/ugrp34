@@ -255,16 +255,43 @@ class TestWaypointBatches:
         worst = max(dist_to_polyline(p, out) for p in dense)
         assert worst <= eps + 1e-9, f"의도 이탈 {worst*100:.1f}cm > ε"
 
-    def test_fly_through_auto_divide(self):
-        """fly_through는 긴 직선 자동 분할 (스플라인 휨 방지)."""
+    def test_fly_through_poly_recovers_performance(self):
+        """다항식 fly_through: divide된 일직선에서 성능 손실 없음 + 정확 통과.
+
+        (사용자 지적 "가용 성능 미달" 문제의 근본 해법 검증)
+        """
+        cfg_s = {"limits": self.LIM, "shaper": {"mode": "none"}}
+        cfg_f = {**cfg_s, "waypoint_mode": "fly_through"}
+        wp = np.array([[0, 0, 2], [2, 0, 2], [4, 0, 2], [6, 0, 2]], float)
+        res_stop = tp.build_trajectory(dict(cfg_s), wp, 1.8)
+        res_fly = tp.build_trajectory(dict(cfg_f), wp, 1.8)
+        # 정지 손실 회복 (13.1s -> ~9.2s 실측)
+        assert res_fly["t"][-1] < 0.8 * res_stop["t"][-1]
+        # 중간점 정확 통과 + 풀스피드 유지
+        pos, t = res_fly["shaped"], res_fly["t"]
+        speed = np.linalg.norm(np.gradient(pos, t, axis=0), axis=1)
+        for w in wp[1:-1]:
+            k = int(np.argmin(np.linalg.norm(pos - w, axis=1)))
+            assert np.linalg.norm(pos[k] - w) < 0.01
+            assert speed[k] > 0.9, f"직선 통과인데 감속 (v={speed[k]:.2f})"
+        # 직선 유지 (다항식이 휘지 않음)
+        assert np.max(np.abs(pos[:, 1])) < 0.01
+        # snap 포함 게이트 강제 통과 (다항식 보장)
+        assert "sxyPk" in res_fly["gate_report"]
+        assert res_fly["gate_ok"]
+
+    def test_fly_through_corner_slows_and_passes(self):
+        """급코너는 자동 감속하되 정확 통과 (곡률 존중)."""
         cfg = {"limits": self.LIM, "waypoint_mode": "fly_through",
                "shaper": {"mode": "none"}}
-        wp = np.array([[0, 0, 2], [6, 0, 2], [6, 3, 2]], float)
+        wp = np.array([[0, 0, 2], [3, 0, 2], [3, 3, 2]], float)  # 90도 코너
         res = tp.build_trajectory(cfg, wp, 1.8)
-        # 6m 직선이 분할돼도 경로는 직선 유지 -> 최대 이탈 작음
-        y_on_straight = res["shaped"][res["shaped"][:, 0] < 5.5][:, 1]
-        assert np.max(np.abs(y_on_straight)) < 0.10, \
-            f"직선 구간 스플라인 휨 {np.max(np.abs(y_on_straight))*100:.0f}cm"
+        pos, t = res["shaped"], res["t"]
+        speed = np.linalg.norm(np.gradient(pos, t, axis=0), axis=1)
+        k = int(np.argmin(np.linalg.norm(pos - wp[1], axis=1)))
+        assert np.linalg.norm(pos[k] - wp[1]) < 0.01, "코너 정확 통과"
+        assert 0.1 < speed[k] < 0.9, \
+            f"90도 코너는 감속하되 정지 안 함 (v={speed[k]:.2f})"
 
     def test_midflight_new_set_splices_without_stop(self):
         """1번 집합 비행 중 τ에 2번 집합 도착 → 정지 없이 그쪽으로 꺾음."""
