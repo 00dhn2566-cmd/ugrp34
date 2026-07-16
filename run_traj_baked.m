@@ -58,7 +58,10 @@ mws.assignin('timespot_spl', timespot_spl);
 mws.assignin('spline_data', spline_data);
 mws.assignin('spline_yaw', spline_yaw);
 T = timespot_spl(end);
-set_param(mdl, 'StopTime', num2str(T));
+% 도착 후 잔류 지터(tail) 관측 마진: Lookup Table은 마지막 breakpoint 값을
+% 유지하므로 T 이후는 최종 위치 hold = attitude_feedback tail 분석 구간.
+T_hold = 8;
+set_param(mdl, 'StopTime', num2str(T + T_hold));
 
 % --- Scope 버스 신호 매핑 출력 (신호 추가 태핑 시 근거 자료) ---
 scope = [mdl '/Scope'];
@@ -81,6 +84,17 @@ for i = 1:size(sigMap, 1)
     srcPh = get_param([scope '/' sigMap{i,1}], 'PortHandles');
     twPh  = get_param(twBlk, 'PortHandles');
     add_line(scope, srcPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
+end
+
+% --- 시간축 로깅 (첫 실행에서 확인: act_*/des_*는 SaveFormat Array = 시간 없는
+%     double 배열. run_sample_sim.m과 동일하게 Clock -> sim_time 동승) ---
+if isempty(find_system(mdl, 'SearchDepth', 1, 'Name', 'Sim Time Clock'))
+    add_block('simulink/Sources/Clock', [mdl '/Sim Time Clock']);
+    add_block('simulink/Sinks/To Workspace', [mdl '/To Workspace sim_time'], ...
+        'VariableName', 'sim_time', 'SaveFormat', 'Array');
+    clockPh = get_param([mdl '/Sim Time Clock'], 'PortHandles');
+    twPh    = get_param([mdl '/To Workspace sim_time'], 'PortHandles');
+    add_line(mdl, clockPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
 end
 
 % --- 실행 ---
@@ -107,8 +121,8 @@ for ai = 1:3
         fprintf('경고: %s/%s 로그 변수 없음 - 위치 추종(%s축) 평가 생략. (모델 내장 로거 확인 필요)\n', actName, desName, an);
         continue;
     end
-    [ta, va] = extract_ts(eval(actName));
-    [td, vd] = extract_ts(eval(desName));
+    [ta, va] = extract_ts(eval(actName), sim_time);
+    [td, vd] = extract_ts(eval(desName), sim_time);
     if isempty(ta) || isempty(td)
         fprintf('경고: %s축 로그 형식 해석 실패 (class: %s) - 생략\n', an, class(eval(actName)));
         continue;
@@ -119,19 +133,27 @@ for ai = 1:3
     fprintf('추종 %s축: RMS %.3fm / 최대 %.3fm / 종점오차 %.3fm\n', an, rms(err), max(abs(err)), abs(err(end)));
 end
 
-% --- 결과 저장 ---
+% --- 결과 저장 (act/des 원시 로그 + sim_time 동승 — Python 지터 분석기 입력) ---
 outFile = fullfile(modelDir, 'sim_result_baked.mat');
 save(outFile, 'trk', 'real_roll', 'real_pitch', 'real_z', 'timespot_spl', 'spline_data', 'spline_yaw');
+extraVars = {'sim_time', 'act_x1','act_y1','act_z1', 'des_x1','des_y1','des_z1'};
+for i = 1:numel(extraVars)
+    if exist(extraVars{i}, 'var'); save(outFile, extraVars{i}, '-append'); end
+end
 fprintf('저장: %s\n', outFile);
 
-function [t, v] = extract_ts(x)
-    % timeseries / StructureWithTime 양쪽 지원
+function [t, v] = extract_ts(x, tArr)
+    % timeseries / StructureWithTime / Array(double, sim_time 동승) 3형식 지원
     t = []; v = [];
     try
         if isa(x, 'timeseries')
             t = x.Time(:); v = squeeze(x.Data); v = v(:);
         elseif isstruct(x) && isfield(x, 'time') && isfield(x, 'signals')
             t = x.time(:); v = x.signals.values(:);
+        elseif isnumeric(x) && nargin > 1 && ~isempty(tArr)
+            v = x(:); t = tArr(:);
+            n = min(numel(t), numel(v));   % Array 포맷은 행 순서 대응 (솔버 동일 스텝)
+            t = t(1:n); v = v(1:n);
         end
     catch
     end
