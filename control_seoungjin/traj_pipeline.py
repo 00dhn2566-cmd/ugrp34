@@ -296,18 +296,53 @@ def splice_waypoints_from_state(state, remaining_waypoints, emergency=False):
     return wp, np.asarray(base["vel"], float), np.asarray(base["acc"], float)
 
 
+def _rdp(points, eps):
+    """Ramer-Douglas-Peucker 폴리라인 단순화 (반복 스택 — 촘촘 입력 대응).
+
+    구간 [i, j]에서 현 i-j까지 수직 거리가 최대인 점이 eps를 넘으면 그 점을
+    보존하고 양쪽을 재귀 처리, 아니면 중간점 전부 병합.
+    """
+    pts = np.asarray(points, float)
+    n = len(pts)
+    keep = np.zeros(n, bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    while stack:
+        i, j = stack.pop()
+        if j <= i + 1:
+            continue
+        a, b = pts[i], pts[j]
+        ab = b - a
+        L2 = float(np.dot(ab, ab))
+        seg = pts[i + 1:j]
+        if L2 < 1e-24:
+            d = np.linalg.norm(seg - a, axis=1)
+        else:
+            t = np.clip((seg - a) @ ab / L2, 0.0, 1.0)
+            d = np.linalg.norm(seg - a - t[:, None] * ab, axis=1)
+        k = int(np.argmax(d))
+        if d[k] > eps:
+            m = i + 1 + k
+            keep[m] = True
+            stack.append((i, m))
+            stack.append((m, j))
+    return pts[keep]
+
+
 def normalize_waypoints(waypoints, merge_dist=0.01, collinear_tol=None,
                         max_seg_len=None):
     """상위 waypoint 집합 전처리: merge(병합) / divide(분할).
 
-    성능 목적 (사용자 확정: reference 추종 성능 좋게 시간 부여):
+    성능 목적 (사용자 확정: reference 추종 성능 좋게 시간 부여 + 촘촘한
+    입력에서 상위 의도(곡률) 존중):
       - merge_dist: 직전 점과 이내 거리인 점 제거 (RL 노이즈/중복 방어).
-      - collinear_tol: **일직선상의 중간점 병합** — 정지형은 점마다 서다
-        가다라, 한 직선 위의 촘촘한 점들을 한 세그먼트로 합치면 순항이
-        가능해져 소요시간·지터 모두 개선. 중간점의 이웃 직선까지 수직
-        거리가 tol[m] 이내면 제거 (None이면 안 함).
+      - collinear_tol: **RDP(Ramer-Douglas-Peucker) 단순화의 ε [m]** —
+        "원래 점열에서 ε 이상 벗어나지 않는 최소 점집합"만 남긴다.
+        직선 구간은 전부 병합(순항 가능), 곡선·코너는 편차가 ε에 닿는
+        만큼 점이 자동 보존 = 곡률(상위 의도) 존중이 내장. (None이면 안 함)
       - max_seg_len: 초과 구간에 등간격 중간점 삽입 (None이면 안 함;
-        fly_through 코너 제어/RL 격자화용).
+        fly_through는 build_trajectory가 기본 1.0m 자동 적용 — 긴 직선의
+        스플라인 휨 방지).
     """
     wp = np.asarray(waypoints, float)
     keep = [wp[0]]
@@ -317,20 +352,7 @@ def normalize_waypoints(waypoints, merge_dist=0.01, collinear_tol=None,
     wp = np.array(keep)
 
     if collinear_tol is not None and len(wp) >= 3:
-        out = [wp[0]]
-        for i in range(1, len(wp) - 1):
-            a, b, c = out[-1], wp[i], wp[i + 1]
-            ac = c - a
-            L = np.linalg.norm(ac)
-            if L < 1e-12:
-                continue
-            # b의 직선 a-c까지 수직 거리 (선분 안쪽 투영일 때만 병합 후보)
-            s = float(np.dot(b - a, ac) / (L * L))
-            dist = float(np.linalg.norm(b - a - s * ac))
-            if not (0.0 <= s <= 1.0 and dist <= collinear_tol):
-                out.append(b)
-        out.append(wp[-1])
-        wp = np.array(out)
+        wp = _rdp(wp, float(collinear_tol))
 
     if max_seg_len is not None and len(wp) >= 2:
         out = [wp[0]]
@@ -461,12 +483,16 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     wp_mode = cfg.get("waypoint_mode", "stop")
     if waypoints is not None:
         prep = cfg.get("waypoint_prep", {})
+        # fly_through 기본 분할 1.0m: 긴 직선에서 스플라인 휨 방지 (정지형은
+        # 분할 = 불필요한 정지라 기본 없음)
+        max_seg = prep.get("max_seg_len",
+                           1.0 if wp_mode == "fly_through" else None)
         n_before = len(waypoints)
         waypoints = normalize_waypoints(
             waypoints,
             merge_dist=float(prep.get("merge_dist", 0.01)),
             collinear_tol=prep.get("collinear_tol"),
-            max_seg_len=prep.get("max_seg_len"))
+            max_seg_len=max_seg)
         if len(waypoints) != n_before:
             print(f"[전처리] waypoint {n_before} -> {len(waypoints)}개 "
                   "(merge/divide)")
