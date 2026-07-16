@@ -60,8 +60,10 @@ def synthetic_mat(tmp_path):
     dw2 = w[0]**2 - w[1]**2 - w[2]**2 + w[3]**2
     yaw = _int2((kd_true / izz_true) * dw2)
 
+    z = 5.0 + np.cumsum(vz) * dt          # 공중 (짐 지면 접촉 없음)
     data = {"real_roll": _ts(t, roll), "real_pitch": _ts(t, pitch),
-            "real_yaw": _ts(t, yaw), "real_vz": _ts(t, vz)}
+            "real_yaw": _ts(t, yaw), "real_vz": _ts(t, vz),
+            "real_z": _ts(t, z)}
     for i in range(4):
         data[f"prop{i+1}_T"] = _ts(t, T[i])
         data[f"prop{i+1}_w"] = _ts(t, w[i])

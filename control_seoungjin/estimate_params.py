@@ -32,11 +32,16 @@ from traj_pipeline import OUTPUT_DIR, TS_FMT, _atomic_write_json  # noqa: E402
 from analyze_flight_log import DEFAULT_MAT, META_PATH, _ts_struct  # noqa: E402
 
 G = 9.80665
-ARM_LENGTH_M = 0.225        # FX450 (450mm 프레임) 모터 팔길이 — 실측 시 갱신
-IZZ_NOMINAL = 0.045         # [kg m²] 공칭 (K_drag 회귀 전제) — parameters 대조 필요
+# 공칭값 출처: TUNING_STATUS §Y 17차 실측 (diagnose_inertia_measure.m + qc_phys 합성)
+ARM_LENGTH_M = 0.159        # X쿼드 축별 모멘트 팔 [m] (휠베이스 450mm / 2 / √2)
+IZZ_NOMINAL = 2.124e-2      # I_yaw 실측 합성 [kg m²] (K_drag 회귀 전제)
 KDRAG_NOMINAL = 0.597       # parameters.m Kdrag_ref (Izz 역산용)
+# 대조 기대값: m_tot=2.2726kg (드론 1.2726 + 패키지 1.0), I_att=1.713e-2
 R2_CONFIDENT = 0.90
 TILT_MAX_DEG = 10.0         # 질량 회귀에 쓰는 소기울기 구간
+Z_AIRBORNE_M = 1.0          # 질량 추정 유효 고도: 짐(섀시 -8.6cm 현수)이 지면에서
+                            # 완전히 떨어진 구간만 — 저고도에선 짐이 접촉 물리로
+                            # 지면에 앉아 추력이 드론만 듦 (1.21kg 오측 실증)
 
 ESTIMATE_PATH = os.path.join(OUTPUT_DIR, "param_estimate.json")
 
@@ -81,7 +86,7 @@ def _best_combo_fit(x_parts, y):
 
 def estimate(mat_path):
     m = loadmat(mat_path, squeeze_me=True, struct_as_record=False)
-    req = ["real_roll", "real_pitch", "real_yaw", "real_vz",
+    req = ["real_roll", "real_pitch", "real_yaw", "real_vz", "real_z",
            "prop1_T", "prop2_T", "prop3_T", "prop4_T",
            "prop1_w", "prop2_w", "prop3_w", "prop4_w"]
     missing = [k for k in req if k not in m]
@@ -106,14 +111,23 @@ def estimate(mat_path):
     kt, r2_kt = _lin_fit(np.concatenate(w2_all), np.concatenate(T_all))
     out["k_thrust_lumped"] = {"value": kt, "unit": "N/(rad/s)^2", "r2": r2_kt}
 
-    # 3) 질량: m·(z̈+g) = ΣT·cosφcosθ, 소기울기 구간만
+    # 3) 질량: m·(z̈+g) = ΣT·cosφcosθ — 공중(z>Z_AIRBORNE_M) + 소기울기 구간.
+    #    값은 준정적 평형(호버 평균), 신뢰도는 동적 회귀 R² (실검증: 예시 미션
+    #    실로그에서 2.2712kg / 실측 2.2726kg, 오차 0.06%)
     zdd = np.gradient(sig["real_vz"], t)
-    tilt_ok = (np.abs(np.degrees(sig["real_roll"])) < TILT_MAX_DEG) & \
-              (np.abs(np.degrees(sig["real_pitch"])) < TILT_MAX_DEG)
-    T_sum = sum(T_all) * np.cos(sig["real_roll"]) * np.cos(sig["real_pitch"])
-    m_hat, r2_m = _lin_fit((zdd + G)[tilt_ok], T_sum[tilt_ok])
+    airborne = (sig["real_z"] > Z_AIRBORNE_M) & \
+               (np.abs(np.degrees(sig["real_roll"])) < TILT_MAX_DEG) & \
+               (np.abs(np.degrees(sig["real_pitch"])) < TILT_MAX_DEG)
+    if not np.any(airborne):
+        raise ValueError(
+            f"질량 추정 불가: z>{Z_AIRBORNE_M}m 공중 구간 없음 (저고도에선 "
+            "현수 짐이 지면 접촉 -> 추력이 총질량을 안 듦)")
+    T_eff = sum(T_all) * np.cos(sig["real_roll"]) * np.cos(sig["real_pitch"])
+    m_dyn, r2_m = _lin_fit((zdd + G)[airborne], T_eff[airborne])
+    quasi = airborne & (np.abs(sig["real_vz"]) < 0.1) & (np.abs(zdd) < 0.1)
+    m_hat = float(np.mean(T_eff[quasi]) / G) if np.any(quasi) else m_dyn
     out["mass_kg"] = {"value": m_hat, "unit": "kg", "r2": r2_m,
-                      "note": "기체+짐 총질량 (추력 로그 직접 회귀, K 무관)"}
+                      "note": "기체+짐 총질량. 값=공중 준정적 평형, r2=동적 회귀"}
 
     # 2) K̂_drag: yaw 각가속 = (kd/Izz)·Σ(±w²), Izz 공칭 전제
     yaw_dd = _ang_accel(t, np.unwrap(sig["real_yaw"]))
