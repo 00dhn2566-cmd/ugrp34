@@ -1,0 +1,161 @@
+=== controller_spec (자동 덤프) ===
+모델: quadcopter_package_delivery / 생성 스크립트: dump_controller_spec.m
+
+--- [1] PID 블록 전수 ---
+
+PID #1: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/PID Compensator Formula
+
+PID #2: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/Sum/Sum_PID
+
+PID #3: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/PID Compensator Formula
+
+PID #4: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/Sum/Sum_PID
+
+PID #5: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/PID Compensator Formula
+
+PID #6: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/Sum/Sum_PID
+
+PID #7: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/PID Compensator Formula
+
+PID #8: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/Sum/Sum_PID
+
+PID #9: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller
+    Controller = PID
+    P = kp_xy2ypr
+    I = ki_xy2ypr
+    D = kd_xy2ypr
+    N = filtD_xy2ypr
+    InitialConditionForIntegrator = 0
+    UpperSaturationLimit = inf
+    LowerSaturationLimit = -inf
+    LimitOutput = off
+    AntiWindupMode = none
+    SampleTime = -1
+    IntegratorMethod = Forward Euler
+    FilterMethod = Forward Euler
+
+PID #10: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/PID Compensator Formula
+
+PID #11: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/Sum/Sum_PID
+
+PID #12: quadcopter_package_delivery/Quadcopter/Electrical/Control1/Control/PID Compensator Formula
+
+PID #13: quadcopter_package_delivery/Quadcopter/Electrical/Control1/Control/Sum/Sum_PID
+
+PID #14: quadcopter_package_delivery/Quadcopter/Electrical/Control2/Control/PID Compensator Formula
+
+PID #15: quadcopter_package_delivery/Quadcopter/Electrical/Control2/Control/Sum/Sum_PID
+
+PID #16: quadcopter_package_delivery/Quadcopter/Electrical/Control3/Control/PID Compensator Formula
+
+PID #17: quadcopter_package_delivery/Quadcopter/Electrical/Control3/Control/Sum/Sum_PID
+
+PID #18: quadcopter_package_delivery/Quadcopter/Electrical/Control4/Control/PID Compensator Formula
+
+PID #19: quadcopter_package_delivery/Quadcopter/Electrical/Control4/Control/Sum/Sum_PID
+
+--- [2] Saturation 블록 전수 ---
+SAT #1: quadcopter_package_delivery/Environment/Saturation | Upper=height_max_wind-height_min_wind Lower=0
+SAT #2: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #3: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #4: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #5: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #6: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Subsystem/Alt Cmd Sat | Upper=30 Lower=-30
+SAT #7: quadcopter_package_delivery/Maneuver Controller/Position Control/Pitch Limit | Upper=pi/3 Lower=-pi/3
+SAT #8: quadcopter_package_delivery/Maneuver Controller/Position Control/PosErr Sat X | Upper=posErrSat Lower=-posErrSat
+SAT #9: quadcopter_package_delivery/Maneuver Controller/Position Control/PosErr Sat Y | Upper=posErrSat Lower=-posErrSat
+SAT #10: quadcopter_package_delivery/Maneuver Controller/Position Control/PosErr Sat Z | Upper=posErrSat Lower=-posErrSat
+SAT #11: quadcopter_package_delivery/Maneuver Controller/Position Control/Roll Limit | Upper=pi/3 Lower=-pi/3
+SAT #12: quadcopter_package_delivery/Quadcopter/Electrical/Control1/Control/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #13: quadcopter_package_delivery/Quadcopter/Electrical/Control2/Control/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #14: quadcopter_package_delivery/Quadcopter/Electrical/Control3/Control/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+SAT #15: quadcopter_package_delivery/Quadcopter/Electrical/Control4/Control/Saturation/Enabled/Saturation | Upper=UpperSaturationLimit Lower=LowerSaturationLimit
+
+--- [3] 제어기 하위 Gain / TransferFcn / Constant ---
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Add | signs=+-
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Add2 | signs=+-
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Add3 | signs=+-
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Add7 | signs=+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/D Gain/Internal Parameters/Derivative Gain = D
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/Filter/Cont. Filter/SumD | signs=|+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/I Gain/Internal Parameters/Integral Gain = I
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/N Gain/Internal Parameters/Filter Coefficient = N
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/Parallel P Gain/Internal Parameters/Proportional Gain = P
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Pitch/Sum/Sum_PID/Sum | signs=+++
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/D Gain/Internal Parameters/Derivative Gain = D
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/Filter/Cont. Filter/SumD | signs=|+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/I Gain/Internal Parameters/Integral Gain = I
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/N Gain/Internal Parameters/Filter Coefficient = N
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/Parallel P Gain/Internal Parameters/Proportional Gain = P
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Roll/Sum/Sum_PID/Sum | signs=+++
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/D Gain/Internal Parameters/Derivative Gain = D
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/Filter/Cont. Filter/SumD | signs=|+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/I Gain/Internal Parameters/Integral Gain = I
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/N Gain/Internal Parameters/Filter Coefficient = N
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/Parallel P Gain/Internal Parameters/Proportional Gain = P
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Thrust/Sum/Sum_PID/Sum | signs=+++
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/D Gain/Internal Parameters/Derivative Gain = D
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/Filter/Cont. Filter/SumD | signs=|+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/I Gain/Internal Parameters/Integral Gain = I
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/N Gain/Internal Parameters/Filter Coefficient = N
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/Parallel P Gain/Internal Parameters/Proportional Gain = P
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Control Yaw/Sum/Sum_PID/Sum | signs=+++
+TF:   quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Filter Pitch | num=[1] den=[altitude_filtM 1]
+TF:   quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Filter Roll | num=[1] den=[altitude_filtM 1]
+TF:   quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Filter Yaw | num=[1] den=[yaw_filtM 1]
+TF:   quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Filter pz | num=[1] den=[0.01 1]
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Pause Motor/Sign Change = -1
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Pause Motor/Sum2 | signs=|+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Subsystem/Bias Load = 44.4*pkgSize(1)^3*pkgDensity
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Subsystem/Speed = 2*pi
+SUM:  quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Subsystem/Sum | signs=++
+GAIN: quadcopter_package_delivery/Maneuver Controller/Altitude and |YPR Control/Thrust to|Torque = 2*pi/(propeller.diameter^4 * sqrt(air_rho))
+SUM:  quadcopter_package_delivery/Maneuver Controller/Motor Mixer/Add4 | signs=+--+
+SUM:  quadcopter_package_delivery/Maneuver Controller/Motor Mixer/Add5 | signs=--++
+SUM:  quadcopter_package_delivery/Maneuver Controller/Motor Mixer/Add6 | signs=-+-+
+SUM:  quadcopter_package_delivery/Maneuver Controller/Motor Mixer/Add7 | signs=++++
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/Dir P = 1/9.81
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/Dir R = -1/9.81
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/Err2P = err2rp
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/Err2R = err2rp
+TF:   quadcopter_package_delivery/Maneuver Controller/Position Control/Filter/Transfer Fcn | num=[1] den=[filt_const 1]
+TF:   quadcopter_package_delivery/Maneuver Controller/Position Control/Filter/Transfer Fcn1 | num=[1] den=[filt_const 1]
+TF:   quadcopter_package_delivery/Maneuver Controller/Position Control/Filter/Transfer Fcn2 | num=[1] den=[filt_const 1]
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/D Gain/Internal Parameters/Derivative Gain = D
+SUM:  quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/Filter/Cont. Filter/SumD | signs=|+-
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/I Gain/Internal Parameters/Integral Gain = I
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/N Gain/Internal Parameters/Filter Coefficient = N
+GAIN: quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/Parallel P Gain/Internal Parameters/Proportional Gain = P
+SUM:  quadcopter_package_delivery/Maneuver Controller/Position Control/PID Controller/Sum/Sum_PID/Sum | signs=+++
+SUM:  quadcopter_package_delivery/Maneuver Controller/Position Control/Subtract2 | signs=+-
+
+--- [4] parameters.m 실효 게인 (오늘 로드값) ---
+kp_position = 8
+ki_position = 0.04
+kd_position = 3.2
+filtD_position = 100
+pos2attitude = 2.4
+posErrSat = 0.15
+kp_attitude = -85
+ki_attitude = -10
+kd_attitude = -127.5
+filtD_attitude = 2500
+limit_attitude = 800
+kp_yaw = 15
+ki_yaw = 1.5
+kd_yaw = 4
+filtD_yaw = 100
+limit_yaw = 20
+kp_altitude = 0.5
+ki_altitude = 0.1
+kd_altitude = 0.15
+filtD_altitude = 1000
+limit_altitude = 10
+kp_motor = 0.00375
+ki_motor = 0.00045
+limit_motor = 0.25
+sT = 1
+sQ = 1
+sIa = 1
+sIz = 1
+sM = 1
