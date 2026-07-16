@@ -14,7 +14,9 @@
 
 #include "qc_controller.hpp"
 #include "qc_io.hpp"
+#include "qc_motor.hpp"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 static int run_smoke() {
@@ -123,11 +125,14 @@ static int run_est_test(const char* path) {
     return (g1 && g2) ? 0 : 1;
 }
 
-// --mission <trajectory.json> <out_dir>: 실전 배치 골격 (건식 주행 — 플랜트 없음)
-//   궤적 로드 → 1kHz 제어 루프 → current_state 30Hz 스로틀 기록 → 종료 후 feedback.
-//   측정은 참조로 대체(완전 추종 가정) — Gazebo 세션은 아래 [PLANT HOOK] 지점에
-//   실측을 끼우면 된다. 시간은 가속(실시간 sleep 없음).
-static int run_mission(const char* trajPath, const char* outDir) {
+// --mission <trajectory.json> <out_dir> [ct_scale] [cq_scale]: 실전 배치 골격
+//   궤적 로드 → 1kHz 제어 루프 → 모터 플랜트(qc_motor) → current_state 30Hz → feedback.
+//   위치/자세 측정은 참조로 대체(병진·회전 동역학 없음) — Gazebo가 그 부분을 채운다.
+//   모터 속도는 플랜트 적분값이 제어기로 피드백된다 (모터 루프는 폐루프).
+//   [플랜트 진실 주입] ct_scale/cq_scale: 모터 플랜트의 Ct/Cq에만 곱한다 — 제어기
+//   (QcConfig)는 공칭값을 그대로 믿음 = "제어기 모르게" 미스매치 실험 (사용자 요청 17차).
+static int run_mission(const char* trajPath, const char* outDir,
+                       double ctScale, double cqScale) {
     std::string err;
     qcio::Trajectory tr;
     if (!qcio::load_trajectory(trajPath, tr, err)) {
@@ -136,11 +141,18 @@ static int run_mission(const char* trajPath, const char* outDir) {
     }
     std::printf("미션 시작: dur=%.2fs hash=%s\n", tr.duration(), tr.hash.c_str());
 
-    qc::QcConfig cfg;
+    qc::QcConfig cfg;                          // 제어기가 '믿는' 세계 (공칭)
     qc::QcState st;
     qc::qc_bind(st, cfg);
     qcio::FlightLogger lg;
     lg.tArrive = tr.duration();
+
+    qc::MotorParams mp;                        // 플랜트 '진실' — 제어기와 독립
+    mp.Ct *= ctScale;                          //   제어기 몰래 주입되는 실제 계수
+    mp.Cq *= cqScale;
+    qc::Motor motors[4];
+    if (ctScale != 1.0 || cqScale != 1.0)
+        std::printf("[플랜트 진실 주입] Ct x%.3f, Cq x%.3f (제어기는 공칭 유지)\n", ctScale, cqScale);
 
     const double dt = 1e-3;                    // 제어 1kHz
     const int stateEvery = 33;                 // current_state ~30Hz (스펙 20~50Hz)
@@ -148,6 +160,7 @@ static int run_mission(const char* trajPath, const char* outDir) {
     const std::string statePath = std::string(outDir) + "/current_state.json";
     long nState = 0;
     qc::QcOutput out{};
+    double thrustSum = 0; long nThrust = 0;
 
     for (long k = 0; ; ++k) {
         const double t = k * dt;
@@ -158,11 +171,20 @@ static int run_mission(const char* trajPath, const char* outDir) {
         for (int i = 0; i < 3; ++i) { in.refPos[i] = ref.pos[i]; in.measPos[i] = ref.pos[i]; }
         in.refYaw = ref.yaw;
         in.measAlt = ref.pos[2];
-        // [PLANT HOOK] Gazebo 연결 지점: in.measPos/measRpy/measAlt/motorSpd를
-        //   실측으로 교체하고, out.motorCmd(또는 motorRef)를 플랜트에 인가할 것.
-        for (int i = 0; i < 4; ++i) in.motorSpd[i] = out.motorRef[i];   // 건식: 모터 완전 추종 가정
+        // [PLANT HOOK] Gazebo 연결 지점: in.measPos/measRpy/measAlt를 실측으로 교체하고,
+        //   아래 모터 플랜트의 thrust/dragQ를 기체에 인가할 것. 모터 속도 피드백은
+        //   이미 플랜트(qc_motor) 적분값을 쓴다 (mixDir 부호 복원 포함).
+        for (int i = 0; i < 4; ++i) in.motorSpd[i] = cfg.mixDir[i] * motors[i].w;
 
         out = qc::qc_step(st, cfg, in, dt);
+
+        double stepThrust = 0;
+        for (int i = 0; i < 4; ++i) {
+            const qc::MotorOut mo = motors[i].step(out.motorCmd[i], mp, dt);
+            stepThrust += mo.thrust;
+        }
+        if (t > 1.0) { thrustSum += stepThrust; ++nThrust; }   // 초기 과도 제외 평균
+
         lg.push(t, in.measRpy[1], in.measRpy[0],
                 std::hypot(in.refPos[0]-in.measPos[0], in.refPos[1]-in.measPos[1]));
 
@@ -184,9 +206,13 @@ static int run_mission(const char* trajPath, const char* outDir) {
         std::fprintf(stderr, "feedback 기록 실패: %s\n", err.c_str());
         return 1;
     }
+    const double mg = 2.2726 * 9.81;
+    const double thrustAvg = nThrust > 0 ? thrustSum / nThrust : 0;
     std::printf("미션 종료: 제어 %ld스텝, current_state %ld회(~30Hz), feedback -> %s\n",
                 (long)((tr.duration()+tailHold)/dt), nState, fbPath.c_str());
-    std::printf("(건식 주행이라 tail 지표는 0 근처가 정상 — 플랜트 연결 후 실측 반영)\n");
+    std::printf("모터 플랜트: 평균 총추력 %.2fN / mg %.2fN = %.3f (공칭 플랜트면 ~1.0 기대)\n",
+                thrustAvg, mg, thrustAvg / mg);
+    std::printf("(병진/회전 동역학 없음 — tail 지표 0 근처 정상. 전체 폐루프는 Gazebo 몫)\n");
     return 0;
 }
 
@@ -194,7 +220,10 @@ int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--smoke") == 0) return run_smoke();
     if (argc >= 4 && std::strcmp(argv[1], "--io-test") == 0) return run_io_test(argv[2], argv[3]);
     if (argc >= 3 && std::strcmp(argv[1], "--est-test") == 0) return run_est_test(argv[2]);
-    if (argc >= 4 && std::strcmp(argv[1], "--mission") == 0) return run_mission(argv[2], argv[3]);
+    if (argc >= 4 && std::strcmp(argv[1], "--mission") == 0)
+        return run_mission(argv[2], argv[3],
+                           argc >= 5 ? std::atof(argv[4]) : 1.0,
+                           argc >= 6 ? std::atof(argv[5]) : 1.0);
     if (argc < 3) {
         std::fprintf(stderr, "사용: qc_trace <input.csv> <output.csv> | --smoke | --io-test <trajectory.json> <out_dir>\n");
         return 2;
