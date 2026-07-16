@@ -17,7 +17,18 @@ MATLAB 구운 모델(Simscape)은 "정답 플랜트"로 계속 남고, Gazebo는
 **검증 완료 (믿어도 됨):**
 - 제어 체인 구조·게인·클램프 7종 (`qc_controller.hpp/cpp`) — 산수 검증: 물성 스케일
   5종=1.000000 (MATLAB parameters.m과 비트단위 일치), posErrSat 곱 불변식 16.8° 재현
-- 파일 인터페이스 3종 (`qc_io`) — 실파일 왕복 + 파이썬 파이프라인 교차 파싱 통과
+- 파일 인터페이스 4종 (`qc_io`) — 궤적 소비 / current_state 30Hz / feedback 생산 /
+  **param_estimate 소비(§6 가드레일 3종 코드 강제, ±10% 램프)** — 실파일 왕복 +
+  파이썬 파이프라인 교차 파싱 통과
+- **미션 러너** (`--mission`) — 1kHz 제어 루프 + 착륙 후 8초 잔류 관측 + feedback
+  자동 기록. 건식 주행 12k스텝 검증.
+- **모터 플랜트** (`qc_motor.hpp`) — 전압(V=duty×Vbatt)→토크(클램프·파워 제한)→
+  회전 동역학(시정수 0.02s)→추력(Ct=0.1072)/반토크(Cq=토크클램프 평형 교정) 사슬.
+  호버 평형 재현(추력비 0.907 — 모터가 토크 클램프 위에서 평형하는 9차 실측 구조).
+  Gazebo에서 자체 모터 모델 대신 이걸 써도 됨 (프로펠러 힘/토크를 기체에 인가).
+- **플랜트 진실 주입**: `--mission <traj> <out> [ct배율] [cq배율]` — 배율은 모터
+  플랜트에만 적용, 제어기는 공칭 유지 (미스매치 강건성 실험용, 사용자 지시).
+  검증: Ct×0.8 주입 → 추력비 정확히 ×0.8, 제어기 무인지.
 - 모터 기준속도 스케일: motorRef = mixDir × 2π×(고도PID+56.5+44.4·m_pkg) —
   실비행 재생에서 실측 모터속도와 스케일비 0.98~1.02 확인 (호버 평형 ~634 rad/s)
 - 모터 방향 규약: **모터 2·3 내장 역회전** (실측 w 음수) — `mixDir={+1,-1,-1,+1}` 반영됨
@@ -27,8 +38,13 @@ MATLAB 구운 모델(Simscape)은 "정답 플랜트"로 계속 남고, Gazebo는
 - 측정 필터 계수·배선 위치 (Filter Pitch TransferFcn ↔ filtM_attitude 0.01 가정)
 - 고도 PID 클램프: parameters.m `limit_altitude=10` vs 9차 기록 ".slx ±30 rev/s" 관계
 - RBI 회전 완전성 (현재 yaw만 반영한 1차 근사) / Dir P/R 부호
-- 확정 수단: `diagnose/dump_controller_spec.m` (작성돼 있음, MATLAB 차례 오면 실행)
-  + 완전 골든 대조 (아래 §검증 절차)
+- 확정 수단 (둘 다 스크립트 작성 완료, MATLAB 슬롯 대기): ① `diagnose/dump_controller_spec.m`
+  (블록 전수 덤프) ② `diagnose/diagnose_golden_trace.m` (cmd 채널 골든 로그 채취)
+  → `compare_trace.py` 완전 대조 (아래 §검증 절차)
+
+**⚠ Gazebo 폐루프 착수 조건**: 위 미확정 4건이 골든 대조로 닫히기 전에는 폐루프
+비행 금지 — 믹서 차동 부호가 틀린 채 날 수 있다. 그 전에 할 수 있는 것: 빌드,
+스모크, 인터페이스 왕복, Gazebo 모델(SDF) 구성, [PLANT HOOK] 접합 코드 작성.
 
 ## 절대 규칙 (튜닝 세션 피의 교훈 — 위반 시 재현 불가 버그)
 
@@ -43,9 +59,13 @@ MATLAB 구운 모델(Simscape)은 "정답 플랜트"로 계속 남고, Gazebo는
 4. **anti-windup 없음 유지** — 원본과 동일해야 골든 대조가 성립. 개선은 검증 후.
 5. **qc_phys 동기화**: `quadcopter_package_parameters.m`의 qc_phys와
    `qc_controller.hpp`의 qc_phys는 1:1 사본 — 한쪽 바꾸면 양쪽 갱신.
-6. **게인 수치는 parameters.m이 원본**: 위치 게인이 곧 확정·변경된다
-   (현행 8/3.2 → 절벽 33 확인, 22~26 영역 채택 임박). QcConfig 숫자를
-   parameters.m 최신과 대조 후 사용할 것.
+6. **게인 수치는 parameters.m이 원본**: 위치 게인 재선정 진행 중 — 후보 24/10.8이
+   이동지표 3배 우수했으나 **호버 자세 지터 퇴행(0.002→0.26°)으로 관문 반려**,
+   현행 8/3.2 유지 상태에서 r8 호버 지터 스윕으로 안전 최대 게인 탐색 중.
+   QcConfig 숫자를 parameters.m 최신과 대조 후 사용할 것.
+7. **경로 층은 범위 외** (사용자 확정): traj_smoother/zv 등 궤적 성형은 나중에
+   도커 기반으로 별도 작성 — Gazebo 검증은 path_time 파이프라인이 이미 만들어 둔
+   `output/trajectory.json`을 소비하는 것으로 충분.
 
 ## Gazebo 쪽 구성 유의
 
@@ -65,10 +85,10 @@ MATLAB 구운 모델(Simscape)은 "정답 플랜트"로 계속 남고, Gazebo는
 ## 빌드/실행
 
 **Gazebo 머신은 별도 기기 (사용자 확정)** — 개발 노트북(MX450)이 아니라 RTX 머신/클라우드.
-git으로 받는다: 부모 repo의 `fix/plate-orientation-cg-workload` 브랜치(또는 main)에
-`control_seoungjin/controller_cpp/`가 통째로 들어 있음. 서브모듈은 안 받아도 됨
-(C++ 빌드에 MATLAB/Simscape 불필요 — `git clone` 후 submodule init **하지 말 것**,
-특히 Simscape 서브모듈은 init 금지 규칙).
+**수령 경로 = OneDrive 공유 (사용자 확정)** — repo 폴더가 통째로 동기화되므로 git
+pull 불필요. `control_seoungjin/controller_cpp/`만 있으면 빌드된다 (MATLAB/Simscape
+불필요). git을 쓰게 되더라도 서브모듈 init은 **하지 말 것** (Simscape 서브모듈
+init 금지 규칙 — FX450 CAD가 덮인다).
 
 리눅스/크로스 머신 (권장):
 ```bash
