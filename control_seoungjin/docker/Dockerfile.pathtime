@@ -1,0 +1,9 @@
+# path_time 파이프라인 실행 환경 (경로 층 도커화 - 사용자 결정 17차)
+# 코드는 이미지에 굽지 않고 볼륨 마운트 (path_time 세션이 계속 수정 중이므로).
+# 빌드:  docker build -f docker/Dockerfile.pathtime -t qc-pathtime .   (control_seoungjin/에서)
+# 실행:  docker run --rm -v "$PWD:/work" qc-pathtime python traj_pipeline.py --input input/example_mission.json
+#        docker run --rm -v "$PWD:/work" qc-pathtime python -m pytest tests/ -q
+FROM python:3.12-slim
+RUN pip install --no-cache-dir numpy scipy pytest
+WORKDIR /work
+CMD ["python", "traj_pipeline.py", "--help"]
