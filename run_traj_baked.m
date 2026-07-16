@@ -74,7 +74,15 @@ for i = 1:numel(ibs)
 end
 
 % --- 자세 로깅 태핑 (검증된 매핑: Element2=z, Element3=pitch, Element4=roll) ---
-sigMap = {'In Bus Element2','real_z'; 'In Bus Element4','real_roll'; 'In Bus Element3','real_pitch'};
+% + 파라미터 추정기(estimate_params.py)용: yaw/vz + 프로펠러별 w/thrust
+%   (매핑은 첫 실행 로그의 Scope 버스 출력에서 확정: El5=yaw, El25=vz,
+%    El6~9=Prop1~4.thrust, El11/10/12/13=Prop1/2/3/4.w)
+sigMap = {'In Bus Element2','real_z'; 'In Bus Element4','real_roll'; 'In Bus Element3','real_pitch'; ...
+          'In Bus Element5','real_yaw'; 'In Bus Element25','real_vz'; ...
+          'In Bus Element6','prop1_T'; 'In Bus Element7','prop2_T'; ...
+          'In Bus Element8','prop3_T'; 'In Bus Element9','prop4_T'; ...
+          'In Bus Element11','prop1_w'; 'In Bus Element10','prop2_w'; ...
+          'In Bus Element12','prop3_w'; 'In Bus Element13','prop4_w'};
 for i = 1:size(sigMap, 1)
     twName = ['To Workspace ' sigMap{i,2}];
     oldTw = find_system(scope, 'SearchDepth', 1, 'Name', twName);
@@ -136,7 +144,9 @@ end
 % --- 결과 저장 (act/des 원시 로그 + sim_time 동승 — Python 지터 분석기 입력) ---
 outFile = fullfile(modelDir, 'sim_result_baked.mat');
 save(outFile, 'trk', 'real_roll', 'real_pitch', 'real_z', 'timespot_spl', 'spline_data', 'spline_yaw');
-extraVars = {'sim_time', 'act_x1','act_y1','act_z1', 'des_x1','des_y1','des_z1'};
+extraVars = {'sim_time', 'act_x1','act_y1','act_z1', 'des_x1','des_y1','des_z1', ...
+             'real_yaw','real_vz', 'prop1_T','prop2_T','prop3_T','prop4_T', ...
+             'prop1_w','prop2_w','prop3_w','prop4_w'};
 for i = 1:numel(extraVars)
     if exist(extraVars{i}, 'var'); save(outFile, extraVars{i}, '-append'); end
 end
