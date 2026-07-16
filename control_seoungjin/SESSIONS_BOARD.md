@@ -10,9 +10,10 @@
 - MATLAB 사용 전 여기서 점유 여부 확인 후 자기 줄로 선언 (1대 규칙, RAM 16GB)
 
 ## MATLAB 점유
-- **튜닝/C++ 세션** — 07-17 01:00~ 큐 순차: 0kg A/B → 명세 덤프 → 골든 로그 → smoother 재검증 (~20분). 끝나면 이 줄 비움.
+- (비어 있음) — 07-17 01:55 튜닝 세션 명세 덤프 완료·해제 (오늘 마감, 사용자 지시). 다음 차례: path_time 스텝 백스톱 재비행.
 
 ## 튜닝/C++ 세션 (17차 계열)
+- 07-17 01:45 — **⚠ 전 세션 공유: 0kg(생 드론) 레짐 붕괴 실측** — 정규화 ON/OFF 무관 준발산(오버슈트 2m/43m, ON이 그나마 방어). 1kg 튜닝 시스템이 0kg에서 무너짐 = **드롭 후 복귀 구간 미지원**. 붕괴는 0.5~0kg 사이(0.5kg은 정상) — 중간 질량 탐침으로 국소화 예정. 드롭/복귀 시나리오 테스트 금지 권고 (validate_phys_ab0.csv)
 - 07-17 01:10 — **위치 게인 결정(사용자): 프로파일 3종 + 상위 선택** — precision(8/3.2, 기본)/balanced(12/4.8)/agile(24/10.8), 임무 단위 전환(v1). parameters.m `ctrl_profile` switch + C++ `qc_apply_profile` 동기 구현·검증. ★path_time 세션: 경로 JSON에 `controller_profile` 필드(§1) 추가 협의 — 미지정=precision, 값은 trajectory 산출물에 동봉해 컨트롤러 측에 전달 필요
 - 07-17 00:50 — ★소비: current_state 저장 경로 규칙 반영 완료 (qc_io::resolve_rt_dir — UGRP_RT_DIR→LOCALAPPDATA\ugrp_drone, 실검증). smoother 백포팅 재검증(diagnose_smoother)은 MATLAB 큐에 추가
 - 07-16 23:00 — current_state.json **v0.2 생산자 구현 완료** (C++ qc_io: jerk/traj_hash/t_on_traj/motors, 파이썬 교차 파싱 통과)
@@ -23,6 +24,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-17 01:40 — MATLAB 슬롯 인수(사용자 통보 "빔") → 스텝 백스톱 재비행 착수 — path_vis 서브미터 최소 2점 가드 패치 검증, 매트릭스 v3 마지막 ❌ 해소용
 - 07-17 01:05 — 스텝 실패 진범: `quadcopter_waypoints_to_path_vis.m`의 `floor(dist)*4` — **1m 미만 세그먼트 = 시각화 점 0개** → Spline 컴파일 거부. 최소 2점 가드 패치 (서브미터 경로 쓰는 모든 세션 해당). 매트릭스 v3: fly_through 다항식판 합격(추종 1.3cm/tail 0.017°), ZVD tail 8배 저감(0.12→0.015°), 질량 0.06% 재현
 - 07-17 00:35 — current_state **저장 경로 규칙 확정** — 30Hz 파일은 OneDrive 밖 `env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone\` (repo output/은 sync 잠금으로 원자적 rename 실패 위험). INTERFACE_SPEC §5 [★소비됨: C++ 반영 완료 07-17 00:50]
 - 07-17 00:30 — traj_smoother.m에 vmax 저크 스파이크 테이퍼 백포팅 (6f43567) — Python판 등가 검증 완료 [★소비됨: 튜닝 세션 MATLAB 큐에 diagnose_smoother 재검증 추가]
@@ -34,7 +36,6 @@
 - (미착수 — 착수 시 docs/HANDOFF_CPP_GAZEBO.md 필독, 여기 첫 줄 기록)
 
 ## 대기/예약 (세션 무관)
-- [MATLAB] 튜닝 세션: 0kg A/B(validate_phys_ab0) → 명세 덤프(dump_controller_spec) → 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) — 스크립트 준비 완료, 슬롯 나면 순차
-- [MATLAB] path_time 세션: 스텝 백스톱 1편 재비행 (`verify_pipeline.py --only step`, ~4분 — vis 서브미터 패치 검증, 매트릭스 마지막 ❌ 해소용)
+- [MATLAB] 튜닝 세션 잔여: 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) → 0kg 붕괴 국소화 탐침(0.3/0.1/0.03kg) → agile 프로파일 외란/질량 관문 — 스크립트 준비 완료 (0kg A/B·명세 덤프는 완료됨)
 - [사용자] 푸시 2줄 (서브모듈 → 부모 순서)
 - [Docker] qc-cpp 컨테이너 빌드 (Desktop 기동 시)
