@@ -1,5 +1,18 @@
 # control_seoungjin
 
+## 문서 안내 (2026-07-16 정리)
+
+| 문서 | 내용 |
+|---|---|
+| [INTERFACE_SPEC.md](INTERFACE_SPEC.md) | **통신 규격 v0.1** — 경로 JSON/궤적/피드백/원장/실시간 상태/추정기/RL 궤도 계약 (구속력 있는 원본) |
+| [PIPELINE_STATUS.md](PIPELINE_STATUS.md) | path_time 파이프라인 구축 상태 (path_time 세션 관리) |
+| [docs/HANDOFF_PATH_TO_CONTROLLER.md](docs/HANDOFF_PATH_TO_CONTROLLER.md) | 경로→컨트롤러 파이프라인 인수인계 (스무더/게이트/ZV 스펙, 튜닝 현황) |
+| [docs/HANDOFF_PATHTIME_PIPELINE.md](docs/HANDOFF_PATHTIME_PIPELINE.md) | path_time 세션 착수 문서 (자립형) |
+| [docs/HANDOFF_CPP_GAZEBO.md](docs/HANDOFF_CPP_GAZEBO.md) | C++ 제어기 → Gazebo 검증 세션 인수인계 |
+| [controller_cpp/README.md](controller_cpp/README.md) | C++ 이식 상태·빌드·골든 트레이스 절차 |
+| `controller/Quadcopter-Drone-Model-Simscape/TUNING_STATUS.md` | 튜닝 전 과정 기록 (§A~§Z, 게인 확정 근거) |
+| [COMMANDS.md](COMMANDS.md) | MATLAB 실행 명령·함정 모음 |
+
 ## 요구사항 (Requirements)
 
 **MATLAB / Simulink** (`sample/run_sample_sim.sh` 및 `controller/` 시뮬레이션 실행용)

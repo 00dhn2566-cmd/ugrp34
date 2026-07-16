@@ -1,6 +1,6 @@
 # 인수인계: path_time 파이프라인 구축 (다른 Claude 세션 전용)
 
-작성 2026-07-16. 이 문서 하나로 시작 가능하도록 자립 작성. 컨트롤러/모델 세부는 자매 문서 [HANDOFF_PATH_TO_CONTROLLER.md](HANDOFF_PATH_TO_CONTROLLER.md), 튜닝 전 과정은 `controller/.../TUNING_STATUS.md` §V~§W 참고.
+작성 2026-07-16. 이 문서 하나로 시작 가능하도록 자립 작성. 컨트롤러/모델 세부는 자매 문서 [HANDOFF_PATH_TO_CONTROLLER.md](HANDOFF_PATH_TO_CONTROLLER.md), 튜닝 전 과정은 `../controller/.../TUNING_STATUS.md` §V~§W 참고. (2026-07-16 후반: 문서들이 `docs/`로 이동 — 산출물 경로 규약은 여전히 `control_seoungjin/` 기준.)
 
 ## 이 세션이 만들 것
 

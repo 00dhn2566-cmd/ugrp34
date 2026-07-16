@@ -1,9 +1,9 @@
 # HANDOFF: C++ 제어기 → Gazebo 검증 세션
 
 작성: 17차 튜닝 세션 (2026-07-16). 대상: Gazebo 검증을 맡은 클로드 세션.
-전제 문서: [INTERFACE_SPEC.md](INTERFACE_SPEC.md) (통신 규격 v0.1),
-[controller_cpp/README.md](controller_cpp/README.md) (이식 상태),
-[gazebo_setup_log.md](../gazebo_setup_log.md) (환경 구축 이력).
+전제 문서: [INTERFACE_SPEC.md](../INTERFACE_SPEC.md) (통신 규격 v0.1),
+[controller_cpp/README.md](../controller_cpp/README.md) (이식 상태),
+[gazebo_setup_log.md](../../gazebo_setup_log.md) (환경 구축 이력).
 
 ## 임무
 
@@ -64,11 +64,28 @@ MATLAB 구운 모델(Simscape)은 "정답 플랜트"로 계속 남고, Gazebo는
 
 ## 빌드/실행
 
+**Gazebo 머신은 별도 기기 (사용자 확정)** — 개발 노트북(MX450)이 아니라 RTX 머신/클라우드.
+git으로 받는다: 부모 repo의 `fix/plate-orientation-cg-workload` 브랜치(또는 main)에
+`control_seoungjin/controller_cpp/`가 통째로 들어 있음. 서브모듈은 안 받아도 됨
+(C++ 빌드에 MATLAB/Simscape 불필요 — `git clone` 후 submodule init **하지 말 것**,
+특히 Simscape 서브모듈은 init 금지 규칙).
+
+리눅스/크로스 머신 (권장):
+```bash
+cd control_seoungjin/controller_cpp
+cmake -B build && cmake --build build
+./build/qc_trace --smoke                                  # 산수 정상 확인
+./build/qc_trace --io-test ../output/trajectory.json /tmp/t  # 인터페이스 왕복
+./build/qc_trace --mission ../output/trajectory.json /tmp/t  # 배치 골격 건식 주행
+```
+Gazebo 플러그인/ROS2 노드는 CMake 타깃 `qc`(정적 라이브러리)를 링크하고,
+`main_trace.cpp`의 `run_mission()` 안 `[PLANT HOOK]` 주석 지점을 참고해
+측정 주입/명령 인가를 끼우면 된다.
+
+이 Windows 개발 머신에서는:
 ```powershell
 cd control_seoungjin\controller_cpp
 .\build.ps1            # msys64 g++ — mingw64\bin PATH 필수 (없으면 무음 실패 0xC0000135)
-.\qc_trace.exe --smoke                                   # 산수 정상 확인
-.\qc_trace.exe --io-test ..\output\trajectory.json <임시폴더>   # 인터페이스 왕복
 ```
 
 ## 검증 절차 (골든 트레이스)
