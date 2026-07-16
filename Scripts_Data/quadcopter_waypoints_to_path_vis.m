@@ -18,9 +18,12 @@ wayp_dist   = vecnorm(diff(wayp_unique),2,2);
 wayp_path_vis(1,:) = wayp_unique(1,:);
 
 for i = 1:size(wayp_dist,1)
-    wayp_vis_x = linspace(wayp_unique(i,1),wayp_unique(i+1,1),floor(wayp_dist(i))*4);
-    wayp_vis_y = linspace(wayp_unique(i,2),wayp_unique(i+1,2),floor(wayp_dist(i))*4);
-    wayp_vis_z = linspace(wayp_unique(i,3),wayp_unique(i+1,3),floor(wayp_dist(i))*4);
+    % 1m 미만 세그먼트에서 floor()*4 = 0 -> 점 0개 -> Spline 블록
+    % "insufficient points" 컴파일 거부 (서브미터 경로 실측 버그). 최소 2점 보장.
+    n_vis = max(floor(wayp_dist(i))*4, 2);
+    wayp_vis_x = linspace(wayp_unique(i,1),wayp_unique(i+1,1),n_vis);
+    wayp_vis_y = linspace(wayp_unique(i,2),wayp_unique(i+1,2),n_vis);
+    wayp_vis_z = linspace(wayp_unique(i,3),wayp_unique(i+1,3),n_vis);
 
     wayp_path_vis = [wayp_path_vis;wayp_vis_x(2:end)' wayp_vis_y(2:end)' wayp_vis_z(2:end)'];
 end
