@@ -4,6 +4,7 @@
 #include "qc_io.hpp"
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <ctime>
@@ -396,6 +397,27 @@ bool write_attitude_feedback(const std::string& path, const FlightLogger::Feedba
         fb.ampDeg, fb.phaseRad, fb.tRefS,
         fb.movingAttPeakDeg, fb.movingTrackRmsCm);
     return atomic_write(path, buf, err);
+}
+
+// ---------- §5 실시간 파일 디렉토리 (OneDrive 밖) ----------
+
+std::string resolve_rt_dir(std::string& err) {
+    std::string dir;
+    if (const char* e = std::getenv("UGRP_RT_DIR"); e && *e) {
+        dir = e;
+    } else {
+#ifdef _WIN32
+        const char* base = std::getenv("LOCALAPPDATA");
+        if (!base || !*base) { err = "LOCALAPPDATA 미정의 - UGRP_RT_DIR을 지정할 것"; return {}; }
+        dir = std::string(base) + "\\ugrp_drone";
+#else
+        dir = "/tmp/ugrp_drone";
+#endif
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) { err = "실시간 디렉토리 생성 실패: " + dir + " (" + ec.message() + ")"; return {}; }
+    return dir;
 }
 
 // ---------- §6 param_estimate 소비 ----------

@@ -56,6 +56,12 @@ struct CurrentState {
 // 원자적 쓰기 (tmp → rename). 호출 주기 조절은 호출자 몫 (권장 30Hz, 소비자 신선도 0.5s).
 bool write_current_state(const std::string& path, const CurrentState& st, std::string& err);
 
+// 실시간 파일 디렉토리 결정 (§5 저장 경로 규칙, path_time 세션 확정 07-17):
+// 30Hz 덮어쓰기 파일은 OneDrive 동기화 폴더 밖에 둔다 — sync 잠금이 원자적 rename을
+// 깨뜨릴 수 있음. 우선순위: env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone (POSIX: /tmp/ugrp_drone).
+// 디렉토리는 없으면 생성. 실패 시 빈 문자열 + err.
+std::string resolve_rt_dir(std::string& err);
+
 // ---------- §3 잔류 지터 보고 ----------
 
 // 비행 로그 축적기: (t, pitch[rad], roll[rad], 추종오차[m]) 스트림 → tail/moving 지표.

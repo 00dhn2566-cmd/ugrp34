@@ -13,6 +13,7 @@
 - **path_time 세션** — 07-17 00:20~ 매트릭스 v3 (5편 순차, ~30분). 끝나면 이 줄 비우고 튜닝 세션 큐(0kg A/B→명세 덤프→골든 로그) 차례.
 
 ## 튜닝/C++ 세션 (17차 계열)
+- 07-17 00:50 — ★소비: current_state 저장 경로 규칙 반영 완료 (qc_io::resolve_rt_dir — UGRP_RT_DIR→LOCALAPPDATA\ugrp_drone, 실검증). smoother 백포팅 재검증(diagnose_smoother)은 MATLAB 큐에 추가
 - 07-16 23:00 — current_state.json **v0.2 생산자 구현 완료** (C++ qc_io: jerk/traj_hash/t_on_traj/motors, 파이썬 교차 파싱 통과)
 - 07-16 22:40 — docker/ 신설: Dockerfile.pathtime(경로 층) + Dockerfile.cpp(리눅스 이식성 검증) — Docker Desktop 꺼져 있어 컨테이너 검증 보류 (4979ef2)
 - 07-16 22:30 — ★사용자 결정 대기: 위치 게인 A(8/3.2 유지, 추천)/B(12/4.8 절충)/C(게인 스케줄링). r8 실측: 호버 지터 범인=kp, 평탄부 없음 (d7f55c2)
@@ -21,8 +22,8 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
-- 07-17 00:35 — ★C++ 세션: current_state **저장 경로 규칙 확정** — 30Hz 파일은 OneDrive 밖 `env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone\` (repo output/은 sync 잠금으로 원자적 rename 실패 위험). 생산자(qc_io)에 반영 요망, INTERFACE_SPEC §5
-- 07-17 00:30 — ★튜닝 세션: traj_smoother.m에 vmax 저크 스파이크 테이퍼 백포팅 (6f43567) — diagnose_smoother.m 재검증 큐에 추가 요망 (Python판 등가 검증 완료)
+- 07-17 00:35 — current_state **저장 경로 규칙 확정** — 30Hz 파일은 OneDrive 밖 `env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone\` (repo output/은 sync 잠금으로 원자적 rename 실패 위험). INTERFACE_SPEC §5 [★소비됨: C++ 반영 완료 07-17 00:50]
+- 07-17 00:30 — traj_smoother.m에 vmax 저크 스파이크 테이퍼 백포팅 (6f43567) — Python판 등가 검증 완료 [★소비됨: 튜닝 세션 MATLAB 큐에 diagnose_smoother 재검증 추가]
 - 07-17 00:25 — 다항식 fly-through(통과 속도+구심 가속 BC, 중간점 정확 통과, 일직선 -30%) + 완화 계약 v0.2(클램프/재시간화, 거부 최소화) + 동적 지터 예산 + RDP 전처리. 테스트 72개
 - 07-17 00:15 — current_state v0.2 스키마 확정(INTERFACE_SPEC §5) + 소비 측 스플라이스 jerk 승계 반영 (a636c2a). 매트릭스 v3(fly-through 5편+추정기) 백그라운드 비행 중
 - (이하 이 세션이 직접 기록)
@@ -31,6 +32,6 @@
 - (미착수 — 착수 시 docs/HANDOFF_CPP_GAZEBO.md 필독, 여기 첫 줄 기록)
 
 ## 대기/예약 (세션 무관)
-- [MATLAB] 튜닝 세션: 0kg A/B(validate_phys_ab0) → 명세 덤프(dump_controller_spec) → 골든 로그(diagnose_golden_trace) — 스크립트 준비 완료, 슬롯 나면 순차
+- [MATLAB] 튜닝 세션: 0kg A/B(validate_phys_ab0) → 명세 덤프(dump_controller_spec) → 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) — 스크립트 준비 완료, 슬롯 나면 순차
 - [사용자] 푸시 2줄 (서브모듈 → 부모 순서)
 - [Docker] qc-cpp 컨테이너 빌드 (Desktop 기동 시)

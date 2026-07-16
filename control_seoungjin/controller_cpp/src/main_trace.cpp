@@ -158,7 +158,12 @@ static int run_mission(const char* trajPath, const char* outDir,
     const double dt = 1e-3;                    // 제어 1kHz
     const int stateEvery = 33;                 // current_state ~30Hz (스펙 20~50Hz)
     const double tailHold = 8.0;               // 도착 후 잔류 관측 (run_traj_baked T_hold=8s와 동일)
-    const std::string statePath = std::string(outDir) + "/current_state.json";
+    // §5 저장 경로 규칙: 30Hz 파일은 OneDrive 밖 (UGRP_RT_DIR → LOCALAPPDATA\ugrp_drone).
+    // feedback은 비행 후 1회라 outDir(repo output/) 그대로.
+    const std::string rtDir = qcio::resolve_rt_dir(err);
+    if (rtDir.empty()) { std::fprintf(stderr, "[즉사] %s\n", err.c_str()); return 1; }
+    const std::string statePath = rtDir + "/current_state.json";
+    std::printf("current_state 경로: %s\n", statePath.c_str());
     long nState = 0;
     qc::QcOutput out{};
     double thrustSum = 0; long nThrust = 0;
