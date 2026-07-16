@@ -13,7 +13,7 @@
 - (비어 있음) — 07-17 02:05 path_time 스텝 재비행 완료·해제. 다음: 튜닝 세션 잔여 큐 (대기/예약 참조).
 
 ## 튜닝/C++ 세션 (17차 계열)
-- 07-17 01:45 — **⚠ 전 세션 공유: 0kg(생 드론) 레짐 붕괴 실측** — 정규화 ON/OFF 무관 준발산(오버슈트 2m/43m, ON이 그나마 방어). 1kg 튜닝 시스템이 0kg에서 무너짐 = **드롭 후 복귀 구간 미지원**. 붕괴는 0.5~0kg 사이(0.5kg은 정상) — 중간 질량 탐침으로 국소화 예정. 드롭/복귀 시나리오 테스트 금지 권고 (validate_phys_ab0.csv)
+- 07-17 01:45 — **⚠ 전 세션 공유: 0kg(생 드론) 레짐 붕괴 실측** — 정규화 ON/OFF 무관 준발산(오버슈트 2m/43m, ON이 그나마 방어). 붕괴는 0.5~0kg 사이(0.5kg은 정상) — 탐침으로 국소화 예정 (validate_phys_ab0.csv). [정정 02:10: path_time 발견 "임무에 투하 없음(사용자 확인)"에 따라 "복귀 구간 미지원" 해석 철회 — 0kg은 운영 구간이 아니라 **과적합 경계** 이슈. 단 생 드론 시운전 시 주의는 유효]
 - 07-17 01:10 — **위치 게인 결정(사용자): 프로파일 3종 + 상위 선택** — precision(8/3.2, 기본)/balanced(12/4.8)/agile(24/10.8), 임무 단위 전환(v1). parameters.m `ctrl_profile` switch + C++ `qc_apply_profile` 동기 구현·검증. ★path_time 세션: 경로 JSON에 `controller_profile` 필드(§1) 추가 협의 — 미지정=precision, 값은 trajectory 산출물에 동봉해 컨트롤러 측에 전달 필요
 - 07-17 00:50 — ★소비: current_state 저장 경로 규칙 반영 완료 (qc_io::resolve_rt_dir — UGRP_RT_DIR→LOCALAPPDATA\ugrp_drone, 실검증). smoother 백포팅 재검증(diagnose_smoother)은 MATLAB 큐에 추가
 - 07-16 23:00 — current_state.json **v0.2 생산자 구현 완료** (C++ qc_io: jerk/traj_hash/t_on_traj/motors, 파이썬 교차 파싱 통과)
