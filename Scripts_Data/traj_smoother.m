@@ -52,8 +52,20 @@ for ax = 1:C
     mode = 0;   % 0 자유추종 / +1 전진제동 / -1 후진제동
     for k = 2:N
         dt = t(k) - t(k-1);
-        up3 = min([ v*dt + a*dt^2 + jmax*dt^3,  v*dt + amax*dt^2,  vmax*dt ]);
-        lo3 = max([ v*dt + a*dt^2 - jmax*dt^3,  v*dt - amax*dt^2, -vmax*dt ]);
+        % 속도 여유 테이퍼 (Python 포팅에서 역이식, 2026-07-16): vmax 접근 시
+        % a를 미리 -jmax 램프로 깎아야 순항 진입 순간 a가 한 샘플에 꺾이는
+        % 저크 스파이크(-70 실측, 한계 7 설정)가 없다. 기존 검증(1m 스텝)은
+        % vmax 미도달이라 안 걸렸던 구멍. 이산-정확판:
+        %   a_cap = jmax·(sqrt(2.25·dt² + 2h/jmax) − 1.5·dt), h = 속도 여유
+        h_up = max(vmax - v, 0);
+        h_dn = max(vmax + v, 0);
+        a_cap_up = max(jmax*(sqrt(2.25*dt^2 + 2*h_up/jmax) - 1.5*dt), 0);
+        a_cap_dn = max(jmax*(sqrt(2.25*dt^2 + 2*h_dn/jmax) - 1.5*dt), 0);
+        up3 = min([ v*dt + a*dt^2 + jmax*dt^3,  v*dt + min(amax, a_cap_up)*dt^2,  vmax*dt ]);
+        lo3 = max([ v*dt + a*dt^2 - jmax*dt^3,  v*dt - min(amax, a_cap_dn)*dt^2, -vmax*dt ]);
+        if up3 < lo3   % 테이퍼가 저크 하한과 충돌하면 저크 한계 우선
+            up3 = lo3;
+        end
         gUp = max(fwdMax(k) - r, 0);
         gDn = max(r - fwdMin(k), 0);
         dsF = stop_dist(v, a, ab, jmax);
