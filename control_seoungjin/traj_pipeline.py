@@ -296,11 +296,18 @@ def splice_waypoints_from_state(state, remaining_waypoints, emergency=False):
     return wp, np.asarray(base["vel"], float), np.asarray(base["acc"], float)
 
 
-def normalize_waypoints(waypoints, merge_dist=0.01, max_seg_len=None):
-    """상위 waypoint 집합 전처리: merge(근접점 병합) / divide(긴 구간 분할).
+def normalize_waypoints(waypoints, merge_dist=0.01, collinear_tol=None,
+                        max_seg_len=None):
+    """상위 waypoint 집합 전처리: merge(병합) / divide(분할).
 
-    merge: 직전 점과 merge_dist[m] 이내인 점 제거 (RL 노이즈/중복 방어).
-    divide: max_seg_len[m] 초과 구간에 등간격 중간점 삽입 (None이면 안 함).
+    성능 목적 (사용자 확정: reference 추종 성능 좋게 시간 부여):
+      - merge_dist: 직전 점과 이내 거리인 점 제거 (RL 노이즈/중복 방어).
+      - collinear_tol: **일직선상의 중간점 병합** — 정지형은 점마다 서다
+        가다라, 한 직선 위의 촘촘한 점들을 한 세그먼트로 합치면 순항이
+        가능해져 소요시간·지터 모두 개선. 중간점의 이웃 직선까지 수직
+        거리가 tol[m] 이내면 제거 (None이면 안 함).
+      - max_seg_len: 초과 구간에 등간격 중간점 삽입 (None이면 안 함;
+        fly_through 코너 제어/RL 격자화용).
     """
     wp = np.asarray(waypoints, float)
     keep = [wp[0]]
@@ -308,6 +315,23 @@ def normalize_waypoints(waypoints, merge_dist=0.01, max_seg_len=None):
         if np.linalg.norm(p - keep[-1]) > merge_dist:
             keep.append(p)
     wp = np.array(keep)
+
+    if collinear_tol is not None and len(wp) >= 3:
+        out = [wp[0]]
+        for i in range(1, len(wp) - 1):
+            a, b, c = out[-1], wp[i], wp[i + 1]
+            ac = c - a
+            L = np.linalg.norm(ac)
+            if L < 1e-12:
+                continue
+            # b의 직선 a-c까지 수직 거리 (선분 안쪽 투영일 때만 병합 후보)
+            s = float(np.dot(b - a, ac) / (L * L))
+            dist = float(np.linalg.norm(b - a - s * ac))
+            if not (0.0 <= s <= 1.0 and dist <= collinear_tol):
+                out.append(b)
+        out.append(wp[-1])
+        wp = np.array(out)
+
     if max_seg_len is not None and len(wp) >= 2:
         out = [wp[0]]
         for a, b in zip(wp[:-1], wp[1:]):
@@ -435,6 +459,17 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     shaper_mode = shaper_cfg.get("mode", SHAPER_DEFAULT)
 
     wp_mode = cfg.get("waypoint_mode", "stop")
+    if waypoints is not None:
+        prep = cfg.get("waypoint_prep", {})
+        n_before = len(waypoints)
+        waypoints = normalize_waypoints(
+            waypoints,
+            merge_dist=float(prep.get("merge_dist", 0.01)),
+            collinear_tol=prep.get("collinear_tol"),
+            max_seg_len=prep.get("max_seg_len"))
+        if len(waypoints) != n_before:
+            print(f"[전처리] waypoint {n_before} -> {len(waypoints)}개 "
+                  "(merge/divide)")
     if waypoints is not None and wp_mode == "fly_through":
         # 1a') 무정지 통과: waypoint를 스플라인 연속 경로로 잇고 arc-length
         #      재매개화 → 곡률 제한(v ≤ √(a_max/κ)) 속도 프로파일 → 시간 부여.

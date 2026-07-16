@@ -187,6 +187,31 @@ class TestWaypointBatches:
         with pytest.raises(ValueError, match="2개 미만"):
             tp.normalize_waypoints([[0, 0, 1], [0, 0, 1.001]], merge_dist=0.01)
 
+    def test_collinear_merge_improves_time(self):
+        """일직선 촘촘 점 병합 -> 정지 없이 순항 -> 소요시간 단축 (성능 목적)."""
+        dense = [[float(x), 0.0, 2.0] for x in (0, 1, 2, 3, 4)]   # 일직선 5점
+        merged = tp.normalize_waypoints(dense, collinear_tol=0.05)
+        assert len(merged) == 2, "일직선 중간점은 전부 병합돼야 함"
+
+        cfg_base = {"limits": self.LIM, "shaper": {"mode": "none"}}
+        res_dense = tp.build_trajectory(
+            {**cfg_base}, np.asarray(dense, float), 1.8)
+        res_merged = tp.build_trajectory(
+            {**cfg_base, "waypoint_prep": {"collinear_tol": 0.05}},
+            np.asarray(dense, float), 1.8)
+        t_dense, t_merged = res_dense["t"][-1], res_merged["t"][-1]
+        assert t_merged < 0.8 * t_dense, \
+            f"병합 후 순항으로 빨라져야 함 ({t_dense:.1f}s -> {t_merged:.1f}s)"
+        # 굽은 경로는 병합되면 안 됨 (코너점 보존)
+        bent = [[0, 0, 2], [2, 0, 2], [2, 2, 2]]
+        kept = tp.normalize_waypoints(bent, collinear_tol=0.05)
+        assert len(kept) == 3
+
+    def test_divide_long_segment(self):
+        out = tp.normalize_waypoints([[0, 0, 2], [5, 0, 2]], max_seg_len=2.0)
+        seg = np.linalg.norm(np.diff(out, axis=0), axis=1)
+        assert np.all(seg <= 2.0 + 1e-9) and len(out) == 4
+
     def test_midflight_new_set_splices_without_stop(self):
         """1번 집합 비행 중 τ에 2번 집합 도착 → 정지 없이 그쪽으로 꺾음."""
         cfg = {"limits": self.LIM, "shaper": {"mode": "zvd", "f_mode_hz": 1.8}}
