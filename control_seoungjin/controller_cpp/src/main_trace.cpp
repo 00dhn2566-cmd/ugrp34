@@ -65,7 +65,8 @@ static int run_io_test(const char* trajPath, const char* outDir) {
 
     qcio::CurrentState st{};
     for (int i = 0; i < 3; ++i) { st.pos[i] = mid.pos[i]; st.vel[i] = mid.vel[i]; st.acc[i] = mid.acc[i]; }
-    st.yaw = mid.yaw; st.ref = mid;
+    st.rpy[2] = mid.yaw; st.ref = mid;
+    st.tSim = tr.duration() * 0.5; st.trajHash = tr.hash; st.tOnTraj = st.tSim;
     const std::string statePath = std::string(outDir) + "/current_state.json";
     if (!qcio::write_current_state(statePath, st, err)) {
         std::fprintf(stderr, "current_state 기록 실패: %s\n", err.c_str());
@@ -190,8 +191,14 @@ static int run_mission(const char* trajPath, const char* outDir,
 
         if (k % stateEvery == 0) {
             qcio::CurrentState cs{};
-            for (int i = 0; i < 3; ++i) { cs.pos[i] = in.measPos[i]; cs.vel[i] = ref.vel[i]; cs.acc[i] = ref.acc[i]; }
-            cs.yaw = ref.yaw; cs.ref = ref;
+            for (int i = 0; i < 3; ++i) {
+                cs.pos[i] = in.measPos[i]; cs.vel[i] = ref.vel[i]; cs.acc[i] = ref.acc[i];
+                cs.rpy[i] = in.measRpy[i];
+            }
+            cs.ref = ref;
+            cs.tSim = t; cs.trajHash = tr.hash; cs.tOnTraj = t;   // 건식: 궤적 시각 = 시뮬 시각
+            cs.hasMotors = true;
+            for (int i = 0; i < 4; ++i) cs.wCmd[i] = out.motorRef[i];
             if (!qcio::write_current_state(statePath, cs, err)) {
                 std::fprintf(stderr, "[즉사] current_state 기록 실패: %s\n", err.c_str());
                 return 1;

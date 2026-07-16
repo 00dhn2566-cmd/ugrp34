@@ -32,22 +32,28 @@ struct Trajectory {
 // trajectory.json 로드. 실패 시 false + err에 사유.
 bool load_trajectory(const std::string& path, Trajectory& out, std::string& err);
 
-// 시각 tq에서 참조 샘플 (선형 보간 + 후방차분 vel/acc — ref_state용).
+// 시각 tq에서 참조 샘플 (선형 보간 + 후방차분 vel/acc/jerk — ref_state용).
 // 범위 밖은 끝점 유지 (성형 궤적은 끝점 정지 전제).
+// jerk까지인 이유 (§5 v0.2): 이어붙이기 7차 다항식 경계조건이 p/v/a/j 4개 — C³ 연속 승계 단위.
 struct RefSample {
-    double pos[3], vel[3], acc[3], yaw;
+    double pos[3], vel[3], acc[3], jerk[3], yaw;
 };
 RefSample sample_trajectory(const Trajectory& tr, double tq);
 
-// ---------- §5 실시간 상태 ----------
+// ---------- §5 실시간 상태 (schema_version 0.2) ----------
 
 struct CurrentState {
-    double pos[3], vel[3], acc[3];
-    double yaw = 0;
-    RefSample ref;                    // 현재 성형 기준의 상태 (재계획 이어붙이기용)
+    double tSim = 0;                  // 비행/시뮬 내부 시각 [s]
+    double pos[3], vel[3], acc[3];    // 측정 상태
+    double rpy[3];                    // 측정 자세 roll/pitch/yaw [rad]
+    RefSample ref;                    // ★ 성형 기준 상태 (재계획용, jerk 포함)
+    std::string trajHash;             // ref가 따르는 궤적 해시
+    double tOnTraj = 0;               // 그 궤적 위의 시점 [s]
+    bool hasMotors = false;           // 선택 블록
+    double wCmd[4] = {0, 0, 0, 0};    // 모터 속도 명령 (디버깅/추정기용)
 };
 
-// 원자적 쓰기 (tmp → rename). 호출 주기 조절은 호출자 몫 (스펙 20~50Hz).
+// 원자적 쓰기 (tmp → rename). 호출 주기 조절은 호출자 몫 (권장 30Hz, 소비자 신선도 0.5s).
 bool write_current_state(const std::string& path, const CurrentState& st, std::string& err);
 
 // ---------- §3 잔류 지터 보고 ----------

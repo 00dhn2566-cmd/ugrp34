@@ -199,14 +199,16 @@ RefSample sample_trajectory(const Trajectory& tr, double tq) {
         return tr.yaw[lo] + w * (tr.yaw[hi] - tr.yaw[lo]);
     };
 
-    const double h = tr.dt;   // 후방차분 vel/acc (성형기 원칙 1과 동일 규약)
+    const double h = tr.dt;   // 후방차분 vel/acc/jerk (성형기 원칙 1과 동일 규약)
     for (int ax = 0; ax < 3; ++ax) {
-        const double p0 = interp(tq, ax);
-        const double pm = interp(tq - h, ax);
-        const double pmm = interp(tq - 2*h, ax);
-        r.pos[ax] = p0;
-        r.vel[ax] = (p0 - pm) / h;
-        r.acc[ax] = (p0 - 2*pm + pmm) / (h*h);
+        const double p0   = interp(tq, ax);
+        const double pm   = interp(tq - h, ax);
+        const double pmm  = interp(tq - 2*h, ax);
+        const double pmmm = interp(tq - 3*h, ax);
+        r.pos[ax]  = p0;
+        r.vel[ax]  = (p0 - pm) / h;
+        r.acc[ax]  = (p0 - 2*pm + pmm) / (h*h);
+        r.jerk[ax] = (p0 - 3*pm + 3*pmm - pmmm) / (h*h*h);   // §5 v0.2: C³ 승계용
     }
     r.yaw = interpYaw(tq);
     return r;
@@ -257,21 +259,37 @@ static void vec3_json(std::string& out, const char* key, const double v[3]) {
     out += buf;
 }
 
-// ---------- §5 current_state.json ----------
+// ---------- §5 current_state.json (schema_version 0.2) ----------
 
 bool write_current_state(const std::string& path, const CurrentState& st, std::string& err) {
-    std::string j = "{\n  \"timestamp\": \"" + now_string(true) + "\",\n  ";
+    char buf[192];
+    std::string j = "{\n  \"schema_version\": \"0.2\",\n";
+    j += "  \"timestamp\": \"" + now_string(true) + "\",\n";
+    std::snprintf(buf, sizeof buf, "  \"t_sim_s\": %.4f,\n  ", st.tSim);
+    j += buf;
     vec3_json(j, "pos", st.pos); j += ",\n  ";
     vec3_json(j, "vel", st.vel); j += ",\n  ";
-    vec3_json(j, "acc", st.acc); j += ",\n  ";
-    char buf[64];
-    std::snprintf(buf, sizeof buf, "\"yaw_rad\": %.6f", st.yaw);
+    vec3_json(j, "acc", st.acc); j += ",\n";
+    std::snprintf(buf, sizeof buf,
+        "  \"att\": { \"roll_rad\": %.6f, \"pitch_rad\": %.6f, \"yaw_rad\": %.6f },\n",
+        st.rpy[0], st.rpy[1], st.rpy[2]);
     j += buf;
-    j += ",\n  \"ref_state\": { ";
-    vec3_json(j, "pos", st.ref.pos); j += ", ";
-    vec3_json(j, "vel", st.ref.vel); j += ", ";
-    vec3_json(j, "acc", st.ref.acc);
-    j += " }\n}\n";
+    j += "  \"ref_state\": {\n    ";
+    vec3_json(j, "pos", st.ref.pos); j += ",\n    ";
+    vec3_json(j, "vel", st.ref.vel); j += ",\n    ";
+    vec3_json(j, "acc", st.ref.acc); j += ",\n    ";
+    vec3_json(j, "jerk", st.ref.jerk); j += ",\n";
+    std::snprintf(buf, sizeof buf,
+        "    \"traj_hash\": \"%s\", \"t_on_traj_s\": %.4f\n  }",
+        st.trajHash.c_str(), st.tOnTraj);
+    j += buf;
+    if (st.hasMotors) {
+        std::snprintf(buf, sizeof buf,
+            ",\n  \"motors\": { \"w_cmd\": [%.3f, %.3f, %.3f, %.3f] }",
+            st.wCmd[0], st.wCmd[1], st.wCmd[2], st.wCmd[3]);
+        j += buf;
+    }
+    j += "\n}\n";
     return atomic_write(path, j, err);
 }
 
