@@ -15,6 +15,9 @@ control_seoungjin/*.zip
 control_seoungjin/**/trajectory.mat
 control_seoungjin/sample/sample_trajectory.png
 control_seoungjin/sample/output/
+# path_time 파이프라인 산출물 (traj_pipeline.py가 생성; attitude_feedback.json은
+# 컨트롤러↔path_time 핸드셰이크 상태 파일이라 커밋 제외)
+control_seoungjin/output/
 
 # vision 학습 데이터셋 (로컬 전용, git 미포함)
 window_dataset/

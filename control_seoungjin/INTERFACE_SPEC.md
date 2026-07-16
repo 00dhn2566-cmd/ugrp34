@@ -1,0 +1,123 @@
+# control_seoungjin 통신 규격 v0.1 (2026-07-16)
+
+path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 파일 인터페이스 규격.
+폴더 규약: `input/` = 상위→여기 수신, `output/` = 여기↔하위 교환 (생성물, git 제외).
+모든 JSON은 UTF-8, **원자적 쓰기 필수**(임시파일→`os.replace`/rename — 반쯤 써진 JSON 읽기 방지).
+좌표는 world frame [m], z는 고도(+위), yaw는 [rad], 시각은 ISO 8601 로컬.
+
+## 파일 목록
+
+| # | 파일 | 방향 | 갱신 주기 | 용도 |
+|---|---|---|---|---|
+| 1 | `input/<mission>.json` | 상위 → path_time | 임무 단위 | 경로점 + 계획 스펙 |
+| 2 | `output/trajectory.mat` / `trajectory.json` | path_time → 컨트롤러 | 임무 단위 | 성형 완료 궤적 (게이트 통과분만) |
+| 3 | `output/attitude_feedback.json` | 컨트롤러 → path_time | 비행 후 1회 | 잔류 지터 실측 → 경로 보정 학습 |
+| 4 | `output/feedback_ledger.jsonl` | path_time 전용 (append) | 소비 시마다 | 보정 이력 원장 (처리 여부·경과 시간 조회) |
+| 5 | `output/current_state.json` | 컨트롤러 → 모두 | 상시 20~50Hz | 실시간 상태 (재계획 이어붙이기) |
+
+## 1. 경로 JSON (`input/<mission>.json`)
+
+`sample/INPUT_FORMAT.md`의 확장. 필수 키 누락 시 파이프라인이 error로 즉사.
+
+```json
+{
+  "waypoints": [[x, y, z], ...],          // 필수, N>=2, 첫 점 = 출발점
+  "limits": {                              // 필수 — "계획 스펙"
+    "v_max": 1.0, "a_max": 0.8,            //   숫자 또는 [x,y,z]
+    "j_max": 2.0, "snap_max": 10.0
+  },
+  "dt": 0.01,                              // 선택 (기본 0.01) [s]
+  "shaper": {                              // 선택
+    "mode": "zvd",                         //   "zv" | "zvd" (기본 zvd)
+    "f_mode_hz": 1.8                       //   짐 모드 주파수 (피드백으로 갱신됨)
+  }
+}
+```
+
+**한계 예산 규칙**: `limits`는 지터 상쇄 오프셋 예산을 **빼고** 작성한다.
+`limits ≤ (1 − JITTER_MARGIN=0.2) × 물리 한계(v2.0 / a2.0 / j10)` — 초과 시 거부(error).
+상쇄 수정이 얹혀도 최종 궤적이 물리 한계 안에 남게 하기 위한 몫이다.
+
+## 2. 궤적 (`output/trajectory.mat` + `trajectory.json`)
+
+`.mat`(컨트롤러/Simulink 계약)과 `.json`(비MATLAB 소비자용)은 동일 내용. 게이트(v/a/j 3종) 통과분만 기록된다.
+
+| .mat 변수 | shape | 의미 |
+|---|---|---|
+| `timespot_spl` | (N,1) | 시간 [s], 균일 간격 |
+| `spline_data` | (N,3) | 최종(성형+상쇄) 목표 위치 — MATLAB에서 N×3 그대로 사용 |
+| `spline_yaw` | (N,1) | yaw [rad], 진행방향 기준 |
+| `waypoints` | (M,3) | 경유점 — **Waypoints 블록은 3×M이라 MATLAB에서 전치** |
+| `jitter_delta` | (N,3) | 지터 상쇄 레이어 (최종 = 스무딩 + delta). 학습 루프가 이 레이어만 갱신 |
+
+`trajectory.json`: `{dt, trajectory_hash, t[], pos[][3], yaw_rad[]}`.
+`pipeline_meta.json`(부속): 예산·스무더 개입량·게이트 리포트·`trajectory_hash`.
+**`trajectory_hash`** = sha256(t, pos) 앞 16자리 — 피드백이 어느 궤적의 실측인지 대조하는 열쇠.
+
+## 3. 잔류 지터 보고 (`output/attitude_feedback.json`)
+
+컨트롤러(시뮬 후처리)가 쓰고 path_time이 소비하는 **최신 1건** 파일 (덮어쓰기).
+
+```json
+{
+  "flight_id": "2026-07-16T14-30-00",     // 필수 — 비행(시뮬) 식별자
+  "written_at": "2026-07-16T14-35-12",    // 필수 — 기록 시각 (경과 시간 판정 근거)
+  "used": false,                           // 필수 — 소비 핸드셰이크 태그
+  "trajectory_hash": "32940f664e2e6dc4",  // 필수 — 어느 궤적의 실측인지
+  "mode_freq_hz": 1.83,                    // tail 구간 실측 진동 주파수
+  "tail": {                                // 도착 후 잔류 진동 (지터 본체)
+    "pitch_rms_deg": 1.51, "roll_rms_deg": 0.4,
+    "amp_deg": 2.1, "phase_rad": 2.76, "t_ref_s": 30.0
+  },
+  "moving": { "att_peak_deg": 6.8, "track_rms_cm": 2.8 },
+  "k_est": { "kthrust": null, "kdrag": null, "confidence": 0.0 }   // 선택 (K 추정기)
+}
+```
+
+**소비 프로토콜 (이중 보정 방지 핸드셰이크)**:
+1. path_time은 `used:false`인 파일만 소비. `used:true`면 건너뜀.
+2. 보정 반영(현재: `mode_freq_hz`→셰이퍼 f0 갱신. 추후: tail RMS→Tm 연장, 카운터스윙 진폭)
+3. 궤적 생성이 **성공한 뒤에만** `used:true`로 재기록 (실패 시 태그 유지 → 다음 기회 소비).
+4. 소비 내역을 원장(§4)에 append.
+
+**신선도**: 소비 시 나이 = now − `written_at`을 원장에 기록하고 리포트. 나이가 임계
+(기본 24h) 초과면 경고 로그 (모델/게인 변경 이후의 낡은 실측일 수 있음 — 적용은 하되 시끄럽게).
+
+## 4. 보정 이력 원장 (`output/feedback_ledger.jsonl`)
+
+**"이미 처리했나 / 언제 이후 얼마나 지났나"를 답하는 단일 창구.** path_time만 쓴다
+(append-only, 한 줄 = 소비 1건). used 태그가 "최신 1건의 상태"라면 원장은 "전체 이력".
+
+```json
+{"consumed_at": "2026-07-16T15-02-00", "flight_id": "2026-07-16T14-30-00",
+ "trajectory_hash": "32940f664e2e6dc4", "feedback_age_s": 1608.0,
+ "action": {"f_mode_hz": [1.80, 1.83]},
+ "residual": {"tail_pitch_rms_deg": 1.51}}
+```
+
+- **처리 여부 판정**: 같은 `flight_id`가 원장에 있으면 이미 처리된 것 (used 태그가 유실돼도 안전망).
+- **경과 시간 판정**: 마지막 줄의 `consumed_at`(또는 특정 hash의 마지막 줄)과 now의 차.
+- **수렴 판정**(추론 ③ "수렴 시 무수정"): 같은 궤적 hash의 최근 N건 `residual` 추세가 평탄하면 보정 중단.
+
+## 5. 실시간 상태 (`output/current_state.json`)
+
+컨트롤러가 비행 내내 **상시 덮어쓰기** (20~50Hz, 시뮬 배치에선 후처리로 흉내). 원자적 쓰기 필수.
+
+```json
+{
+  "timestamp": "2026-07-16T14-30-00.123",
+  "pos": [x,y,z], "vel": [vx,vy,vz], "acc": [ax,ay,az],
+  "yaw_rad": 0.0,
+  "ref_state": { "pos": [...], "vel": [...], "acc": [...] }   // 현재 성형 기준의 상태
+}
+```
+
+- **재계획 이어붙이기**: 평시엔 **`ref_state`에서** 이어붙일 것 (측정 상태 사용 = 피드백 성형
+  함정, 성형기 원칙 1 위반). 측정 상태는 비상 이탈 재계획에만 + 스플라이스 온건(Tm≥0.9s).
+- **신선도 검사**: timestamp 나이 > 0.5s면 error() 즉사 (낡은 상태 이어붙이기 = 점프 = 미분킥).
+
+## 공통 규칙
+
+- 대상 파일/키 못 찾으면 조용히 통과 금지 — **error()로 즉사** (저장소 규칙).
+- 각도 [deg]는 보고용(JSON), 계산·궤적은 [rad]/[m] SI.
+- 스키마 변경 시 이 문서 버전을 올리고 양측(파이프라인·컨트롤러 후처리) 동시 반영.
