@@ -568,6 +568,9 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         # 분할 = 불필요한 정지라 기본 없음)
         max_seg = prep.get("max_seg_len",
                            1.0 if wp_mode == "fly_through" else None)
+        if max_seg is not None and wp_mode == "stop":
+            print("[경고] 정지형 + divide: 분할점마다 정지 -> 가용 성능 미달"
+                  " (실측 +40% 소요시간). fly_through 모드 검토 권장")
         n_before = len(waypoints)
         waypoints = normalize_waypoints(
             waypoints,
@@ -614,6 +617,22 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         base = np.column_stack(
             [np.interp(t + t_in[0], t_in, p_in[:, i]) for i in range(3)])
 
+    # 2c) 셰이퍼 지연 hold 패딩: ZV/ZVD는 궤적을 반주기~1주기 지연시키므로
+    #     계획 끝에 그만큼 hold를 붙여야 성형 궤적이 종점에 완전 수렴
+    #     (미패딩 시 고속 미션 종점 1.1cm 미달 실측)
+    def _pad_hold(t_in_, base_in_):
+        if shaper_mode == "none":
+            return t_in_, base_in_
+        delay = (1.0 / f_mode) if shaper_mode == "zvd" else 0.5 / f_mode
+        n_pad = int(np.ceil(delay / dt)) + 1
+        dt_g = t_in_[1] - t_in_[0]
+        t_out_ = np.concatenate(
+            [t_in_, t_in_[-1] + dt_g * np.arange(1, n_pad + 1)])
+        base_out_ = np.vstack([base_in_, np.tile(base_in_[-1], (n_pad, 1))])
+        return t_out_, base_out_
+
+    t, base = _pad_hold(t, base)
+
     # 3) 물리 한계 포락선 (정품 궤적은 무개입이 정상 — maxDev 로그로 확인)
     smoothed, info_sm = smooth_with_axis_sharing(
         t, base, PHYS_VMAX, PHYS_AMAX, PHYS_JMAX)
@@ -632,6 +651,7 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
             path_pts, lim["v_max"], lim["a_max"], lim["j_max"],
             lim["snap_max"], dt=dt)
         t, base = _resample_uniform(t_raw2, pos_raw2, dt)
+        t, base = _pad_hold(t, base)
         smoothed, info_sm = smooth_with_axis_sharing(
             t, base, PHYS_VMAX, PHYS_AMAX, PHYS_JMAX)
         max_dev = float(np.max(info_sm["maxDev"]))
@@ -748,17 +768,15 @@ def run(input_path, out_dir=OUTPUT_DIR):
     f_mode, fb = consume_attitude_feedback(f_mode)
     res = build_trajectory(cfg, waypoints, f_mode)
     if waypoints is None:
-        # 원시 궤적 입구: 시각화용 경유점을 경로 호길이 등분 5점으로 샘플
-        # (시종점 2개만 넣으면 정체 구간이 긴 궤적에서 Ground/Trajectory/
-        #  Spline 블록이 "점 부족"으로 컴파일 거부 - 스텝 미션 실측)
+        # 원시 궤적 입구: 시각화용 경유점 = 경로의 RDP(5cm) 대표점.
+        # 일직선 경로는 양끝 2점(공선 3점 이상을 주면 Ground/Trajectory/
+        # Spline 블록이 거부 - 스텝 미션 2회 실측), 곡선은 코너점 보존.
         p = res["shaped"]
         s = np.concatenate([[0.0], np.cumsum(
             np.linalg.norm(np.diff(p, axis=0), axis=1))])
         if s[-1] < 1e-9:
             raise ValueError("궤적 총 이동거리 0 - 경유점 시각화 불가")
-        idx = [int(np.searchsorted(s, f * s[-1])) for f in
-               (0.0, 0.25, 0.5, 0.75, 1.0)]
-        waypoints = np.unique(p[np.clip(idx, 0, len(p) - 1)], axis=0)
+        waypoints = _rdp(p[::10], 0.05)
     save_outputs(res, waypoints, out_dir)
     mark_feedback_used(fb)      # 성공 후에만 used:true (실패 시 다음 기회 소비)
     return res
