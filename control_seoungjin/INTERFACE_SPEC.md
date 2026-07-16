@@ -130,7 +130,13 @@ path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 
 - **경과 시간 판정**: 마지막 줄의 `consumed_at`(또는 특정 hash의 마지막 줄)과 now의 차.
 - **수렴 판정**(추론 ③ "수렴 시 무수정"): 같은 궤적 hash의 최근 N건 `residual` 추세가 평탄하면 보정 중단.
 
-## 5. 실시간 상태 (`output/current_state.json`) — schema_version 0.2
+## 5. 실시간 상태 (`current_state.json`) — schema_version 0.2
+
+**⚠ 저장 경로 (v0.2 확정)**: 이 파일만 repo `output/`이 아니라 **실시간 전용
+로컬 경로**에 쓴다 — 이 저장소는 OneDrive 안이라 30Hz 덮어쓰기가 동기화
+잠금과 충돌(원자적 rename 실패 위험). 경로 규칙 (쓰기·읽기 공통):
+`env UGRP_RT_DIR` → 없으면 `%LOCALAPPDATA%\ugrp_drone\` → (호환 폴백) `output/`.
+그 외 통신 파일(궤적/리포트/피드백/원장 — 임무·비행 단위 저율)은 `output/` 유지.
 
 컨트롤러가 비행 내내 **상시 덮어쓰기** (권장 30Hz; C++ 1kHz 루프에서 30Hz 데시메이션,
 시뮬 배치에선 To Workspace 후처리로 흉내). **원자적 쓰기 필수** (tmp 파일 → rename).

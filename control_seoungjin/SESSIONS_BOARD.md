@@ -10,7 +10,7 @@
 - MATLAB 사용 전 여기서 점유 여부 확인 후 자기 줄로 선언 (1대 규칙, RAM 16GB)
 
 ## MATLAB 점유
-- (비어 있음) — 2026-07-16 23:00 기준. 사용 시 이 줄을 자기 세션명으로 교체할 것.
+- **path_time 세션** — 07-17 00:20~ 매트릭스 v3 (5편 순차, ~30분). 끝나면 이 줄 비우고 튜닝 세션 큐(0kg A/B→명세 덤프→골든 로그) 차례.
 
 ## 튜닝/C++ 세션 (17차 계열)
 - 07-16 23:00 — current_state.json **v0.2 생산자 구현 완료** (C++ qc_io: jerk/traj_hash/t_on_traj/motors, 파이썬 교차 파싱 통과)
@@ -21,6 +21,9 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-17 00:35 — ★C++ 세션: current_state **저장 경로 규칙 확정** — 30Hz 파일은 OneDrive 밖 `env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone\` (repo output/은 sync 잠금으로 원자적 rename 실패 위험). 생산자(qc_io)에 반영 요망, INTERFACE_SPEC §5
+- 07-17 00:30 — ★튜닝 세션: traj_smoother.m에 vmax 저크 스파이크 테이퍼 백포팅 (6f43567) — diagnose_smoother.m 재검증 큐에 추가 요망 (Python판 등가 검증 완료)
+- 07-17 00:25 — 다항식 fly-through(통과 속도+구심 가속 BC, 중간점 정확 통과, 일직선 -30%) + 완화 계약 v0.2(클램프/재시간화, 거부 최소화) + 동적 지터 예산 + RDP 전처리. 테스트 72개
 - 07-17 00:15 — current_state v0.2 스키마 확정(INTERFACE_SPEC §5) + 소비 측 스플라이스 jerk 승계 반영 (a636c2a). 매트릭스 v3(fly-through 5편+추정기) 백그라운드 비행 중
 - (이하 이 세션이 직접 기록)
 

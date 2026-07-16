@@ -83,8 +83,26 @@ RETIME_PATH_EPS = 0.05          # 경로 추출 RDP ε [m]
 FEEDBACK_PATH = os.path.join(OUTPUT_DIR, "attitude_feedback.json")
 LEDGER_PATH = os.path.join(OUTPUT_DIR, "feedback_ledger.jsonl")
 FEEDBACK_STALE_S = 24 * 3600        # 신선도 경고 임계 (INTERFACE_SPEC §3)
-CURRENT_STATE_PATH = os.path.join(OUTPUT_DIR, "current_state.json")
 STATE_MAX_AGE_S = 0.5               # 재계획 이어붙이기 신선도 임계 (§5)
+
+
+def _rt_dir():
+    """실시간 파일(current_state.json) 저장 경로 (INTERFACE_SPEC §5).
+
+    30Hz 덮어쓰기 파일은 OneDrive 동기화 폴더(이 저장소 위치) 밖이어야
+    한다 — sync 잠금으로 원자적 rename이 실패할 수 있음.
+    우선순위: env UGRP_RT_DIR → %LOCALAPPDATA%/ugrp_drone → (폴백) output/.
+    """
+    d = os.environ.get("UGRP_RT_DIR")
+    if d:
+        return d
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return os.path.join(local, "ugrp_drone")
+    return OUTPUT_DIR
+
+
+CURRENT_STATE_PATH = os.path.join(_rt_dir(), "current_state.json")
 
 TS_FMT = "%Y-%m-%dT%H-%M-%S"
 
