@@ -37,7 +37,7 @@ FEEDBACK_PATH = os.path.join(OUTPUT_DIR, "attitude_feedback.json")
 def _ts_struct(m, name):
     """StructureWithTime(To Workspace) 필드 → (t, v). 없으면 즉사."""
     if name not in m:
-        raise KeyError(f"로그 변수 '{name}' 없음 — run_traj_baked.m 태핑 확인")
+        raise KeyError(f"로그 변수 '{name}' 없음 - run_traj_baked.m 태핑 확인")
     s = m[name]
     return np.ravel(s.time), np.ravel(s.signals.values)
 
@@ -78,13 +78,13 @@ def analyze(mat_path, t_traj_end=None):
 
     if t_traj_end is None:
         if "timespot_spl" not in m:
-            raise KeyError("timespot_spl 없음 — 궤적 종료 시각 판정 불가")
+            raise KeyError("timespot_spl 없음 - 궤적 종료 시각 판정 불가")
         t_traj_end = float(np.ravel(m["timespot_spl"])[-1])
     t_end = float(t_p[-1])
     if t_end <= t_traj_end + 1.0:
         raise ValueError(
             f"tail 구간 없음 (로그 끝 {t_end:.1f}s <= 궤적 끝 {t_traj_end:.1f}s"
-            " + 1s) — run_traj_baked.m의 T_hold 마진 확인")
+            " + 1s) - run_traj_baked.m의 T_hold 마진 확인")
 
     # --- tail: 도착 후 잔류 진동 = 자세제어가 못 없애는 지터 본체 ---
     tail_p = (t_p >= t_traj_end)

@@ -91,7 +91,7 @@ def estimate(mat_path):
            "prop1_w", "prop2_w", "prop3_w", "prop4_w"]
     missing = [k for k in req if k not in m]
     if missing:
-        raise KeyError(f"로그 변수 없음: {missing} — run_traj_baked.m 태핑"
+        raise KeyError(f"로그 변수 없음: {missing} - run_traj_baked.m 태핑"
                        " 버전 확인 (파라미터 추정 신호는 2026-07-16 추가)")
 
     # 공통 시간축 (자세 신호 기준, 양끝 0.5s 버림 — 과도/패딩 제거)

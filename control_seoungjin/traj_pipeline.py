@@ -130,7 +130,7 @@ def load_mission(path):
     if "waypoints" in cfg:
         wp = np.asarray(cfg["waypoints"], float)
         if wp.ndim != 2 or wp.shape[1] != 3 or len(wp) < 2:
-            raise ValueError(f"waypoints는 (N>=2, 3)이어야 함 — 현재 {wp.shape}")
+            raise ValueError(f"waypoints는 (N>=2, 3)이어야 함 - 현재 {wp.shape}")
     else:
         tr = cfg["trajectory"]
         for key in ("t", "pos"):
@@ -198,7 +198,7 @@ def consume_attitude_feedback(f_mode):
         return f_mode, None
     if fb.get("flight_id") in _ledger_flight_ids():
         print(f"[feedback] flight_id={fb.get('flight_id')}는 원장에 이미 처리"
-              " 기록 있음 — 건너뜀 (used 태그 유실 의심, 태그만 복구)")
+              " 기록 있음 - 건너뜀 (used 태그 유실 의심, 태그만 복구)")
         fb["used"] = True
         _atomic_write_json(FEEDBACK_PATH, fb)
         return f_mode, None
@@ -317,7 +317,7 @@ def normalize_waypoints(waypoints, merge_dist=0.01, max_seg_len=None):
                 out.append(a + (b - a) * i / n_div)
         wp = np.array(out)
     if len(wp) < 2:
-        raise ValueError("normalize_waypoints: 병합 후 waypoint가 2개 미만 — "
+        raise ValueError("normalize_waypoints: 병합 후 waypoint가 2개 미만 - "
                          "집합이 사실상 한 점")
     return wp
 
@@ -442,7 +442,7 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         #      한계는 노름 의미로 해석 — 축별 리스트면 최솟값 사용 (보수적).
         if v0 is not None or a0 is not None:
             raise ValueError("fly_through는 아직 재계획 초기조건(v0/a0) 미지원"
-                             " — waypoint_mode='stop' 사용")
+                             " - waypoint_mode='stop' 사용")
         vmax_n = float(np.min(lim["v_max"]))
         amax_n = float(np.min(lim["a_max"]))
         jmax_n = float(np.min(lim["j_max"]))
@@ -478,7 +478,7 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     max_dev = float(np.max(info_sm["maxDev"]))
     if waypoints is None:
         print(f"[성형] 원시 궤적 재성형량 {max_dev*100:.1f}cm"
-              " (스텝→S-커브 시간 부여 — 의도된 동작)")
+              " (스텝 -> S-커브 시간 부여, 의도된 동작)")
     elif max_dev > 0.01:
         print(f"[경고] 스무더 개입 {max_dev*100:.1f}cm -> 계획 한계가 물리"
               " 한계에 너무 근접했거나 입력 궤적 이상. 산출물은 유효(게이트"

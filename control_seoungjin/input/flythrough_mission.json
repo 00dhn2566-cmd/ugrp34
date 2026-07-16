@@ -1,0 +1,21 @@
+{
+  "_comment": "fly_through 모드 검증 미션: 중간점 무정지 통과 (곡률 감속 자동).",
+  "waypoints": [
+    [0.0, 0.0, 2.0],
+    [2.0, 0.0, 2.0],
+    [4.0, 1.0, 3.0],
+    [6.0, 0.0, 2.0]
+  ],
+  "limits": {
+    "v_max": 1.0,
+    "a_max": 0.8,
+    "j_max": 2.0,
+    "snap_max": 10.0
+  },
+  "dt": 0.01,
+  "waypoint_mode": "fly_through",
+  "shaper": {
+    "mode": "zvd",
+    "f_mode_hz": 1.8
+  }
+}
