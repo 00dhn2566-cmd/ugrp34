@@ -145,6 +145,20 @@ struct QcConfig {
     double mixDir[4]   = { +1,   -1,   -1,   +1 };
 };
 
+// --- 컨트롤러 프로파일 (17차 사용자 설계): 상위 계층이 임무 특성으로 선택 ---
+// r8 실측: 호버 지터(범인=kp)와 이동 추종의 구조적 맞교환 -> 검증된 선택지 3종.
+// 전환은 임무 단위(비행 전, v1). parameters.m의 ctrl_profile switch와 1:1 동기.
+enum class Profile { Precision, Balanced, Agile };
+
+inline void qc_apply_profile(QcConfig& c, Profile p) {
+    switch (p) {
+        case Profile::Precision: c.kpPos = 8;  c.kdPos = 3.2;  break;  // 호버 0.002도/이동 4.1cm (기본)
+        case Profile::Balanced:  c.kpPos = 12; c.kdPos = 4.8;  break;  // 0.10도/2.7cm
+        case Profile::Agile:     c.kpPos = 24; c.kdPos = 10.8; break;  // 0.25도/1.3cm (외란/질량 관문 대기)
+    }
+    // posErrSat = 1.2/kpPos 곱 불변식은 qc_scales()가 자동 연동
+}
+
 // 스케일 적용된 실효 게인 계산 (parameters.m 로직 대응)
 struct QcScales { double sT, sQ, sIa, sIz, sM, posErrSat; };
 

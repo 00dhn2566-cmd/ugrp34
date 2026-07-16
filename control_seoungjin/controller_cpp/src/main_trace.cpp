@@ -132,8 +132,14 @@ static int run_est_test(const char* path) {
 //   모터 속도는 플랜트 적분값이 제어기로 피드백된다 (모터 루프는 폐루프).
 //   [플랜트 진실 주입] ct_scale/cq_scale: 모터 플랜트의 Ct/Cq에만 곱한다 — 제어기
 //   (QcConfig)는 공칭값을 그대로 믿음 = "제어기 모르게" 미스매치 실험 (사용자 요청 17차).
+static qc::Profile parse_profile(const char* s) {
+    if (std::strcmp(s, "agile") == 0)    return qc::Profile::Agile;
+    if (std::strcmp(s, "balanced") == 0) return qc::Profile::Balanced;
+    return qc::Profile::Precision;
+}
+
 static int run_mission(const char* trajPath, const char* outDir,
-                       double ctScale, double cqScale) {
+                       double ctScale, double cqScale, qc::Profile prof) {
     std::string err;
     qcio::Trajectory tr;
     if (!qcio::load_trajectory(trajPath, tr, err)) {
@@ -143,6 +149,9 @@ static int run_mission(const char* trajPath, const char* outDir,
     std::printf("미션 시작: dur=%.2fs hash=%s\n", tr.duration(), tr.hash.c_str());
 
     qc::QcConfig cfg;                          // 제어기가 '믿는' 세계 (공칭)
+    qc::qc_apply_profile(cfg, prof);           // 상위 선택 프로파일 (기본 precision)
+    std::printf("프로파일: kp_pos=%.0f kd_pos=%.1f (posErrSat %.3fm 자동 연동)\n",
+                cfg.kpPos, cfg.kdPos, qc::qc_scales(cfg).posErrSat);
     qc::QcState st;
     qc::qc_bind(st, cfg);
     qcio::FlightLogger lg;
@@ -235,7 +244,8 @@ int main(int argc, char** argv) {
     if (argc >= 4 && std::strcmp(argv[1], "--mission") == 0)
         return run_mission(argv[2], argv[3],
                            argc >= 5 ? std::atof(argv[4]) : 1.0,
-                           argc >= 6 ? std::atof(argv[5]) : 1.0);
+                           argc >= 6 ? std::atof(argv[5]) : 1.0,
+                           argc >= 7 ? parse_profile(argv[6]) : qc::Profile::Precision);
     if (argc < 3) {
         std::fprintf(stderr, "사용: qc_trace <input.csv> <output.csv> | --smoke | --io-test <trajectory.json> <out_dir>\n");
         return 2;
