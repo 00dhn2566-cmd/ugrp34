@@ -123,10 +123,78 @@ static int run_est_test(const char* path) {
     return (g1 && g2) ? 0 : 1;
 }
 
+// --mission <trajectory.json> <out_dir>: 실전 배치 골격 (건식 주행 — 플랜트 없음)
+//   궤적 로드 → 1kHz 제어 루프 → current_state 30Hz 스로틀 기록 → 종료 후 feedback.
+//   측정은 참조로 대체(완전 추종 가정) — Gazebo 세션은 아래 [PLANT HOOK] 지점에
+//   실측을 끼우면 된다. 시간은 가속(실시간 sleep 없음).
+static int run_mission(const char* trajPath, const char* outDir) {
+    std::string err;
+    qcio::Trajectory tr;
+    if (!qcio::load_trajectory(trajPath, tr, err)) {
+        std::fprintf(stderr, "궤적 로드 실패: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("미션 시작: dur=%.2fs hash=%s\n", tr.duration(), tr.hash.c_str());
+
+    qc::QcConfig cfg;
+    qc::QcState st;
+    qc::qc_bind(st, cfg);
+    qcio::FlightLogger lg;
+    lg.tArrive = tr.duration();
+
+    const double dt = 1e-3;                    // 제어 1kHz
+    const int stateEvery = 33;                 // current_state ~30Hz (스펙 20~50Hz)
+    const double tailHold = 8.0;               // 도착 후 잔류 관측 (run_traj_baked T_hold=8s와 동일)
+    const std::string statePath = std::string(outDir) + "/current_state.json";
+    long nState = 0;
+    qc::QcOutput out{};
+
+    for (long k = 0; ; ++k) {
+        const double t = k * dt;
+        if (t > tr.duration() + tailHold) break;
+        const qcio::RefSample ref = qcio::sample_trajectory(tr, t);
+
+        qc::QcInput in{};
+        for (int i = 0; i < 3; ++i) { in.refPos[i] = ref.pos[i]; in.measPos[i] = ref.pos[i]; }
+        in.refYaw = ref.yaw;
+        in.measAlt = ref.pos[2];
+        // [PLANT HOOK] Gazebo 연결 지점: in.measPos/measRpy/measAlt/motorSpd를
+        //   실측으로 교체하고, out.motorCmd(또는 motorRef)를 플랜트에 인가할 것.
+        for (int i = 0; i < 4; ++i) in.motorSpd[i] = out.motorRef[i];   // 건식: 모터 완전 추종 가정
+
+        out = qc::qc_step(st, cfg, in, dt);
+        lg.push(t, in.measRpy[1], in.measRpy[0],
+                std::hypot(in.refPos[0]-in.measPos[0], in.refPos[1]-in.measPos[1]));
+
+        if (k % stateEvery == 0) {
+            qcio::CurrentState cs{};
+            for (int i = 0; i < 3; ++i) { cs.pos[i] = in.measPos[i]; cs.vel[i] = ref.vel[i]; cs.acc[i] = ref.acc[i]; }
+            cs.yaw = ref.yaw; cs.ref = ref;
+            if (!qcio::write_current_state(statePath, cs, err)) {
+                std::fprintf(stderr, "[즉사] current_state 기록 실패: %s\n", err.c_str());
+                return 1;
+            }
+            ++nState;
+        }
+    }
+
+    const auto fb = lg.analyze();
+    const std::string fbPath = std::string(outDir) + "/attitude_feedback.json";
+    if (!qcio::write_attitude_feedback(fbPath, fb, tr.hash, err)) {
+        std::fprintf(stderr, "feedback 기록 실패: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("미션 종료: 제어 %ld스텝, current_state %ld회(~30Hz), feedback -> %s\n",
+                (long)((tr.duration()+tailHold)/dt), nState, fbPath.c_str());
+    std::printf("(건식 주행이라 tail 지표는 0 근처가 정상 — 플랜트 연결 후 실측 반영)\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--smoke") == 0) return run_smoke();
     if (argc >= 4 && std::strcmp(argv[1], "--io-test") == 0) return run_io_test(argv[2], argv[3]);
     if (argc >= 3 && std::strcmp(argv[1], "--est-test") == 0) return run_est_test(argv[2]);
+    if (argc >= 4 && std::strcmp(argv[1], "--mission") == 0) return run_mission(argv[2], argv[3]);
     if (argc < 3) {
         std::fprintf(stderr, "사용: qc_trace <input.csv> <output.csv> | --smoke | --io-test <trajectory.json> <out_dir>\n");
         return 2;
