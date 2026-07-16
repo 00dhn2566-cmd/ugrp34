@@ -166,6 +166,7 @@ parameters.m `ctrl_profile` / C++ `qc_apply_profile`(튜닝 세션 소관), 파�
 
 ## 남은 일
 
+- [ ] **작업 API(동사 카탈로그) 구현** — 설계는 INTERFACE_SPEC §8에 확정(2026-07-17, 사용자 지시로 설계만). 핵심: `traj_pipeline.py <verb>` 단일 진입점, `splice` CLI 신설(현재 함수만 존재), 종료 코드 0/1/2 계약, stdout 마지막 줄 기계용 JSON
 - [ ] counter_swing_offset 파이프라인 연결 (스윙 교정 상수 확보 후 — `diagnose_swing_calib.m`)
 - [ ] attitude_feedback ① 추론(tail RMS→해당 구간 Tm 연장) — 구간 매핑 설계 후
 - [ ] 촘촘 곡선 fly-through 보수적 감속 최적화 (현재 안전 폴백으로 감속 수용 — 백로그)

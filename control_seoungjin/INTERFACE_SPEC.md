@@ -312,6 +312,35 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   지터 — 짐 흔들림), `trajectory.duration_s`(속도) 트레이드오프.
 - reject_codes의 `code` 값은 안정 계약: 추가는 있어도 의미 변경/삭제는 없음.
 
+## 8. 작업 API — 동사 카탈로그 (설계 확정 2026-07-17, **구현 전**)
+
+상위/타 세션이 "이거 하고 싶으면 이거 실행"으로 쓰는 명령 계약. 파일 스키마(§1~§7)가
+명사라면 이 절이 동사다. 단일 진입점 `python traj_pipeline.py <verb> ...`로 구현 예정
+(하위 호환: verb 생략 시 `plan`으로 동작 — 기존 `--input` 호출 그대로 유효).
+
+| 동사 | 하고 싶은 것 | 명령 | 입력 계약 | 출력 계약 |
+|---|---|---|---|---|
+| `plan` | 새 미션 → 궤적 생성 | `plan --input <mission.json> [--out-dir]` | §1 | §2 산출물 3종 + §7 report |
+| `splice` | **비행 중 새 명령 (새 명령 승리)** | `splice --input <new_mission.json> [--state <current_state.json>]` | §1 + §5 | §2 (결합 궤적, 새 hash) + §7 report |
+| `check` | 실행 없이 검정만 (RL 사전 질의) | `check --input <mission.json>` | §1 | §7 report만 (**부작용 없음** — output/ 미기록) |
+| `feedback` | 비행 로그 → 지터 보고 | `feedback --log <sim_result.mat>` | 비행 로그 | §3 attitude_feedback (used:false) |
+| `estimate` | 플랜트 상수 추정 | `estimate --log <sim_result.mat>` | 비행 로그 | §6 param_estimate |
+| `status` | 현황 조회 | `status` | — | §5 요약 + 원장 최근 N건 + 최신 report (stdout JSON) |
+
+공통 규약:
+- **종료 코드**: `0` 성공(조정 있어도 성공 — adjustments는 report로 통지) /
+  `2` 거부(§7 reject_codes 발생) / `1` 내부 오류. 상위는 코드만 보고 분기 가능.
+- **stdout 마지막 줄 = 기계용 JSON 한 줄** (`{"verdict", "report_path", "trajectory_hash"}`),
+  사람용 로그는 그 위/stderr. 상위 파서는 마지막 줄만 읽으면 됨.
+- `splice`의 `--state` 기본값은 §0 RT 경로의 `current_state.json`. **신선도(0.5s) 위반
+  시 거부** — reject_code `STATE_STALE` (§7 코드 목록에 추가 예정, 안정 계약 규칙 적용).
+- `check`는 순수 함수처럼 동작 (원장·피드백 소비 없음) — RL이 후보 궤도를 대량
+  질의해도 상태 오염 없음.
+- 현재 임시 진입점 (구현 전까지의 대응물): `plan` = `traj_pipeline.py --input`,
+  `check` ≈ `verify_pipeline.py --static`, `feedback` = `analyze_flight_log.py`,
+  `estimate` = `estimate_params.py`, `splice` = `traj_pipeline.replan_splice()` 함수 직접
+  호출 (CLI 없음), `status` = 없음.
+
 ## 공통 규칙
 
 - 대상 파일/키 못 찾으면 조용히 통과 금지 — **error()로 즉사** (저장소 규칙).

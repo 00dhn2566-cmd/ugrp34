@@ -24,6 +24,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-17 02:20 — **작업 API(동사 카탈로그) 설계 확정, 구현은 보류(사용자 지시)** — INTERFACE_SPEC §8: `traj_pipeline.py <verb>` 단일 진입점 6동사(plan/splice/check/feedback/estimate/status), 종료 코드 0/1/2, stdout 기계용 JSON, splice 신선도 거부(STATE_STALE). ★다음 구현자: §8 그대로 구현하면 됨 (splice CLI가 최우선 — 현재 함수만 존재)
 - 07-17 02:05 — **스텝 백스톱 합격 → 매트릭스 v3 전 항목(6/6) 완결** — 추종 2.79cm / tail 0.018°, path_vis 서브미터 패치 유효 확인. 재시간화도 정상 작동(스텝 → S-커브, 팽창 x0.30, 경로 이탈 0.0cm). 세션 종료
 - 07-17 02:00 — 슬롯 인수(튜닝 세션 해제 확인) → 스텝 백스톱 재비행 백그라운드 착수. 판독 기준: verification_matrix.json의 step 항목 ✅ + 추종 RMS cm급이면 매트릭스 v3 완결
 - 07-17 01:55 — **세션 마감 정리**: ★소비: `controller_profile` 필드 반영 완료 — §1 스키마 + 산출물 3종(.mat/.json/meta) 동봉, 기본 precision, 테스트 74개 통과. README 모듈 지도/문서표 갱신(v0.2), PIPELINE_STATUS 매트릭스 v3 성적표 확정. 스텝 재비행은 미실행(01:40 착수분은 튜닝 세션 MATLAB 감지로 가드 중단) → 대기/예약 재등록
