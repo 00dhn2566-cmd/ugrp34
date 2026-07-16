@@ -38,6 +38,15 @@ posErrSat 곱 불변식(최대 명령 기울기 16.8°) 재현.
 - `src/main_trace.cpp` — 골든 트레이스 하니스 (CSV in→out) + `--smoke`.
 - `build.ps1` — 빌드. **mingw64\bin PATH 필수** (없으면 cc1plus가 DLL 못 찾아 무음 실패).
 
+## 실비행 재생 발견 (sim_result_baked.mat 1707샘플, make_golden_input.py)
+
+- **확정**: motorRef = 2π×(고도PID + 56.5 + 44.4·m_pkg) 스케일이 실측 모터속도와 일치
+  (스케일비 0.98~1.02, 호버 평형 ~634 rad/s) — [TODO-verify] 2π/바이어스 항목 해소.
+- **발견**: 모터 2·3은 내장 역회전(9차 규명)이라 실측 w가 음수 — C++ motorRef에
+  모터별 부호(1,4:+ / 2,3:−) 반영 필요. 믹서 차동 부호표는 dump_controller_spec.m으로 확정.
+- 제어기 출력(cmd/u) 골든 로그는 아직 없음 — run_traj_baked에 cmd 탭 추가 후
+  compare_trace.py로 완전 대조 (그 전까지는 --check 개연성 검사만).
+
 ## 설계 규약
 
 - 임베디드 강등 가능한 C++17 부분집합: 힙 없음(초기화 후), 예외/가상함수 없음, 고정 배열.
