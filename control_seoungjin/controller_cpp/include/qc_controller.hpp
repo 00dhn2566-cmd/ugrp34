@@ -135,11 +135,14 @@ struct QcConfig {
     double biasChassis = 56.5;               // rev/s
     double biasLoadGain = 44.4;              // × pkgMass (44.4·pkgSize³·pkgDensity = 44.4·m_pkg)
 
-    // 믹서 부호표 [TODO-verify: 모터 배치·회전방향 — 덤프/골든트레이스로 확정]
+    // 믹서 부호표 [TODO-verify: 차동 성분 부호는 덤프/골든트레이스로 확정]
     //             모터:      1     2     3     4
     double mixPitch[4] = { +1,   +1,   -1,   -1 };
     double mixRoll[4]  = { +1,   -1,   -1,   +1 };
     double mixYaw[4]   = { +1,   -1,   +1,   -1 };
+    // 모터 회전 방향 (실비행 재생으로 확정: 모터 2·3 내장 역회전 — 실측 w 부호가 음수.
+    // 9차 "믹서 원래 부호 + direction 전부 Positive" 구성에서 모터 2,3이 스스로 음회전)
+    double mixDir[4]   = { +1,   -1,   -1,   +1 };
 };
 
 // 스케일 적용된 실효 게인 계산 (parameters.m 로직 대응)

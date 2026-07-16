@@ -82,9 +82,10 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     // [TODO-verify] ref = 2π×(고도PID + BiasChassis + BiasLoad·m_pkg) 구조 (9차 규명) 재확인
     const double base = uA + c.biasChassis + c.biasLoadGain * c.pkgMass;
     for (int i = 0; i < 4; ++i) {
-        out.motorRef[i] = 2.0 * kPi *
+        // mixDir: 모터 2·3 내장 역회전 (실측 w 음수) — 크기 성분에 방향 부호를 입힘
+        out.motorRef[i] = c.mixDir[i] * 2.0 * kPi *
             (base + c.mixPitch[i] * uP + c.mixRoll[i] * uR + c.mixYaw[i] * uY);
-        out.motorCmd[i] = st.pidMot[i].step(out.motorRef[i] - in.motorSpd[i], dt);
+        out.motorCmd[i] = st.pidMot[i].step(c.mixDir[i] * (out.motorRef[i] - in.motorSpd[i]), dt);
     }
     return out;
 }
