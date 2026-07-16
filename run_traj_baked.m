@@ -94,6 +94,22 @@ for i = 1:size(sigMap, 1)
     add_line(scope, srcPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
 end
 
+% --- 짐 투하(Disengage) 비활성화 (run_sample_sim.m과 동일 패턴) ---
+% 공중 종점 미션에서 도착 순간 짐(총질량의 44%)이 분리되면 질량 급변 +
+% Bias Load 피드포워드 과잉으로 도착 후 드리프트/링잉 발생 (스플라이스
+% 실증: x/y 1.4~1.5m 드리프트). 궤적 추종 검증에는 투하 없는 구성이 기준.
+enable_package_drop = false;
+drop_dist_blocks = {
+    [mdl '/Quadcopter/Load/Disengage Logic/Distance to drop waypoint/Constant']
+    [mdl '/Quadcopter/Load/Disengage Logic/Distance to drop waypoint/Constant1']
+};
+if ~enable_package_drop
+    for i = 1:numel(drop_dist_blocks)
+        set_param(drop_dist_blocks{i}, 'Value', '-1');   % 조건 영원히 불만족
+    end
+    fprintf('짐 투하 로직 비활성화 (dist_release -> -1)\n');
+end
+
 % --- 시간축 로깅 (첫 실행에서 확인: act_*/des_*는 SaveFormat Array = 시간 없는
 %     double 배열. run_sample_sim.m과 동일하게 Clock -> sim_time 동승) ---
 if isempty(find_system(mdl, 'SearchDepth', 1, 'Name', 'Sim Time Clock'))
