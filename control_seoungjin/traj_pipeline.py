@@ -63,6 +63,12 @@ PHYS_VMAX, PHYS_AMAX, PHYS_JMAX = 2.0, 2.0, 10.0
 PHYS_SNAP = 80.0
 # 지터 상쇄 오프셋 예산: 계획(시간 부여) 한계는 물리 한계의 (1-MARGIN)까지만
 JITTER_MARGIN = 0.2
+# 동적 배분 (사용자 확정: 지터 실측 기반): 승인 기준(RL 계약)은 JITTER_MARGIN
+# 고정으로 정상성 유지, 실제 계획 유효 한계만 최근 잔류 지터에 따라 조임.
+# 수렴(<0.5°) -> 0.2(요청 그대로) / 상승(>2°) -> 0.3 / 심각(>4°) -> 0.35.
+MARGIN_DYNAMIC_STEPS = [(4.0, 0.35), (2.0, 0.30)]   # (tail RMS 초과값, 마진)
+MARGIN_FRESH_S = 24 * 3600                          # 이보다 낡은 실측은 무시
+LEDGER_RECENT_N = 3                                 # 최근 N건 중앙값으로 판정
 # 짐 모드 기본값 (§W 실증 1.80Hz; attitude_feedback로 갱신됨)
 F_MODE_DEFAULT = 1.80
 # f0 갱신 수용 대역: 이 밖의 실측 주파수는 궤적으로 가진되는 짐 모드가 아니라
@@ -163,6 +169,49 @@ def load_mission(path):
                 " 여유를 빼고 작성해야 함 (HANDOFF_PATHTIME_PIPELINE.md 예산 구조)")
 
     return cfg, wp
+
+
+def current_jitter_margin():
+    """최근 잔류 지터 실측 기반 동적 마진 (사용자 확정: 동적 배분).
+
+    원장(feedback_ledger.jsonl)의 최근 LEDGER_RECENT_N건 tail 잔류의 중앙값을
+    MARGIN_DYNAMIC_STEPS에 대조. 신선도(consumed_at < MARGIN_FRESH_S) 밖이거나
+    데이터 없으면 기본 JITTER_MARGIN. 반환: (마진, 근거 dict).
+    """
+    basis = {"source": "default", "residuals": []}
+    if not os.path.isfile(LEDGER_PATH):
+        return JITTER_MARGIN, basis
+    entries = []
+    with open(LEDGER_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    now = datetime.now()
+    fresh = []
+    for e in reversed(entries):
+        try:
+            age = (now - _parse_ts(e["consumed_at"])).total_seconds()
+        except (KeyError, ValueError):
+            continue
+        if age > MARGIN_FRESH_S:
+            break
+        r = e.get("residual", {}).get("tail_pitch_rms_deg")
+        if r is not None:
+            fresh.append(float(r))
+        if len(fresh) >= LEDGER_RECENT_N:
+            break
+    if not fresh:
+        return JITTER_MARGIN, basis
+    med = float(np.median(fresh))
+    margin = JITTER_MARGIN
+    for thresh, m in MARGIN_DYNAMIC_STEPS:
+        if med > thresh:
+            margin = m
+            break
+    basis = {"source": "ledger", "residuals": fresh,
+             "median_tail_deg": med}
+    return margin, basis
 
 
 def _ledger_flight_ids():
@@ -475,7 +524,23 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     gate_error=False면 게이트 초과 시 raise 대신 res["gate_ok"]=False 반환
     (traj_report.py 판정 리포트용 — 운용 경로는 True 유지).
     """
-    lim = cfg["limits"]
+    # 동적 배분: 지터 상승 시 유효 계획 한계를 자동 온건화 (승인 기준은 불변
+    # — RL 계약 정상성). 수렴하면 요청 스펙 복원.
+    margin_dyn, margin_basis = current_jitter_margin()
+    lim = dict(cfg["limits"])
+    if margin_dyn > JITTER_MARGIN:
+        clamped = []
+        for key, phys in (("v_max", PHYS_VMAX), ("a_max", PHYS_AMAX),
+                          ("j_max", PHYS_JMAX)):
+            cap = (1.0 - margin_dyn) * phys
+            if np.max(np.asarray(lim[key], float)) > cap:
+                lim[key] = (np.minimum(np.asarray(lim[key], float), cap).tolist()
+                            if np.ndim(lim[key]) else min(float(lim[key]), cap))
+                clamped.append(f"{key}<={cap:.2f}")
+        if clamped:
+            print(f"[동적 배분] 최근 잔류 지터 {margin_basis.get('median_tail_deg')}"
+                  f"도 -> 마진 {margin_dyn:.2f}, 유효 한계 온건화: "
+                  + ", ".join(clamped))
     dt = float(cfg.get("dt", 0.01))
     shaper_cfg = cfg.get("shaper", {})
     shaper_mode = shaper_cfg.get("mode", SHAPER_DEFAULT)
@@ -576,6 +641,8 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         "f_mode": f_mode, "shaper_mode": shaper_mode,
         "smoother_info": info_sm, "gate_report": gate_rep, "gate_ok": ok,
         "trajectory_hash": _traj_hash(t, shaped),
+        "jitter_margin": margin_dyn, "margin_basis": margin_basis,
+        "limits_effective": lim,
     }
 
 
@@ -638,8 +705,18 @@ def run(input_path, out_dir=OUTPUT_DIR):
     f_mode = float(cfg.get("shaper", {}).get("f_mode_hz", F_MODE_DEFAULT))
     f_mode, fb = consume_attitude_feedback(f_mode)
     res = build_trajectory(cfg, waypoints, f_mode)
-    if waypoints is None:       # 원시 궤적 입구: 시각화용 경유점은 시종점만
-        waypoints = np.vstack([res["shaped"][0], res["shaped"][-1]])
+    if waypoints is None:
+        # 원시 궤적 입구: 시각화용 경유점을 경로 호길이 등분 5점으로 샘플
+        # (시종점 2개만 넣으면 정체 구간이 긴 궤적에서 Ground/Trajectory/
+        #  Spline 블록이 "점 부족"으로 컴파일 거부 - 스텝 미션 실측)
+        p = res["shaped"]
+        s = np.concatenate([[0.0], np.cumsum(
+            np.linalg.norm(np.diff(p, axis=0), axis=1))])
+        if s[-1] < 1e-9:
+            raise ValueError("궤적 총 이동거리 0 - 경유점 시각화 불가")
+        idx = [int(np.searchsorted(s, f * s[-1])) for f in
+               (0.0, 0.25, 0.5, 0.75, 1.0)]
+        waypoints = np.unique(p[np.clip(idx, 0, len(p) - 1)], axis=0)
     save_outputs(res, waypoints, out_dir)
     mark_feedback_used(fb)      # 성공 후에만 used:true (실패 시 다음 기회 소비)
     return res

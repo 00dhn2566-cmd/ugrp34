@@ -288,6 +288,46 @@ class TestWaypointBatches:
         assert da < 0.5, f"스플라이스 가속 점프 {da:.3f}m/s2"
 
 
+class TestDynamicMargin:
+    """지터 실측 기반 동적 예산 배분 — 상승 시 온건화, 수렴 시 복원."""
+
+    def _ledger(self, tmp_path, monkeypatch, residuals, age_s=60):
+        from datetime import datetime, timedelta
+        ledger = str(tmp_path / "ledger.jsonl")
+        monkeypatch.setattr(tp, "LEDGER_PATH", ledger)
+        ts = (datetime.now() - timedelta(seconds=age_s)).strftime(tp.TS_FMT)
+        with open(ledger, "w", encoding="utf-8") as f:
+            for r in residuals:
+                f.write(json.dumps({"consumed_at": ts, "flight_id": "x",
+                                    "residual": {"tail_pitch_rms_deg": r}}) + "\n")
+
+    def test_no_data_default(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tp, "LEDGER_PATH", str(tmp_path / "none.jsonl"))
+        m, basis = tp.current_jitter_margin()
+        assert m == tp.JITTER_MARGIN and basis["source"] == "default"
+
+    def test_converged_keeps_request(self, tmp_path, monkeypatch):
+        self._ledger(tmp_path, monkeypatch, [0.1, 0.2, 0.15])
+        m, _ = tp.current_jitter_margin()
+        assert m == tp.JITTER_MARGIN
+
+    def test_elevated_clamps_limits(self, tmp_path, monkeypatch):
+        self._ledger(tmp_path, monkeypatch, [2.5, 3.0, 2.8])
+        m, basis = tp.current_jitter_margin()
+        assert m == pytest.approx(0.30)
+        cfg = {"limits": {"v_max": 1.5, "a_max": 1.5, "j_max": 7.0,
+                          "snap_max": 10.0}, "shaper": {"mode": "none"}}
+        res = tp.build_trajectory(cfg, np.array([[0, 0, 2], [2, 0, 2]], float), 1.8)
+        assert res["jitter_margin"] == pytest.approx(0.30)
+        assert res["limits_effective"]["v_max"] == pytest.approx(1.4)
+        assert res["gate_report"]["vxyPk"] <= 1.4 * 1.001, "온건화 실반영"
+
+    def test_stale_measurements_ignored(self, tmp_path, monkeypatch):
+        self._ledger(tmp_path, monkeypatch, [5.0], age_s=48 * 3600)
+        m, basis = tp.current_jitter_margin()
+        assert m == tp.JITTER_MARGIN and basis["source"] == "default"
+
+
 class TestCurrentState:
     def _write_state(self, path, ts):
         st = {"timestamp": ts,

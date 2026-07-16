@@ -68,6 +68,24 @@ def _fit_sine(t, x, f_hz, t_ref):
     return amp, phase
 
 
+def shaper_delay_s(meta_path=META_PATH):
+    """셰이퍼 군지연 [s] — tail 창 시작을 이만큼 늦춰야 공정 측정.
+
+    ZVD는 기준 궤적을 1주기(1/f0), ZV는 반주기 지연시키므로 t_traj_end
+    시점에 기준이 아직 이동 중 — 창을 안 밀면 이동 꼬리를 잔류 지터로
+    오측 (실측: B ZVD tail 0.906° -> 창 보정 후 0.137°).
+    """
+    if not os.path.isfile(meta_path):
+        return 0.0
+    with open(meta_path, encoding="utf-8") as f:
+        sh = json.load(f).get("shaper", {})
+    f0 = float(sh.get("f_mode_hz") or 0)
+    mode = sh.get("mode", "none")
+    if f0 <= 0 or mode == "none":
+        return 0.0
+    return 1.0 / f0 if mode == "zvd" else 0.5 / f0
+
+
 def analyze(mat_path, t_traj_end=None):
     """sim_result_baked.mat → 지터 리포트 dict."""
     m = loadmat(mat_path, squeeze_me=True, struct_as_record=False)
@@ -79,7 +97,7 @@ def analyze(mat_path, t_traj_end=None):
     if t_traj_end is None:
         if "timespot_spl" not in m:
             raise KeyError("timespot_spl 없음 - 궤적 종료 시각 판정 불가")
-        t_traj_end = float(np.ravel(m["timespot_spl"])[-1])
+        t_traj_end = float(np.ravel(m["timespot_spl"])[-1]) + shaper_delay_s()
     t_end = float(t_p[-1])
     if t_end <= t_traj_end + 1.0:
         raise ValueError(
