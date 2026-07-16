@@ -192,16 +192,30 @@ path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 
 **`output/trajectory_report.json`** 으로 기계 판독 가능한 판정을 회신한다
 (`python traj_report.py --input <json> [--flight-mat <mat>]`).
 
-### 넘기지 말 것 (거부 규칙 — 어겨도 안전하게 거부될 뿐이지만, 학습 효율을 위해 사전 준수 권장)
+### 완화 정책 (계약 v0.2 — "시간 배분으로 살릴 수 있으면 거부하지 않는다")
 
-| # | 규칙 | 위반 시 코드 |
+위치들이 도달 가능한 한, 요청의 **공간 의도는 살리고 시간만 재배분**해서 수용한다.
+조정 내역은 `adjustments[]`로 통지 (거부 아님 — RL 벌점용 연속 신호):
+
+| 상황 | v0.1 (구) | v0.2 (현행) |
 |---|---|---|
-| 1 | `limits` ≤ 0.8×물리 한계 (v/a ≤ **1.6 m/s·m/s²**, j ≤ **8 m/s³**, **snap ≤ 64 m/s⁴**) | `LIMITS_OVER_BUDGET` |
-| 2 | xy 동시 기동(대각) 미션은 추가 ×0.7: v/a ≤ **1.12**, j ≤ **5.6** | (성형 개입 → 편차 벌점) |
-| 3 | 시간 붙은 궤적의 후방차분 v/a/j도 같은 한계 이내 (스텝·순간정지 금지) | `RESHAPED_BEYOND_TOL` (편차 > 0.3m) |
-| 4 | 저크-가능 조건: 이동 진폭 A마다 최소시간 **Tm ≥ (60·A/(0.8·j_max))^⅓** | (성형 개입 → 편차 벌점) |
-| 5 | `trajectory.t` 단조증가, 스키마 준수 | `TIME_NOT_MONOTONIC` / `SCHEMA_ERROR` |
-| 6 | 재계획 이어붙임은 `current_state.json`의 **ref_state** 기준 (신선도 0.5s) | 파이프라인 error |
+| `limits`가 예산(1.6/1.6/8/64) 초과 | 거부 | **상한 클램프** 후 비행 → `LIMITS_CLAMPED` |
+| 원시 궤적 성형 편차 > 0.3m (스텝 등) | 거부 | **경로 보존 재시간화**(RDP ε=5cm로 경로 추출 → path_time이 시간 재배분) → `TIME_DILATED {dilation}` |
+| 위 완화로도 불능 | 거부 | 거부 (아래 표) |
+
+미션에 `"strict": true`를 주면 v0.1처럼 클램프 없이 즉시 거부 (검증용).
+
+### 진짜 거부 (완화 불가능한 것만)
+
+| # | 규칙 | 코드 |
+|---|---|---|
+| 1 | 스키마 준수, `trajectory.t` 단조증가 | `SCHEMA_ERROR` / `TIME_NOT_MONOTONIC` |
+| 2 | 재시간화 후에도 성형 편차 > 0.3m | `RESHAPED_BEYOND_TOL` |
+| 3 | 성형 후에도 게이트 초과 | `GATE_EXCEEDED` |
+| 4 | 재계획 이어붙임은 `current_state.json`의 **ref_state** 기준 (신선도 0.5s) | 파이프라인 error |
+
+여전히 권장 (조정 없이 요청 그대로 날게 하려면): limits ≤ 예산, xy 대각 ×0.7,
+저크-가능 Tm ≥ (60·A/(0.8·j_max))^⅓, 스텝 대신 시간-현실적 궤적.
 
 ### 회신 스키마 (`trajectory_report.json`, contract_version 0.1)
 

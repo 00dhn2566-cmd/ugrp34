@@ -76,6 +76,11 @@ F_MODE_DEFAULT = 1.80
 # tail 12.25° vs 1.8Hz 고수 9.93°). 대역 밖이면 갱신 거부 + 경고.
 F_MODE_BAND_HZ = (1.0, 3.0)
 SHAPER_DEFAULT = "zvd"          # 주파수 오차 강건 (핸드오프 권장 후보)
+# 원시 궤적 완화 정책 (계약 v0.2): 성형 편차가 TOL을 넘으면 거부 대신
+# "경로 보존 재시간화" — 공간 경로만 추출(RDP ε)해 시간을 새로 배분.
+# 경로 이탈 ~ε로 의도 보존, 소요시간 팽창률(dilation)을 벌점 신호로 회신.
+RETIME_DEV_TOL = 0.30           # 이 이상 성형 편차 -> 재시간화 발동 [m]
+RETIME_PATH_EPS = 0.05          # 경로 추출 RDP ε [m]
 
 FEEDBACK_PATH = os.path.join(OUTPUT_DIR, "attitude_feedback.json")
 LEDGER_PATH = os.path.join(OUTPUT_DIR, "feedback_ledger.jsonl")
@@ -154,19 +159,30 @@ def load_mission(path):
         if key not in lim:
             raise KeyError(f"limits에 필수 키 '{key}' 없음: {path}")
 
-    # 한계 예산 검사: 계획 한계 <= (1-JITTER_MARGIN)·물리 한계 (snap 포함)
+    # 한계 예산: 계획 한계 <= (1-JITTER_MARGIN)·물리 한계 (snap 포함).
+    # 완화 정책 (사용자 확정, 계약 v0.2): 초과분은 거부 대신 상한으로 클램프
+    # 하고 통지 — 공간 의도는 살리고 시간만 양보. "strict": true면 기존 거부.
     budget = {
         "v_max": (1.0 - JITTER_MARGIN) * PHYS_VMAX,
         "a_max": (1.0 - JITTER_MARGIN) * PHYS_AMAX,
         "j_max": (1.0 - JITTER_MARGIN) * PHYS_JMAX,
         "snap_max": (1.0 - JITTER_MARGIN) * PHYS_SNAP,
     }
+    clamped = {}
     for key, cap in budget.items():
         if np.max(np.asarray(lim[key], float)) > cap + 1e-9:
-            raise ValueError(
-                f"limits.{key}={lim[key]}가 지터 오프셋 예산 반영 상한 {cap:.2f}"
-                f"(물리×(1-{JITTER_MARGIN}))을 초과 -> 시간 부여 스펙은 상쇄"
-                " 여유를 빼고 작성해야 함 (HANDOFF_PATHTIME_PIPELINE.md 예산 구조)")
+            if cfg.get("strict"):
+                raise ValueError(
+                    f"limits.{key}={lim[key]}가 지터 오프셋 예산 반영 상한 "
+                    f"{cap:.2f}(물리×(1-{JITTER_MARGIN}))을 초과 (strict 모드)")
+            clamped[key] = {"requested": lim[key], "applied": cap}
+            lim[key] = (np.minimum(np.asarray(lim[key], float), cap).tolist()
+                        if np.ndim(lim[key]) else cap)
+    if clamped:
+        cfg["_limits_clamped"] = clamped
+        print("[완화] limits 예산 초과분 클램프: "
+              + ", ".join(f"{k} {v['requested']}->{v['applied']:.2f}"
+                          for k, v in clamped.items()))
 
     return cfg, wp
 
@@ -602,6 +618,31 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     smoothed, info_sm = smooth_with_axis_sharing(
         t, base, PHYS_VMAX, PHYS_AMAX, PHYS_JMAX)
     max_dev = float(np.max(info_sm["maxDev"]))
+
+    # 3b) 완화: 원시 궤적의 성형 편차가 크면 경로 보존 재시간화 (거부 대신
+    #     시간 재배분 — 공간 의도는 RDP ε 안에서 그대로, 시간만 양보)
+    retimed = None
+    if waypoints is None and max_dev > RETIME_DEV_TOL:
+        tr = cfg["trajectory"]
+        t_in = np.asarray(tr["t"], float)
+        p_in = np.asarray(tr["pos"], float)
+        path_pts = normalize_waypoints(p_in, merge_dist=0.01,
+                                       collinear_tol=RETIME_PATH_EPS)
+        t_raw2, pos_raw2, *_ = plan_waypoints(
+            path_pts, lim["v_max"], lim["a_max"], lim["j_max"],
+            lim["snap_max"], dt=dt)
+        t, base = _resample_uniform(t_raw2, pos_raw2, dt)
+        smoothed, info_sm = smooth_with_axis_sharing(
+            t, base, PHYS_VMAX, PHYS_AMAX, PHYS_JMAX)
+        max_dev = float(np.max(info_sm["maxDev"]))
+        req_T = float(t_in[-1] - t_in[0])
+        retimed = {"dilation": (float(t[-1]) / req_T if req_T > 0 else None),
+                   "path_eps_m": RETIME_PATH_EPS,
+                   "n_path_pts": int(len(path_pts)),
+                   "requested_T_s": req_T, "retimed_T_s": float(t[-1])}
+        print(f"[완화] 성형 편차 초과 -> 경로 보존 재시간화: 경로점 "
+              f"{len(path_pts)}개, T {req_T:.2f}s -> {t[-1]:.2f}s "
+              f"(팽창 x{retimed['dilation']:.2f})")
     if waypoints is None:
         print(f"[성형] 원시 궤적 재성형량 {max_dev*100:.1f}cm"
               " (스텝 -> S-커브 시간 부여, 의도된 동작)")
@@ -642,7 +683,8 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         "smoother_info": info_sm, "gate_report": gate_rep, "gate_ok": ok,
         "trajectory_hash": _traj_hash(t, shaped),
         "jitter_margin": margin_dyn, "margin_basis": margin_basis,
-        "limits_effective": lim,
+        "limits_effective": lim, "retimed": retimed,
+        "limits_clamped": cfg.get("_limits_clamped"),
     }
 
 

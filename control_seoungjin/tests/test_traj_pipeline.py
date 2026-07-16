@@ -42,15 +42,28 @@ class TestPipeline:
         np.testing.assert_allclose(
             res["shaped"], res["smoothed"] + res["delta"], atol=1e-12)
 
-    def test_limits_over_budget_rejected(self, tmp_path):
+    def test_limits_over_budget_clamped_not_rejected(self, tmp_path, fb_env):
+        """완화 정책 v0.2: 예산 초과는 거부 대신 클램프 + 통지."""
         cfg = {
             "waypoints": [[0, 0, 1], [1, 0, 1]],
-            # v_max 1.7 > (1-0.2)*2.0 = 1.6 -> 예산 초과
+            # v_max 1.7 > (1-0.2)*2.0 = 1.6 -> 클램프 대상
             "limits": {"v_max": 1.7, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0},
         }
         p = tmp_path / "over.json"
         p.write_text(json.dumps(cfg), encoding="utf-8")
-        with pytest.raises(ValueError, match="예산"):
+        res = tp.run(str(p), str(tmp_path / "out"))
+        assert res["limits_clamped"]["v_max"]["applied"] == pytest.approx(1.6)
+        assert res["gate_report"]["vxyPk"] <= 1.6 * 1.001
+
+    def test_strict_mode_still_rejects(self, tmp_path):
+        cfg = {
+            "waypoints": [[0, 0, 1], [1, 0, 1]],
+            "limits": {"v_max": 1.7, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0},
+            "strict": True,
+        }
+        p = tmp_path / "strict.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(ValueError, match="strict"):
             tp.run(str(p), str(tmp_path / "out"))
 
     def test_missing_key_dies_loudly(self, tmp_path):
@@ -117,14 +130,14 @@ class TestRawTrajectoryInput:
 class TestSnapAndFlyThrough:
     """snap 4종째 검사(회로 부담 근거) + waypoint 무정지 통과 모드."""
 
-    def test_snap_over_budget_rejected(self, tmp_path):
+    def test_snap_over_budget_clamped(self, tmp_path, fb_env):
         cfg = {"waypoints": [[0, 0, 1], [1, 0, 1]],
                "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0,
-                          "snap_max": 70.0}}    # > 0.8*80 = 64
+                          "snap_max": 70.0}}    # > 0.8*80 = 64 -> 클램프
         p = tmp_path / "s.json"
         p.write_text(json.dumps(cfg), encoding="utf-8")
-        with pytest.raises(ValueError, match="snap_max"):
-            tp.run(str(p), str(tmp_path / "out"))
+        res = tp.run(str(p), str(tmp_path / "out"))
+        assert res["limits_clamped"]["snap_max"]["applied"] == pytest.approx(64.0)
 
     def test_waypoint_mission_gate_includes_snap(self, mission, tmp_path):
         _, cfg = mission
@@ -133,9 +146,13 @@ class TestSnapAndFlyThrough:
         assert res["gate_report"]["sxyPk"] <= tp.PHYS_SNAP * 1.001
 
     def test_raw_trajectory_backstop_skips_snap_enforcement(self, tmp_path, fb_env):
-        """백스톱 경로: 스무더 뱅뱅 저크 = snap 임펄스가 정상 — 강제 안 함."""
+        """백스톱 경로: 스무더 뱅뱅 저크 = snap 임펄스가 정상 — 강제 안 함.
+
+        (0.2m 스텝: 편차 < 재시간화 임계라 백스톱 경로 유지 — 큰 스텝은
+        v0.2부터 경로 보존 재시간화로 넘어감)
+        """
         t = [round(0.01 * i, 2) for i in range(800)]
-        pos = [[0.0, 0.0, 2.0] if ti < 2.0 else [1.0, 0.0, 2.0] for ti in t]
+        pos = [[0.0, 0.0, 2.0] if ti < 2.0 else [0.2, 0.0, 2.0] for ti in t]
         cfg = {"trajectory": {"t": t, "pos": pos},
                "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0,
                           "snap_max": 10.0}}

@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import traj_pipeline as tp                      # noqa: E402
 from analyze_flight_log import analyze          # noqa: E402
 
-CONTRACT_VERSION = "0.1"
+CONTRACT_VERSION = "0.2"   # v0.2: 완화 정책 — 예산 초과 클램프/재시간화는
+                           # 거부가 아니라 adjustments로 통지 (strict 모드 제외)
 RESHAPE_TOL_M = 0.30       # 성형 편차 허용치 [m] — 초과 시 RESHAPED_BEYOND_TOL
 REPORT_PATH = os.path.join(tp.OUTPUT_DIR, "trajectory_report.json")
 
@@ -82,13 +83,24 @@ def static_report(input_path):
                       "detail": f"성형 후에도 물리 한계 초과 (최악 채널 {worst})",
                       "value": margins[worst], "limit": 1.0})
     if dev > RESHAPE_TOL_M:
+        # 재시간화까지 거쳤는데도 편차 초과 = 진짜 불능
         codes.append({"code": "RESHAPED_BEYOND_TOL",
                       "detail": "성형 편차 초과 - 요청 궤적과 실비행 궤적이 다름",
                       "value": dev, "limit": RESHAPE_TOL_M})
 
+    # 완화 통지 (v0.2): 거부 아님 — RL 벌점용 연속 신호
+    adjustments = []
+    if res.get("limits_clamped"):
+        adjustments.append({"code": "LIMITS_CLAMPED",
+                            "detail": res["limits_clamped"]})
+    if res.get("retimed"):
+        adjustments.append({"code": "TIME_DILATED",
+                            "detail": res["retimed"]})
+
     report = {
         "verdict": "accepted" if not codes else "rejected",
         "reject_codes": codes,
+        "adjustments": adjustments,
         "margins": {k: round(v, 4) for k, v in margins.items()},
         "shaping": {
             "deviation_max_m": round(dev, 4),
