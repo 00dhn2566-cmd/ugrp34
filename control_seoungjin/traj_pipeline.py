@@ -40,7 +40,12 @@ from scipy.interpolate import CubicSpline
 from scipy.io import savemat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from path_time import plan_waypoints            # noqa: E402
+from path_time import (                         # noqa: E402
+    compute_curvature_and_kN,
+    generate_pid_reference,
+    plan_waypoints,
+    reparameterize_by_arc_length,
+)
 from traj_shaping import (                      # noqa: E402
     smooth_with_axis_sharing,
     traj_gate,
@@ -53,10 +58,17 @@ OUTPUT_DIR = os.path.join(HERE, "output")
 
 # 물리 한계 (성형·게이트 공용) — envelope 실측 v/a≈2.5에서 깎은 확정 상수
 PHYS_VMAX, PHYS_AMAX, PHYS_JMAX = 2.0, 2.0, 10.0
+# snap 한계 (사용자 요구 — 4계 미분까지 고려). 잠정치: 실측 근거 없음
+# (모터 대역폭 실측 후 조정). 기존 미션(10~60) 수용 + 유한 상한 확보 목적.
+PHYS_SNAP = 80.0
 # 지터 상쇄 오프셋 예산: 계획(시간 부여) 한계는 물리 한계의 (1-MARGIN)까지만
 JITTER_MARGIN = 0.2
 # 짐 모드 기본값 (§W 실증 1.80Hz; attitude_feedback로 갱신됨)
 F_MODE_DEFAULT = 1.80
+# f0 갱신 수용 대역: 이 밖의 실측 주파수는 궤적으로 가진되는 짐 모드가 아니라
+# 제어루프 진동일 가능성 — 쫓아가면 오히려 악화 (A/B/B' 실증: 4.39Hz 추종
+# tail 12.25° vs 1.8Hz 고수 9.93°). 대역 밖이면 갱신 거부 + 경고.
+F_MODE_BAND_HZ = (1.0, 3.0)
 SHAPER_DEFAULT = "zvd"          # 주파수 오차 강건 (핸드오프 권장 후보)
 
 FEEDBACK_PATH = os.path.join(OUTPUT_DIR, "attitude_feedback.json")
@@ -136,19 +148,19 @@ def load_mission(path):
         if key not in lim:
             raise KeyError(f"limits에 필수 키 '{key}' 없음: {path}")
 
-    # 한계 예산 검사: 계획 한계 <= (1-JITTER_MARGIN)·물리 한계
+    # 한계 예산 검사: 계획 한계 <= (1-JITTER_MARGIN)·물리 한계 (snap 포함)
     budget = {
         "v_max": (1.0 - JITTER_MARGIN) * PHYS_VMAX,
         "a_max": (1.0 - JITTER_MARGIN) * PHYS_AMAX,
         "j_max": (1.0 - JITTER_MARGIN) * PHYS_JMAX,
+        "snap_max": (1.0 - JITTER_MARGIN) * PHYS_SNAP,
     }
     for key, cap in budget.items():
         if np.max(np.asarray(lim[key], float)) > cap + 1e-9:
             raise ValueError(
                 f"limits.{key}={lim[key]}가 지터 오프셋 예산 반영 상한 {cap:.2f}"
-                f"(물리 {PHYS_VMAX if key=='v_max' else PHYS_AMAX if key=='a_max' else PHYS_JMAX:.1f}"
-                f"×(1-{JITTER_MARGIN}))을 초과 -> 시간 부여 스펙은 상쇄 여유를 "
-                "빼고 작성해야 함 (HANDOFF_PATHTIME_PIPELINE.md 예산 구조)")
+                f"(물리×(1-{JITTER_MARGIN}))을 초과 -> 시간 부여 스펙은 상쇄"
+                " 여유를 빼고 작성해야 함 (HANDOFF_PATHTIME_PIPELINE.md 예산 구조)")
 
     return cfg, wp
 
@@ -201,6 +213,13 @@ def consume_attitude_feedback(f_mode):
     new_f = float(fb.get("mode_freq_hz", f_mode))
     if not (0.2 <= new_f <= 10.0):
         raise ValueError(f"attitude_feedback mode_freq_hz={new_f} 비정상 범위")
+    lo, hi = F_MODE_BAND_HZ
+    if not (lo <= new_f <= hi):
+        print(f"[경고] 실측 {new_f:.2f}Hz는 짐 모드 대역({lo}~{hi}Hz) 밖 ->"
+              " 제어루프 진동 의심, f0 갱신 거부 (게인 영역 이슈로 보고 권장)")
+        fb["_consume"] = {"age_s": age_s, "f_mode_old": f_mode,
+                          "f_mode_new": f_mode, "rejected_out_of_band": new_f}
+        return f_mode, fb
     fb["_consume"] = {"age_s": age_s, "f_mode_old": f_mode, "f_mode_new": new_f}
     print(f"[feedback] used:false 감지 -> 셰이퍼 f0 {f_mode:.2f} -> {new_f:.2f}Hz"
           f" (flight_id={fb.get('flight_id')}, 나이 "
@@ -221,7 +240,10 @@ def mark_feedback_used(fb):
         "trajectory_hash": fb.get("trajectory_hash"),
         "feedback_age_s": consume.get("age_s"),
         "action": {"f_mode_hz": [consume.get("f_mode_old"),
-                                 consume.get("f_mode_new")]},
+                                 consume.get("f_mode_new")],
+                   **({"rejected_out_of_band_hz":
+                       consume["rejected_out_of_band"]}
+                      if "rejected_out_of_band" in consume else {})},
         "residual": {"tail_pitch_rms_deg":
                      fb.get("tail", {}).get("pitch_rms_deg")},
     }
@@ -274,19 +296,110 @@ def splice_waypoints_from_state(state, remaining_waypoints, emergency=False):
     return wp, np.asarray(base["vel"], float), np.asarray(base["acc"], float)
 
 
+def normalize_waypoints(waypoints, merge_dist=0.01, max_seg_len=None):
+    """상위 waypoint 집합 전처리: merge(근접점 병합) / divide(긴 구간 분할).
+
+    merge: 직전 점과 merge_dist[m] 이내인 점 제거 (RL 노이즈/중복 방어).
+    divide: max_seg_len[m] 초과 구간에 등간격 중간점 삽입 (None이면 안 함).
+    """
+    wp = np.asarray(waypoints, float)
+    keep = [wp[0]]
+    for p in wp[1:]:
+        if np.linalg.norm(p - keep[-1]) > merge_dist:
+            keep.append(p)
+    wp = np.array(keep)
+    if max_seg_len is not None and len(wp) >= 2:
+        out = [wp[0]]
+        for a, b in zip(wp[:-1], wp[1:]):
+            d = np.linalg.norm(b - a)
+            n_div = int(np.ceil(d / max_seg_len))
+            for i in range(1, n_div + 1):
+                out.append(a + (b - a) * i / n_div)
+        wp = np.array(out)
+    if len(wp) < 2:
+        raise ValueError("normalize_waypoints: 병합 후 waypoint가 2개 미만 — "
+                         "집합이 사실상 한 점")
+    return wp
+
+
+def replan_splice(res1, tau_s, new_waypoints, cfg):
+    """비행 중 새 waypoint 집합 도착: τ 시점 상태에서 무정지로 꺾어 계속.
+
+    1차 궤적(res1)의 τ 시점 기준 상태(p/v/a/j — base의 수치미분 = 성형 기준,
+    측정값 아님: 원칙 1 준수)를 초기조건으로 새 집합을 재계획하고,
+    base1[0:τ] + base2를 하나의 타임라인으로 결합한 뒤 스무더→ZV→게이트를
+    **전체에 한 번에** 적용한다 (세그먼트별 ZV는 스플라이스 패딩 킥 유발).
+
+    반환: build_trajectory와 동일 구조의 res dict (결합 궤적).
+    """
+    lim = cfg["limits"]
+    t1, base1 = res1["t"], res1["base"]
+    dt1 = float(t1[1] - t1[0])
+    k = int(np.clip(np.round(tau_s / dt1), 1, len(t1) - 2))
+
+    vel1 = np.gradient(base1, t1, axis=0)
+    acc1 = np.gradient(vel1, t1, axis=0)
+    jrk1 = np.gradient(acc1, t1, axis=0)
+    p0, v0, a0, j0 = base1[k], vel1[k], acc1[k], jrk1[k]
+
+    wp2 = np.vstack([p0, normalize_waypoints(
+        np.vstack([p0, np.asarray(new_waypoints, float)]))[1:]])
+    t2_raw, pos2_raw, *_ = plan_waypoints(
+        wp2, lim["v_max"], lim["a_max"], lim["j_max"], lim["snap_max"],
+        v0=v0, a0=a0, j0=j0, dt=dt1)
+
+    # 2차 구간을 정확히 dt1 격자(tau 이후 연속)로 재샘플 — ZV 균일성 요건
+    m = max(int(np.round(t2_raw[-1] / dt1)), 2)
+    t2_grid = dt1 * np.arange(1, m + 1)
+    ev = np.minimum(t2_grid, t2_raw[-1])    # 격자 끝이 살짝 넘치면 종점(정지) 고정
+    base2 = np.column_stack([
+        CubicSpline(t2_raw, pos2_raw[i],
+                    bc_type=((1, float(v0[i])), (1, 0.0)))(ev)
+        for i in range(3)])
+
+    t_c = np.concatenate([t1[:k + 1], t1[k] + t2_grid])
+    base_c = np.vstack([base1[:k + 1], base2])
+
+    smoothed, info_sm = smooth_with_axis_sharing(
+        t_c, base_c, PHYS_VMAX, PHYS_AMAX, PHYS_JMAX)
+    shaper_mode = cfg.get("shaper", {}).get("mode", SHAPER_DEFAULT)
+    f_mode = res1["f_mode"]
+    if shaper_mode == "none":
+        shaped = smoothed.copy()
+    else:
+        shaped = traj_zv(t_c, smoothed, f_mode, shaper_mode)
+    ok, gate_rep = traj_gate(t_c, shaped, PHYS_VMAX, PHYS_AMAX,
+                             do_error=True, jmax=PHYS_JMAX, smax=PHYS_SNAP)
+    return {
+        "t": t_c, "base": base_c, "smoothed": smoothed, "shaped": shaped,
+        "delta": shaped - smoothed, "yaw": _heading_yaw(t_c, shaped),
+        "dt": dt1, "f_mode": f_mode, "shaper_mode": shaper_mode,
+        "smoother_info": info_sm, "gate_report": gate_rep, "gate_ok": ok,
+        "trajectory_hash": _traj_hash(t_c, shaped),
+        "splice_at_s": float(t1[k]),
+    }
+
+
 # ---------------------------------------------------------------------------
 # 궤적 생성 체인
 # ---------------------------------------------------------------------------
 
-def _resample_uniform(t, pos_3xN, dt):
+def _resample_uniform(t, pos_3xN, dt, v0=None):
     """세그먼트별 linspace라 미세 불균일한 시간축 → 균일 그리드 재샘플.
 
     traj_zv가 균일 샘플(오차 1e-9)을 요구하므로 필수 단계.
     끝점 보존을 위해 linspace 사용 — 실제 간격은 dt에 가장 가까운 등분값.
+    v0: 시작 속도 (재계획 이어붙임). 스플라인 경계조건으로 물려야 경계
+    흔들림(snap 스파이크 700 실측)이 없다. 종점은 정지(도함수 0) 고정.
     """
     n = max(int(np.round(t[-1] / dt)), 3)
     t_u = np.linspace(0.0, t[-1], n + 1)
-    pos_u = np.column_stack([CubicSpline(t, pos_3xN[i])(t_u) for i in range(3)])
+    if v0 is None:
+        v0 = np.zeros(3)
+    pos_u = np.column_stack([
+        CubicSpline(t, pos_3xN[i],
+                    bc_type=((1, float(v0[i])), (1, 0.0)))(t_u)
+        for i in range(3)])
     return t_u, pos_u
 
 
@@ -321,13 +434,32 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     shaper_cfg = cfg.get("shaper", {})
     shaper_mode = shaper_cfg.get("mode", SHAPER_DEFAULT)
 
-    if waypoints is not None:
-        # 1a) 시간 부여 (snap까지 제약하는 최소시간 7차 다항식 — 저크-가능 조건 내장)
+    wp_mode = cfg.get("waypoint_mode", "stop")
+    if waypoints is not None and wp_mode == "fly_through":
+        # 1a') 무정지 통과: waypoint를 스플라인 연속 경로로 잇고 arc-length
+        #      재매개화 → 곡률 제한(v ≤ √(a_max/κ)) 속도 프로파일 → 시간 부여.
+        #      중간점에서 정지하지 않는다 (시작·종점만 정지).
+        #      한계는 노름 의미로 해석 — 축별 리스트면 최솟값 사용 (보수적).
+        if v0 is not None or a0 is not None:
+            raise ValueError("fly_through는 아직 재계획 초기조건(v0/a0) 미지원"
+                             " — waypoint_mode='stop' 사용")
+        vmax_n = float(np.min(lim["v_max"]))
+        amax_n = float(np.min(lim["a_max"]))
+        jmax_n = float(np.min(lim["j_max"]))
+        xs, ys, zs, s = reparameterize_by_arc_length(
+            waypoints[:, 0], waypoints[:, 1], waypoints[:, 2], ds=0.02)
+        kappa, *_ = compute_curvature_and_kN(xs, ys, zs, s)
+        t, pos_raw, *_ = generate_pid_reference(
+            xs, ys, zs, s, kappa, total_time=0.0,
+            v_max=vmax_n, a_max=amax_n, j_max=jmax_n, dt=dt)
+        base = pos_raw.T                            # (3,N) -> (N,3), 이미 균일 t
+    elif waypoints is not None:
+        # 1a) 정지형: waypoint마다 정지 후 재출발 (snap까지 제약 7차 최소시간)
         t_raw, pos_raw, *_ = plan_waypoints(
             waypoints, lim["v_max"], lim["a_max"], lim["j_max"], lim["snap_max"],
             v0=v0, a0=a0, dt=dt)
         # 2a) 균일 그리드 재샘플 (스플라인 — 정품 궤적은 매끈해서 안전)
-        t, base = _resample_uniform(t_raw, pos_raw, dt)
+        t, base = _resample_uniform(t_raw, pos_raw, dt, v0=v0)
     else:
         # 1b) 원시 궤적 입구: 스텝/거친 프로파일 허용 — 선형 재샘플만 하고
         #     (스플라인은 불연속에서 링잉) 성형은 전부 스무더에 맡긴다.
@@ -361,9 +493,20 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         shaped = traj_zv(t, smoothed, f_mode, shaper_mode)
     delta = shaped - smoothed
 
-    # 5) 최종 게이트 (실패 시 raise — 통과분만 컨트롤러로)
+    # 5) 최종 게이트 (실패 시 raise — 통과분만 컨트롤러로).
+    #    snap 검사는 계획층 경로(waypoint)만 강제 — 다항식이 snap_max를 보장하는
+    #    경로라 위반=버그. 원시 궤적 백스톱 경로는 스무더가 v/a/j까지만
+    #    보장(뱅뱅 저크 = snap 임펄스가 정상 동작)이라 snap은 리포트 마진으로만.
+    #    fly_through도 시간 스플라인이 C²(저크 불연속 = snap 스파이크)라 측정만.
+    #    v0/a0≠0(비상 단독 재계획)도 측정만 — 스무더가 정지 초기상태 가정이라
+    #    개입 스파이크가 정상 동작 (비행 중 이어붙임 정식 경로는 replan_splice:
+    #    결합 타임라인이라 snap까지 강제됨).
+    ic_rest = ((v0 is None or not np.any(v0))
+               and (a0 is None or not np.any(a0)))
+    smax = (PHYS_SNAP if (waypoints is not None and wp_mode != "fly_through"
+                          and ic_rest) else None)
     ok, gate_rep = traj_gate(t, shaped, PHYS_VMAX, PHYS_AMAX,
-                             do_error=gate_error, jmax=PHYS_JMAX)
+                             do_error=gate_error, jmax=PHYS_JMAX, smax=smax)
 
     yaw = _heading_yaw(t, shaped)
     return {

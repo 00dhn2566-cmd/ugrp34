@@ -114,6 +114,118 @@ class TestRawTrajectoryInput:
             tp.run(str(p), str(tmp_path / "out"))
 
 
+class TestSnapAndFlyThrough:
+    """snap 4종째 검사(회로 부담 근거) + waypoint 무정지 통과 모드."""
+
+    def test_snap_over_budget_rejected(self, tmp_path):
+        cfg = {"waypoints": [[0, 0, 1], [1, 0, 1]],
+               "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0,
+                          "snap_max": 70.0}}    # > 0.8*80 = 64
+        p = tmp_path / "s.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(ValueError, match="snap_max"):
+            tp.run(str(p), str(tmp_path / "out"))
+
+    def test_waypoint_mission_gate_includes_snap(self, mission, tmp_path):
+        _, cfg = mission
+        res = tp.build_trajectory(cfg, np.asarray(cfg["waypoints"], float), 1.8)
+        assert "sxyPk" in res["gate_report"], "계획층 경로는 snap까지 게이트"
+        assert res["gate_report"]["sxyPk"] <= tp.PHYS_SNAP * 1.001
+
+    def test_raw_trajectory_backstop_skips_snap_enforcement(self, tmp_path, fb_env):
+        """백스톱 경로: 스무더 뱅뱅 저크 = snap 임펄스가 정상 — 강제 안 함."""
+        t = [round(0.01 * i, 2) for i in range(800)]
+        pos = [[0.0, 0.0, 2.0] if ti < 2.0 else [1.0, 0.0, 2.0] for ti in t]
+        cfg = {"trajectory": {"t": t, "pos": pos},
+               "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0,
+                          "snap_max": 10.0}}
+        p = tmp_path / "raw.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        res = tp.run(str(p), str(tmp_path / "out"))   # snap 강제였으면 raise
+        assert res["gate_ok"]
+        assert res["gate_report"]["sxyPk"] > tp.PHYS_SNAP, \
+            "측정은 되고(마진 보고용) 강제만 안 해야 함"
+
+    def test_fly_through_no_stop_at_interior_waypoints(self, tmp_path, fb_env):
+        cfg = {"waypoints": [[0, 0, 2], [2, 0, 2], [4, 1, 2], [6, 0, 2]],
+               "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0,
+                          "snap_max": 10.0},
+               "waypoint_mode": "fly_through"}
+        p = tmp_path / "ft.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        res = tp.run(str(p), str(tmp_path / "out"))
+        t, pos = res["t"], res["shaped"]
+        speed = np.linalg.norm(np.gradient(pos, t, axis=0), axis=1)
+        for wp in cfg["waypoints"][1:-1]:
+            k = int(np.argmin(np.linalg.norm(pos - np.array(wp), axis=1)))
+            d = float(np.linalg.norm(pos[k] - np.array(wp)))
+            assert d < 0.05, f"경유점 {wp} 미통과 (최근접 {d:.3f}m)"
+            assert speed[k] > 0.3 * 1.0, \
+                f"경유점 {wp}에서 정지함 (속도 {speed[k]:.2f}m/s) - fly_through 위반"
+
+    def test_fly_through_rejects_replan_ic(self, mission):
+        _, cfg = mission
+        cfg2 = {**cfg, "waypoint_mode": "fly_through"}
+        with pytest.raises(ValueError, match="fly_through"):
+            tp.build_trajectory(cfg2, np.asarray(cfg2["waypoints"], float),
+                                1.8, v0=np.array([0.3, 0, 0]))
+
+
+class TestWaypointBatches:
+    """상위 입력 구조: waypoint 집합 배치 + 비행 중 새 집합 call 이어붙임."""
+
+    LIM = {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0}
+
+    def test_normalize_merge_and_divide(self):
+        wp = [[0, 0, 1], [0, 0, 1.005], [0, 0, 3], [4, 0, 3]]
+        out = tp.normalize_waypoints(wp, merge_dist=0.01, max_seg_len=1.0)
+        assert np.linalg.norm(out[1] - out[0]) > 0.01, "근접점 병합돼야 함"
+        seg = np.linalg.norm(np.diff(out, axis=0), axis=1)
+        assert np.all(seg <= 1.0 + 1e-9), "긴 구간은 분할돼야 함"
+
+    def test_normalize_all_merged_dies(self):
+        with pytest.raises(ValueError, match="2개 미만"):
+            tp.normalize_waypoints([[0, 0, 1], [0, 0, 1.001]], merge_dist=0.01)
+
+    def test_midflight_new_set_splices_without_stop(self):
+        """1번 집합 비행 중 τ에 2번 집합 도착 → 정지 없이 그쪽으로 꺾음."""
+        cfg = {"limits": self.LIM, "shaper": {"mode": "zvd", "f_mode_hz": 1.8}}
+        set1 = np.array([[0, 0, 2], [4, 0, 2]])
+        res1 = tp.build_trajectory(cfg, set1, 1.8)
+        tau = 0.5 * res1["t"][-1]              # 1번 이동 한가운데서 call
+        set2 = [[2.0, 3.0, 2.5], [0.0, 4.0, 2.0]]
+        res = tp.replan_splice(res1, tau, set2, cfg)
+
+        t, pos = res["t"], res["shaped"]
+        k = int(np.argmin(np.abs(t - res["splice_at_s"])))
+        speed = np.linalg.norm(np.gradient(pos, t, axis=0), axis=1)
+        assert speed[k] > 0.2, f"스플라이스 지점에서 정지 (v={speed[k]:.2f})"
+        # 게이트 4종(v/a/j/snap) 통과 = 이어붙임이 물리적으로 매끈
+        assert res["gate_ok"]
+        assert res["gate_report"]["sxyPk"] <= tp.PHYS_SNAP * 1.001
+        # 2번 집합 waypoint 통과
+        for wp in set2:
+            d = np.min(np.linalg.norm(pos - np.array(wp), axis=1))
+            assert d < 0.05, f"2차 집합 {wp} 미통과 ({d:.3f}m)"
+        # 종점 정지 (배치 기본값)
+        assert speed[-1] < 0.05
+
+    def test_splice_continuity_no_derivative_kick(self):
+        """스플라이스 경계에서 v/a 점프 없음 (미분킥 방지)."""
+        cfg = {"limits": self.LIM, "shaper": {"mode": "none"}}
+        set1 = np.array([[0, 0, 2], [4, 0, 2]])
+        res1 = tp.build_trajectory(cfg, set1, 1.8)
+        res = tp.replan_splice(res1, 0.5 * res1["t"][-1], [[4, 3, 2]], cfg)
+        t, pos = res["t"], res["shaped"]
+        k = int(np.argmin(np.abs(t - res["splice_at_s"])))
+        vel = np.gradient(pos, t, axis=0)
+        acc = np.gradient(vel, t, axis=0)
+        dv = np.linalg.norm(vel[k + 1] - vel[k - 1])
+        da = np.linalg.norm(acc[k + 1] - acc[k - 1])
+        assert dv < 0.1, f"스플라이스 속도 점프 {dv:.3f}m/s"
+        assert da < 0.5, f"스플라이스 가속 점프 {da:.3f}m/s2"
+
+
 class TestCurrentState:
     def _write_state(self, path, ts):
         st = {"timestamp": ts,
@@ -223,3 +335,20 @@ class TestFeedbackHandshake:
             json.dump({"flight_id": "fx", "used": False, "mode_freq_hz": 55.0}, f)
         with pytest.raises(ValueError, match="비정상"):
             tp.run(path, str(tmp_path / "out"))
+
+    def test_out_of_band_freq_not_applied(self, mission, tmp_path, fb_env):
+        """대역(1~3Hz) 밖 실측(예: 4.39Hz 루프 진동)은 f0 갱신 거부.
+
+        A/B/B' 실증: 4.39Hz 추종 tail 12.25° vs 1.8Hz 고수 9.93°.
+        """
+        path, _ = mission
+        fb_path, ledger = fb_env
+        with open(fb_path, "w", encoding="utf-8") as f:
+            json.dump({"flight_id": "f_oob", "used": False,
+                       "mode_freq_hz": 4.39}, f)
+        res = tp.run(path, str(tmp_path / "out"))
+        assert res["f_mode"] == pytest.approx(1.8), "대역 밖은 갱신 금지"
+        after = json.loads(open(fb_path, encoding="utf-8").read())
+        assert after["used"] is True, "거부해도 소비 처리(used:true)는 해야 함"
+        lines = [json.loads(l) for l in open(ledger, encoding="utf-8")]
+        assert lines[-1]["action"]["rejected_out_of_band_hz"] == pytest.approx(4.39)

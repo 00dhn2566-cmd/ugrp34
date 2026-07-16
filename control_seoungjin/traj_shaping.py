@@ -297,12 +297,15 @@ def counter_swing_offset(t, amp_pos_m, phase_rad, t_ref_s, f_mode,
 # traj_gate — 궤적 물리 한계 검증 게이트 (traj_gate.m 포팅, 컨트롤러 입구 백스톱)
 # ---------------------------------------------------------------------------
 
-def traj_gate(t, pos, vmax, amax, do_error=True, jmax=10.0):
-    """전체 시계열을 수치미분해 v/a/j 피크 검사, 초과 시 시끄럽게 raise.
+def traj_gate(t, pos, vmax, amax, do_error=True, jmax=10.0, smax=None):
+    """전체 시계열을 수치미분해 v/a/j(+snap) 피크 검사, 초과 시 시끄럽게 raise.
 
     x/y는 벡터 노름(기울기 물리는 축별이 아니라 수평합), z는 별도 채널.
     저크 검사 필수(15차): v/a만 보면 온건해 보이는 저크-불가능 입력이
     스무더 급제동 뱅뱅으로 기체를 가진함 (10cm/0.67s 펄스 = 저크 20 사건).
+    snap 검사(사용자 요구, 선택): smax를 주면 4계 미분까지 검사. 계획층
+    (plan_waypoints)이 snap_max를 다항식으로 강제하고 ZV는 볼록결합이라
+    보존하므로, 정품 경로에선 통과가 정상 (실측: 계획 10 대비 피크 6.3).
 
     Parameters
     ----------
@@ -311,16 +314,20 @@ def traj_gate(t, pos, vmax, amax, do_error=True, jmax=10.0):
     vmax, amax : 한계 (envelope 여유율 적용치 권장)
     do_error : False면 raise 대신 ok=False 반환 (리포트 모드)
     jmax     : 스무더와 동일 값 사용 (기본 10)
+    smax     : snap 한계 [m/s4] (None이면 snap 검사 생략 — 하위 호환)
 
     Returns
     -------
     ok  : bool
-    rep : dict {"vxyPk","axyPk","jxyPk","vzPk","azPk","jzPk","tol"}
+    rep : dict {"vxyPk","axyPk","jxyPk","vzPk","azPk","jzPk","tol"
+                (+ smax 지정 시 "sxyPk","szPk")}
     """
     t = np.asarray(t, float).ravel()
     pos = np.asarray(pos, float)
-    if len(t) < 4:
-        raise ValueError("traj_gate: 샘플 4개 미만 - 궤적 아님 (저크 검사 불가)")
+    n_min = 5 if smax is not None else 4
+    if len(t) < n_min:
+        raise ValueError(f"traj_gate: 샘플 {n_min}개 미만 - 궤적 아님")
+    measure_snap = len(t) >= 5          # 측정은 가능하면 항상, 강제는 smax 시만
     if pos.ndim != 2 or pos.shape[1] != 3 or pos.shape[0] != len(t):
         raise ValueError("traj_gate: pos는 (N,3)이어야 하고 t와 길이 일치")
     dt1 = np.diff(t)
@@ -346,6 +353,16 @@ def traj_gate(t, pos, vmax, amax, do_error=True, jmax=10.0):
           and rep["vzPk"] <= vmax * tol and rep["azPk"] <= amax * tol
           and rep["jxyPk"] <= jmax * tol and rep["jzPk"] <= jmax * tol)
 
+    snap_line = ""
+    if measure_snap:
+        ss = np.diff(jj, axis=0) / dt1[:-3, None]       # (N-4, 3) snap
+        rep["sxyPk"] = float(np.max(np.hypot(ss[:, 0], ss[:, 1])))
+        rep["szPk"] = float(np.max(np.abs(ss[:, 2])))
+    if smax is not None:
+        ok = ok and rep["sxyPk"] <= smax * tol and rep["szPk"] <= smax * tol
+        snap_line = (f"  |s_xy| {rep['sxyPk']:.1f} / 한계 {smax:.1f} m/s4\n"
+                     f"  |s_z|  {rep['szPk']:.1f} / 한계 {smax:.1f} m/s4\n")
+
     if not ok and do_error:
         raise ValueError(
             "traj_gate: 궤적이 물리 한계 초과 - 컨트롤러 투입 거부.\n"
@@ -355,5 +372,6 @@ def traj_gate(t, pos, vmax, amax, do_error=True, jmax=10.0):
             f"  |v_z|  {rep['vzPk']:.2f} / 한계 {vmax:.2f} m/s\n"
             f"  |a_z|  {rep['azPk']:.2f} / 한계 {amax:.2f} m/s2\n"
             f"  |j_z|  {rep['jzPk']:.1f} / 한계 {jmax:.1f} m/s3\n"
+            + snap_line +
             "  -> path_time 재-시간매개화 또는 traj_smoother 적용 후 재시도")
     return ok, rep

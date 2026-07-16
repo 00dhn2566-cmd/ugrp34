@@ -65,8 +65,10 @@ class TestStaticReport:
         codes = [c["code"] for c in rep["reject_codes"]]
         assert "RESHAPED_BEYOND_TOL" in codes
         assert rep["verdict"] == "rejected"
-        # 마진 자체는 이내 (성형이 물리 한계는 지켰음) — 편차가 문제
-        assert all(v <= 1.001 for v in rep["margins"].values())
+        # 기구학(v/a/j) 마진은 이내 (성형이 지킴) — snap은 백스톱 경로에서
+        # 정보용(뱅뱅 저크 특성상 큼), 편차가 거부 사유
+        kin = {k: v for k, v in rep["margins"].items() if not k.startswith("s")}
+        assert all(v <= 1.001 for v in kin.values())
 
     def test_report_is_json_serializable(self, tmp_path):
         p = _write(tmp_path, {

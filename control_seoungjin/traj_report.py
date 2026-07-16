@@ -39,7 +39,7 @@ REPORT_PATH = os.path.join(tp.OUTPUT_DIR, "trajectory_report.json")
 
 def _margins(gate_rep):
     """게이트 피크 / 물리 한계 비율 (1.0 초과 = 위반). RL 벌점용 연속 신호."""
-    return {
+    m = {
         "vxy": gate_rep["vxyPk"] / tp.PHYS_VMAX,
         "axy": gate_rep["axyPk"] / tp.PHYS_AMAX,
         "jxy": gate_rep["jxyPk"] / tp.PHYS_JMAX,
@@ -47,6 +47,10 @@ def _margins(gate_rep):
         "az": gate_rep["azPk"] / tp.PHYS_AMAX,
         "jz": gate_rep["jzPk"] / tp.PHYS_JMAX,
     }
+    if "sxyPk" in gate_rep:
+        m["sxy"] = gate_rep["sxyPk"] / tp.PHYS_SNAP
+        m["sz"] = gate_rep["szPk"] / tp.PHYS_SNAP
+    return m
 
 
 def static_report(input_path):
