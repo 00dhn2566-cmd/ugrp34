@@ -309,10 +309,12 @@ def _traj_hash(t, pos):
     return h.hexdigest()[:16]
 
 
-def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None):
+def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     """계획 → 재샘플 → 스무딩 → ZV → 게이트. 반환: dict (산출 일체).
 
     v0/a0: 재계획 이어붙이기용 초기조건 (splice_waypoints_from_state 산출).
+    gate_error=False면 게이트 초과 시 raise 대신 res["gate_ok"]=False 반환
+    (traj_report.py 판정 리포트용 — 운용 경로는 True 유지).
     """
     lim = cfg["limits"]
     dt = float(cfg.get("dt", 0.01))
@@ -361,14 +363,14 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None):
 
     # 5) 최종 게이트 (실패 시 raise — 통과분만 컨트롤러로)
     ok, gate_rep = traj_gate(t, shaped, PHYS_VMAX, PHYS_AMAX,
-                             do_error=True, jmax=PHYS_JMAX)
+                             do_error=gate_error, jmax=PHYS_JMAX)
 
     yaw = _heading_yaw(t, shaped)
     return {
         "t": t, "base": base, "smoothed": smoothed, "shaped": shaped,
         "delta": delta, "yaw": yaw, "dt": dt,
         "f_mode": f_mode, "shaper_mode": shaper_mode,
-        "smoother_info": info_sm, "gate_report": gate_rep,
+        "smoother_info": info_sm, "gate_report": gate_rep, "gate_ok": ok,
         "trajectory_hash": _traj_hash(t, shaped),
     }
 

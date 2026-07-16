@@ -160,6 +160,49 @@ path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 
 3. **단위는 비율로만**: `k_thrust_lumped`(T/w² 집중계수)는 블록 계수와 단위가
    달라 절대값 대입 금지 — sT = 기준치/새치 **비율**로만 사용.
 
+## 7. 상위(경로계획 RL) 궤도 계약 — "이런 궤도는 넘기지 마"의 정형화
+
+임의 궤도를 §1 형식(waypoints 또는 trajectory)으로 던지면, 이 층이 성형·검증하고
+**`output/trajectory_report.json`** 으로 기계 판독 가능한 판정을 회신한다
+(`python traj_report.py --input <json> [--flight-mat <mat>]`).
+
+### 넘기지 말 것 (거부 규칙 — 어겨도 안전하게 거부될 뿐이지만, 학습 효율을 위해 사전 준수 권장)
+
+| # | 규칙 | 위반 시 코드 |
+|---|---|---|
+| 1 | `limits` ≤ 0.8×물리 한계 (v/a ≤ **1.6 m/s·m/s²**, j ≤ **8 m/s³**) | `LIMITS_OVER_BUDGET` |
+| 2 | xy 동시 기동(대각) 미션은 추가 ×0.7: v/a ≤ **1.12**, j ≤ **5.6** | (성형 개입 → 편차 벌점) |
+| 3 | 시간 붙은 궤적의 후방차분 v/a/j도 같은 한계 이내 (스텝·순간정지 금지) | `RESHAPED_BEYOND_TOL` (편차 > 0.3m) |
+| 4 | 저크-가능 조건: 이동 진폭 A마다 최소시간 **Tm ≥ (60·A/(0.8·j_max))^⅓** | (성형 개입 → 편차 벌점) |
+| 5 | `trajectory.t` 단조증가, 스키마 준수 | `TIME_NOT_MONOTONIC` / `SCHEMA_ERROR` |
+| 6 | 재계획 이어붙임은 `current_state.json`의 **ref_state** 기준 (신선도 0.5s) | 파이프라인 error |
+
+### 회신 스키마 (`trajectory_report.json`, contract_version 0.1)
+
+```json
+{
+  "verdict": "accepted" | "rejected",
+  "reject_codes": [{"code": "...", "detail": "...", "value": 0.42, "limit": 0.3}],
+  "margins": {"vxy": 0.69, "axy": 0.53, "jxy": 0.17, "vz": 0.5, "az": 0.13, "jz": 0.01},
+  "shaping": {"deviation_max_m": 0.0, "xy_share_applied": 0.7, "jitter_delta_max_m": 0.28},
+  "trajectory": {"hash": "...", "duration_s": 34.3, "n_samples": 3435, "shaper": {...}},
+  "flight": null | {"track_rms_cm": 2.0, "att_peak_deg": 6.8,
+                    "tail_pitch_rms_deg": 0.001, "tail_roll_rms_deg": 0.0,
+                    "residual_mode_freq_hz": null},
+  "contract_version": "0.1"
+}
+```
+
+### RL 학습 신호로 쓰는 법 (권장)
+
+- **하드 제약**: `verdict=rejected` → 해당 액션 무효 (게이트가 어차피 차단).
+- **연속 벌점**: `margins.*`는 물리 한계 대비 피크 비율(1.0=한계) — 1.0에 붙을수록
+  여유 없는 궤도. `shaping.deviation_max_m`은 "요청과 실비행의 괴리" — 클수록
+  RL이 의도한 경로가 아님.
+- **성능 보상**: `flight.track_rms_cm`(추종 정밀도), `flight.tail_*`(도착 후 잔류
+  지터 — 짐 흔들림), `trajectory.duration_s`(속도) 트레이드오프.
+- reject_codes의 `code` 값은 안정 계약: 추가는 있어도 의미 변경/삭제는 없음.
+
 ## 공통 규칙
 
 - 대상 파일/키 못 찾으면 조용히 통과 금지 — **error()로 즉사** (저장소 규칙).
