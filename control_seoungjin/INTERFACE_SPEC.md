@@ -30,6 +30,12 @@ path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 
   "waypoint_mode": "stop",                 // 선택: "stop"(기본, 점마다 정지) |
                                            //   "fly_through"(무정지 통과 — 스플라인
                                            //   연속 경로 + 곡률 감속. 급코너는 자동 감속)
+  "waypoint_prep": {                       // 선택: 집합 전처리 (merge/divide)
+    "merge_dist": 0.01,                    //   근접점 병합 [m] (기본 1cm)
+    "collinear_tol": 0.05,                 //   일직선 중간점 병합 [m] — 정지 없이
+                                           //   순항 (일직선 5점 12.3→8.8s 실증)
+    "max_seg_len": null                    //   긴 구간 분할 [m]
+  },
   "shaper": {                              // 선택
     "mode": "zvd",                         //   "zv" | "zvd" (기본) | "none"(A/B 검증용 — 운용 금지)
     "f_mode_hz": 1.8                       //   짐 모드 주파수 (피드백으로 갱신됨)
