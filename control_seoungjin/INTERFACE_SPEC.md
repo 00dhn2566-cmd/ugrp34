@@ -1,9 +1,34 @@
-# control_seoungjin 통신 규격 v0.1 (2026-07-16)
+# control_seoungjin 통신 규격 v0.2 (2026-07-16~17)
 
 path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 파일 인터페이스 규격.
-폴더 규약: `input/` = 상위→여기 수신, `output/` = 여기↔하위 교환 (생성물, git 제외).
 모든 JSON은 UTF-8, **원자적 쓰기 필수**(임시파일→`os.replace`/rename — 반쯤 써진 JSON 읽기 방지).
 좌표는 world frame [m], z는 고도(+위), yaw는 [rad], 시각은 ISO 8601 로컬.
+
+## 0. 저장 경로 체계 (런타임 배치 — Python/C++/MATLAB/Gazebo 공통)
+
+**원칙: 파일 이름·스키마는 불변, 루트만 env로 이동. 루트는 "프로세스 그룹이
+돌아가는 쪽" 파일시스템에** (30Hz 파일을 OneDrive나 /mnt/c 너머로 쓰지 말 것 —
+sync/9p 잠금으로 원자적 rename 실패·지연).
+
+```
+$UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현행 그대로)
+  active/                     #   런타임 배치 시 권장 기본:
+    trajectory.mat/.json      #   Windows = %LOCALAPPDATA%\ugrp_drone
+    trajectory_report.json    #   Linux/WSL(Gazebo 단계) = ~/.ugrp_drone
+    current_state.json        # 30Hz — 반드시 로컬 fs (env UGRP_RT_DIR로 단독 이동 가능)
+    attitude_feedback.json
+    feedback_ledger.jsonl
+    param_estimate.json
+  runs/<flight_id>/           # 비행별 스냅샷 (sim_result·리포트·로그) — 골든 트레이스/사후 분석
+```
+
+- 개발(현재, 3세션 병행): env 미설정 → 전부 repo `control_seoungjin/output/` 플랫
+  (임무·비행 단위 저율이라 OneDrive 무해). **current_state만 예외** — 기본이
+  `%LOCALAPPDATA%\ugrp_drone\` (§5).
+- Gazebo 단계: 컨트롤러(C++)와 시뮬레이터가 같은 리눅스에 있으므로
+  `UGRP_IO_ROOT=~/.ugrp_drone` — Windows와의 교환은 runs/ 스냅샷 복사로만.
+- 동시 다중 시뮬 인스턴스: 인스턴스마다 별도 `UGRP_IO_ROOT` (active/는 단일 임무 전제).
+- `input/`(미션 JSON 예시)은 저장소에 유지 (재현·git 가치).
 
 ## 파일 목록
 

@@ -10,7 +10,7 @@
 - MATLAB 사용 전 여기서 점유 여부 확인 후 자기 줄로 선언 (1대 규칙, RAM 16GB)
 
 ## MATLAB 점유
-- **path_time 세션** — 07-17 00:20~ 매트릭스 v3 (5편 순차, ~30분). 끝나면 이 줄 비우고 튜닝 세션 큐(0kg A/B→명세 덤프→골든 로그) 차례.
+- **튜닝/C++ 세션** — 07-17 01:00~ 큐 순차: 0kg A/B → 명세 덤프 → 골든 로그 → smoother 재검증 (~20분). 끝나면 이 줄 비움.
 
 ## 튜닝/C++ 세션 (17차 계열)
 - 07-17 00:50 — ★소비: current_state 저장 경로 규칙 반영 완료 (qc_io::resolve_rt_dir — UGRP_RT_DIR→LOCALAPPDATA\ugrp_drone, 실검증). smoother 백포팅 재검증(diagnose_smoother)은 MATLAB 큐에 추가
@@ -22,6 +22,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-17 01:05 — 스텝 실패 진범: `quadcopter_waypoints_to_path_vis.m`의 `floor(dist)*4` — **1m 미만 세그먼트 = 시각화 점 0개** → Spline 컴파일 거부. 최소 2점 가드 패치 (서브미터 경로 쓰는 모든 세션 해당). 매트릭스 v3: fly_through 다항식판 합격(추종 1.3cm/tail 0.017°), ZVD tail 8배 저감(0.12→0.015°), 질량 0.06% 재현
 - 07-17 00:35 — current_state **저장 경로 규칙 확정** — 30Hz 파일은 OneDrive 밖 `env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone\` (repo output/은 sync 잠금으로 원자적 rename 실패 위험). INTERFACE_SPEC §5 [★소비됨: C++ 반영 완료 07-17 00:50]
 - 07-17 00:30 — traj_smoother.m에 vmax 저크 스파이크 테이퍼 백포팅 (6f43567) — Python판 등가 검증 완료 [★소비됨: 튜닝 세션 MATLAB 큐에 diagnose_smoother 재검증 추가]
 - 07-17 00:25 — 다항식 fly-through(통과 속도+구심 가속 BC, 중간점 정확 통과, 일직선 -30%) + 완화 계약 v0.2(클램프/재시간화, 거부 최소화) + 동적 지터 예산 + RDP 전처리. 테스트 72개
@@ -33,5 +34,6 @@
 
 ## 대기/예약 (세션 무관)
 - [MATLAB] 튜닝 세션: 0kg A/B(validate_phys_ab0) → 명세 덤프(dump_controller_spec) → 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) — 스크립트 준비 완료, 슬롯 나면 순차
+- [MATLAB] path_time 세션: 스텝 백스톱 1편 재비행 (`verify_pipeline.py --only step`, ~4분 — vis 서브미터 패치 검증, 매트릭스 마지막 ❌ 해소용)
 - [사용자] 푸시 2줄 (서브모듈 → 부모 순서)
 - [Docker] qc-cpp 컨테이너 빌드 (Desktop 기동 시)
