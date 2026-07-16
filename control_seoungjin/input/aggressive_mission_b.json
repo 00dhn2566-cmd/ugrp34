@@ -1,0 +1,18 @@
+{
+  "_comment": "A/B 검증의 B: A(셰이퍼 off)와 동일 미션 + ZVD 켬. f0은 attitude_feedback(used:false) 소비로 실측치 자동 반영됨.",
+  "waypoints": [
+    [0.0, 0.0, 2.0],
+    [2.0, 0.0, 2.0]
+  ],
+  "limits": {
+    "v_max": 1.1,
+    "a_max": 1.1,
+    "j_max": 4.9,
+    "snap_max": 60.0
+  },
+  "dt": 0.01,
+  "shaper": {
+    "mode": "zvd",
+    "f_mode_hz": 1.8
+  }
+}

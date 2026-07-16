@@ -160,6 +160,11 @@ def write_feedback(report, feedback_path=FEEDBACK_PATH, meta_path=META_PATH):
     return fb
 
 
+# 비행 유효성 임계: 추종 RMS가 이 값을 넘으면 비행 실패 = 측정치 무효
+# (발산 비행의 tail 신호는 짐 모드가 아니라 발산 과도 — 피드백 오염 방지)
+TRACK_RMS_VALID_CM = 30.0
+
+
 def main():
     ap = argparse.ArgumentParser(description="시뮬 로그 → 지터 검출 → 피드백 JSON")
     ap.add_argument("--mat", default=DEFAULT_MAT)
@@ -169,8 +174,13 @@ def main():
 
     report = analyze(args.mat)
     print(json.dumps(report, indent=2, ensure_ascii=False))
+    track = report["moving"]["track_rms_cm"]
+    if track is not None and track > TRACK_RMS_VALID_CM:
+        raise ValueError(
+            f"비행 실패 (추종 RMS {track:.0f}cm > {TRACK_RMS_VALID_CM}cm) -> "
+            "측정치 무효, 피드백 쓰지 않음. 발산 원인부터 해결할 것")
     if report["mode_freq_hz"] is None:
-        print("[정보] tail에서 진동 미검출 (영교차 부족) — 수렴 상태로 판단, "
+        print("[정보] tail에서 진동 미검출 (영교차 부족) -> 수렴 상태로 판단, "
               "피드백을 쓰지 않음 (추론 ③ 수렴 시 무수정)")
         return
     if not args.dry_run:

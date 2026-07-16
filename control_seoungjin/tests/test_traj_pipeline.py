@@ -71,6 +71,107 @@ def fb_env(tmp_path, monkeypatch):
     return fb_path, ledger
 
 
+class TestRawTrajectoryInput:
+    """원시 궤적(스텝 포함) 입구 — 'unit step이 오면 시간 부여해 ramp로'."""
+
+    def _step_mission(self, tmp_path):
+        t = [round(0.01 * i, 2) for i in range(1000)]     # 10s
+        pos = [[0.0, 0.0, 2.0] if ti < 2.0 else [1.0, 0.0, 2.0] for ti in t]
+        cfg = {"trajectory": {"t": t, "pos": pos},
+               "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0,
+                          "snap_max": 10.0},
+               "dt": 0.01, "shaper": {"mode": "zvd", "f_mode_hz": 1.8}}
+        p = tmp_path / "step.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        return str(p)
+
+    def test_unit_step_becomes_feasible_scurve(self, tmp_path, fb_env):
+        res = tp.run(self._step_mission(tmp_path), str(tmp_path / "out"))
+        # 게이트 통과 (스텝이 물리 추종 가능 궤적으로 성형됨)
+        assert res["gate_report"]["vxyPk"] <= tp.PHYS_VMAX * 1.001
+        assert res["gate_report"]["jxyPk"] <= tp.PHYS_JMAX * 1.001
+        # 종점 도달 + 과도 오버슈트 없음
+        x = res["shaped"][:, 0]
+        assert abs(x[-1] - 1.0) < 0.02
+        assert np.max(x) < 1.0 + 0.05
+
+    def test_waypoints_and_trajectory_both_rejected(self, tmp_path):
+        cfg = {"waypoints": [[0, 0, 1], [1, 0, 1]],
+               "trajectory": {"t": [0, 1], "pos": [[0, 0, 1], [1, 0, 1]]},
+               "limits": {"v_max": 1, "a_max": 1, "j_max": 2, "snap_max": 10}}
+        p = tmp_path / "both.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(KeyError, match="정확히 하나"):
+            tp.run(str(p), str(tmp_path / "out"))
+
+    def test_nonmonotonic_trajectory_rejected(self, tmp_path):
+        cfg = {"trajectory": {"t": [0, 1, 1, 2],
+                              "pos": [[0, 0, 1]] * 4},
+               "limits": {"v_max": 1, "a_max": 1, "j_max": 2, "snap_max": 10}}
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(ValueError, match="단조증가"):
+            tp.run(str(p), str(tmp_path / "out"))
+
+
+class TestCurrentState:
+    def _write_state(self, path, ts):
+        st = {"timestamp": ts,
+              "pos": [1.0, 1.0, 2.0], "vel": [0.5, 0.0, 0.0],
+              "acc": [0.1, 0.0, 0.0], "yaw_rad": 0.0,
+              "ref_state": {"pos": [1.02, 1.0, 2.0], "vel": [0.5, 0.0, 0.0],
+                            "acc": [0.1, 0.0, 0.0]}}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+        return st
+
+    def test_fresh_state_loaded(self, tmp_path):
+        from datetime import datetime
+        p = str(tmp_path / "current_state.json")
+        self._write_state(p, datetime.now().strftime(tp.TS_FMT + ".%f")[:-3])
+        st = tp.load_current_state(p)
+        assert st["ref_state"]["pos"] == [1.02, 1.0, 2.0]
+
+    def test_stale_state_rejected(self, tmp_path):
+        p = str(tmp_path / "current_state.json")
+        self._write_state(p, "2026-07-16T00-00-00.000")
+        with pytest.raises(ValueError, match="낡음"):
+            tp.load_current_state(p)
+
+    def test_missing_state_dies(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            tp.load_current_state(str(tmp_path / "nope.json"))
+
+    def test_splice_uses_ref_state_not_measured(self, tmp_path):
+        """평시 재계획은 ref_state 기준 — 측정 상태 사용은 피드백 성형 함정."""
+        from datetime import datetime
+        p = str(tmp_path / "current_state.json")
+        self._write_state(p, datetime.now().strftime(tp.TS_FMT + ".%f")[:-3])
+        st = tp.load_current_state(p)
+        wp, v0, a0 = tp.splice_waypoints_from_state(st, [[3.0, 3.0, 2.0]])
+        np.testing.assert_allclose(wp[0], [1.02, 1.0, 2.0])   # ref, 측정(1.0) 아님
+        np.testing.assert_allclose(v0, [0.5, 0.0, 0.0])
+        assert wp.shape == (2, 3)
+
+    def test_emergency_splice_uses_measured(self, tmp_path):
+        from datetime import datetime
+        p = str(tmp_path / "current_state.json")
+        self._write_state(p, datetime.now().strftime(tp.TS_FMT + ".%f")[:-3])
+        st = tp.load_current_state(p)
+        wp, v0, a0 = tp.splice_waypoints_from_state(
+            st, [[3.0, 3.0, 2.0]], emergency=True)
+        np.testing.assert_allclose(wp[0], [1.0, 1.0, 2.0])    # 측정 pos
+
+    def test_replan_end_to_end_gate_passes(self, mission, tmp_path):
+        """이어붙인 초기조건(v0!=0)으로도 체인 전체가 게이트를 통과."""
+        _, cfg = mission
+        st = {"ref_state": {"pos": [0.0, 0.0, 1.0], "vel": [0.3, 0.0, 0.0],
+                            "acc": [0.0, 0.0, 0.0]}}
+        wp, v0, a0 = tp.splice_waypoints_from_state(st, cfg["waypoints"][1:])
+        res = tp.build_trajectory(cfg, wp, 1.8, v0=v0, a0=a0)
+        assert res["gate_report"]["vxyPk"] <= tp.PHYS_VMAX * 1.001
+
+
 class TestFeedbackHandshake:
     def test_used_false_consumed_marked_and_ledgered(self, mission, tmp_path, fb_env):
         path, _ = mission
