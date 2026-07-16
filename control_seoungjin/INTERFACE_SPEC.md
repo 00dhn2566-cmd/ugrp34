@@ -121,6 +121,33 @@ path_time 파이프라인 ↔ 상위(경로계획) ↔ 하위(컨트롤러) 간 
   함정, 성형기 원칙 1 위반). 측정 상태는 비상 이탈 재계획에만 + 스플라이스 온건(Tm≥0.9s).
 - **신선도 검사**: timestamp 나이 > 0.5s면 error() 즉사 (낡은 상태 이어붙이기 = 점프 = 미분킥).
 
+## 6. 플랜트 상수 추정 (`output/param_estimate.json`)
+
+`estimate_params.py`가 시뮬 로그(모터 입력 w/T ↔ 센서 출력 자세/vz) 회귀로 생성.
+용도: 짐 탑재·프롭 교체·배터리 새그 시 재튜닝 없이 계수 재추정 → parameters.m의
+`sT`/`sQ` 정규화 스케일로 게인 자동 보상 (강건 제어의 적응 요소).
+
+```json
+{
+  "estimated_at": "...", "trajectory_hash": "...",
+  "r2_confident_threshold": 0.9,
+  "estimates": {
+    "k_thrust_lumped": {"value": ..., "unit": "N/(rad/s)^2", "r2": ..., "confident": true},
+    "k_drag_lumped":  {"value": ..., "assumes": {"Izz_nominal": ...}, ...},
+    "mass_kg":        {"value": ..., "note": "기체+짐 총질량 (추력 로그 직접 회귀)"},
+    "inertia": {"Ixx": {..., "assumes": {"arm_length_m": ...}}, "Iyy": {...}, "Izz": {...}}
+  }
+}
+```
+
+- **추정 원리**: 질량 = z 평형(m·(z̈+g)=ΣT·cosφcosθ, K 무관) / K̂_thrust = T↔w² 회귀 /
+  K̂_drag·Îzz = yaw 각가속↔차동 w² 회귀 (상보 — 한쪽 공칭 전제) / Îxx·Îyy = roll·pitch
+  각가속↔차동 추력 회귀 (팔길이 전제). 프로펠러 배치 부호는 후보 조합 최고 R² 자동 선택.
+- **소비 규칙**: `confident:true`(R²≥0.9) 항목만 반영. parameters.m 반영은 급변 방지
+  램프/저역 필터 권장 (핸드오프 K-추정기 스펙).
+- `k_thrust_lumped`는 집중계수(T/w²) — parameters.m의 `propeller.Kthrust`(블록 공식
+  계수)와 단위가 다르므로 **비율로만 사용** (sT = 기준치/새치는 비율이라 무관).
+
 ## 공통 규칙
 
 - 대상 파일/키 못 찾으면 조용히 통과 금지 — **error()로 즉사** (저장소 규칙).
