@@ -4,7 +4,7 @@
 
 | 문서 | 내용 |
 |---|---|
-| [INTERFACE_SPEC.md](INTERFACE_SPEC.md) | **통신 규격 v0.1** — 경로 JSON/궤적/피드백/원장/실시간 상태/추정기/RL 궤도 계약 (구속력 있는 원본) |
+| [INTERFACE_SPEC.md](INTERFACE_SPEC.md) | **통신 규격 v0.2** — 저장 경로 체계(§0)/경로 JSON/궤적/피드백/원장/실시간 상태(§5)/추정기(§6)/RL 궤도 계약(§7) (구속력 있는 원본) |
 | [PIPELINE_STATUS.md](PIPELINE_STATUS.md) | path_time 파이프라인 구축 상태 (path_time 세션 관리) |
 | [docs/HANDOFF_PATH_TO_CONTROLLER.md](docs/HANDOFF_PATH_TO_CONTROLLER.md) | 경로→컨트롤러 파이프라인 인수인계 (스무더/게이트/ZV 스펙, 튜닝 현황) |
 | [docs/HANDOFF_PATHTIME_PIPELINE.md](docs/HANDOFF_PATHTIME_PIPELINE.md) | path_time 세션 착수 문서 (자립형) |
@@ -65,8 +65,24 @@
   | `spline_data` | (N, 3) | x, y, z 위치 [m] |
   | `spline_yaw` | (N,) | yaw [rad] |
 
+## path_time 파이프라인 모듈 (경로 JSON → 컨트롤러 궤적, 2026-07-16 구축)
+
+`traj_pipeline.py`를 입구로 하는 체인. 인터페이스는 [INTERFACE_SPEC.md](INTERFACE_SPEC.md), 구축 기록은 [PIPELINE_STATUS.md](PIPELINE_STATUS.md) 참고.
+
+| 파일 | 역할 |
+|---|---|
+| [traj_pipeline.py](traj_pipeline.py) | 체인 본체: `input/*.json` → 시간 부여(plan) → 스무더 → ZV/ZVD → 게이트 → `output/trajectory.{mat,json}` + `pipeline_meta.json`. 배치 스플라이스·동적 지터 예산·피드백 소비 포함 |
+| [traj_shaping.py](traj_shaping.py) | 성형기: `traj_smoother`(포락선) / `traj_zv`(ZV·ZVD 셰이퍼) / `traj_gate`(v/a/j/snap 게이트) — MATLAB `Scripts_Data/traj_smoother.m`과 등가 유지 |
+| [path_time.py](path_time.py) | 시간 부여 코어 (`path_time.ipynb`에서 추출): arc-length 재매개변수화·곡률·속도 프로파일·7차 다항식 `plan_waypoints`/fly-through. `sample/`과 파이프라인이 공용 |
+| [analyze_flight_log.py](analyze_flight_log.py) | 비행 로그 → 잔류 지터 분석 → `attitude_feedback.json` (INTERFACE_SPEC §3) |
+| [estimate_params.py](estimate_params.py) | 모터입력↔센서출력 회귀로 질량/K_thrust/K_drag/관성 추정 → `param_estimate.json` (§6 — 가드레일 3종 준수) |
+| [traj_report.py](traj_report.py) | RL 계약 회신 `trajectory_report.json` (§7 — reject_codes/adjustments/margins) |
+| [verify_pipeline.py](verify_pipeline.py) | 검증 매트릭스 러너 (미션 5편 × MATLAB 실비행, `--only`/`--static`) |
+| `input/` / `output/` | 미션 JSON 입구 / 산출물 (output은 gitignore) |
+| `tests/` | pytest 74개 — `python -m pytest tests/ -q` (control_seoungjin/에서) |
+
 ## path_time.py
-`path_time.ipynb`의 핵심 함수(arc-length 재매개변수화, 곡률, 속도 프로파일, `plan_waypoints` 등)만 검증/플롯 코드 없이 정리한 재사용 가능한 모듈입니다. `sample/`의 스크립트들이 이 모듈을 import해서 씁니다.
+`path_time.ipynb`의 핵심 함수(arc-length 재매개변수화, 곡률, 속도 프로파일, `plan_waypoints` 등)만 검증/플롯 코드 없이 정리한 재사용 가능한 모듈입니다. `sample/`의 스크립트들과 `traj_pipeline.py`가 이 모듈을 import해서 씁니다.
 
 ## sample/
 FX450 CAD/모델 검증용 샘플 궤적 생성 및 Simscape 시뮬레이션 실행 폴더입니다.

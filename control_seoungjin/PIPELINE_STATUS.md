@@ -1,6 +1,6 @@
 # path_time 파이프라인 구축 상태 (2026-07-16 세션)
 
-HANDOFF_PATHTIME_PIPELINE.md의 착수 순서를 따라 구축. 이 문서는 산출물 목록 + 세션 중 발견사항 기록.
+[docs/HANDOFF_PATHTIME_PIPELINE.md](docs/HANDOFF_PATHTIME_PIPELINE.md)의 착수 순서를 따라 구축. 이 문서는 산출물 목록 + 세션 중 발견사항 기록.
 
 ## 만든 것
 
@@ -10,9 +10,11 @@ HANDOFF_PATHTIME_PIPELINE.md의 착수 순서를 따라 구축. 이 문서는 �
 | `traj_pipeline.py` | 체인 본체: `input/*.json` → plan_waypoints → 균일 재샘플 → 스무더 → ZV/ZVD → 게이트 → `output/trajectory.mat`·`trajectory.json`·`pipeline_meta.json`. attitude_feedback used 핸드셰이크 포함 |
 | `input/example_mission.json` | 경로 JSON 스키마 예시 (INPUT_FORMAT.md 확장: `shaper` 블록 추가) |
 | `analyze_flight_log.py` | 지터 검출기(쓰기 측): sim_result_baked.mat → tail RMS·영교차 주파수·사인 피팅(amp/phase) → attitude_feedback.json (used:false) |
-| `INTERFACE_SPEC.md` | 통신 규격 v0.1 — 5개 파일 인터페이스(경로 JSON/궤적/피드백/원장/실시간 상태) |
+| `INTERFACE_SPEC.md` | 통신 규격 v0.2 — 저장 경로 체계(§0) + 7개 인터페이스(경로 JSON/궤적/피드백/원장/실시간 상태/추정기/RL 계약) |
+| `traj_report.py` | RL 계약 회신 trajectory_report.json (§7 — reject_codes/adjustments/margins) |
+| `verify_pipeline.py` | 검증 매트릭스 러너 (5편 × MATLAB 실비행, 타 MATLAB 감지 시 중단) |
 | `estimate_params.py` | 플랜트 상수 추정기: 모터 입력↔센서 출력 회귀 → K̂_thrust/K̂_drag/질량/Îxx·Îyy·Îzz + R² 신뢰도 → `output/param_estimate.json` (INTERFACE_SPEC §6) |
-| `tests/` | 단위·통합 테스트 45개 (`python -m pytest tests/ -q`, control_seoungjin/에서) |
+| `tests/` | 단위·통합 테스트 74개 (`python -m pytest tests/ -q`, control_seoungjin/에서) |
 
 ## 설계 결정 (사용자 확정 반영)
 
@@ -144,10 +146,28 @@ Bias Load 피드포워드 과잉 → 드리프트/링잉. 투하 비활성화 �
   수렴 시 요청 스펙 그대로, >2° 마진 0.30, >4° 0.35로 유효 한계 자동 온건화.
   승인 기준(0.2)은 불변 (RL 계약 정상성). 투하 오염 원장은 폐기, 루프 클린 재시작.
 
+## 검증 매트릭스 v3 최종 (2026-07-17 심야, 게인 17차 확정 후 — 성적표)
+
+| 미션 | 판정 | 핵심 수치 |
+|---|---|---|
+| 정지형 배치 | ✅ | 추종 1.3cm / 종점 0mm 전축 / tail 0.000° |
+| fly_through (다항식판) | ✅ | 추종 1.3cm / tail 0.017° — 중간점 풀스피드 정확 통과, 일직선 −30% 시간 단축 |
+| 지터 A (셰이퍼 off) | ✅ | tail 0.12° (기준선) |
+| 지터 B (ZVD@1.8) | ✅ | tail 0.015° — **A 대비 8배 저감** (무투하 클린 데이터로 셰이퍼 효과 확증) |
+| 추정기 | ✅ | 질량 2.2712kg (실측 대비 0.06%, R² 0.98) / K̂_thrust R² 1.0 |
+| 스텝 백스톱 | 🔁 재비행 대기 | 진범 확정: path_vis `floor(dist)*4`=0 (1m 미만 세그먼트) → 최소 2점 가드 패치 완료. `verify_pipeline.py --only step` 큐 등록 (생성·게이트는 통과 상태) |
+
+## controller_profile 동봉 (2026-07-17, 튜닝 세션 ★ 소비)
+
+경로 JSON 선택 필드 `controller_profile`(`precision` 기본/`balanced`/`agile`) —
+검증 후 산출물 3종(trajectory.mat/.json + pipeline_meta.json)에 동봉. 값의 진실은
+parameters.m `ctrl_profile` / C++ `qc_apply_profile`(튜닝 세션 소관), 파이프라인은
+운반만. INTERFACE_SPEC §1·§2 갱신, 테스트 2건 추가 (74개).
+
 ## 남은 일
 
-- [ ] tail hold 실행 로그로 지터 루프 1바퀴 실증 (analyze → feedback → pipeline 소비 → f0 갱신)
+- [ ] **스텝 백스톱 1편 재비행** (`python verify_pipeline.py --only step`, ~4분) — path_vis 서브미터 패치 검증, 매트릭스 마지막 🔁 해소 (SESSIONS_BOARD 큐 등록됨)
 - [ ] counter_swing_offset 파이프라인 연결 (스윙 교정 상수 확보 후 — `diagnose_swing_calib.m`)
 - [ ] attitude_feedback ① 추론(tail RMS→해당 구간 Tm 연장) — 구간 매핑 설계 후
-- [ ] current_state.json 신선도 검사 + ref_state 이어붙이기 재계획
-- [ ] MATLAB 백포팅 2건 (위 발견사항) — diagnose_smoother.m 재검증과 함께
+- [ ] 촘촘 곡선 fly-through 보수적 감속 최적화 (현재 안전 폴백으로 감속 수용 — 백로그)
+- [ ] MATLAB 백포팅 잔여 1건 (종점 헌팅 리밋사이클) — vmax 테이퍼는 백포팅 완료(6f43567), diagnose_smoother 재검증은 튜닝 세션 큐에 있음

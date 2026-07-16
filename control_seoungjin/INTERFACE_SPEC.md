@@ -64,7 +64,12 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   "shaper": {                              // 선택
     "mode": "zvd",                         //   "zv" | "zvd" (기본) | "none"(A/B 검증용 — 운용 금지)
     "f_mode_hz": 1.8                       //   짐 모드 주파수 (피드백으로 갱신됨)
-  }
+  },
+  "controller_profile": "precision"        // 선택: "precision"(기본) | "balanced" | "agile"
+                                           //   — 컨트롤러 위치 게인 프로파일 (임무 단위 전환,
+                                           //   튜닝 세션 계약 v1). 값의 진실은 parameters.m
+                                           //   ctrl_profile / C++ qc_apply_profile. 파이프라인은
+                                           //   검증 후 산출물 3종(.mat/.json/meta)에 동봉만 한다.
 }
 ```
 
@@ -105,8 +110,9 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
 | `spline_yaw` | (N,1) | yaw [rad], 진행방향 기준 |
 | `waypoints` | (M,3) | 경유점 — **Waypoints 블록은 3×M이라 MATLAB에서 전치** |
 | `jitter_delta` | (N,3) | 지터 상쇄 레이어 (최종 = 스무딩 + delta). 학습 루프가 이 레이어만 갱신 |
+| `controller_profile` | char | 게인 프로파일 (`precision`/`balanced`/`agile`) — 컨트롤러가 로드 시 `ctrl_profile`로 적용 |
 
-`trajectory.json`: `{dt, trajectory_hash, t[], pos[][3], yaw_rad[]}`.
+`trajectory.json`: `{dt, trajectory_hash, controller_profile, t[], pos[][3], yaw_rad[]}`.
 `pipeline_meta.json`(부속): 예산·스무더 개입량·게이트 리포트·`trajectory_hash`.
 **`trajectory_hash`** = sha256(t, pos) 앞 16자리 — 피드백이 어느 궤적의 실측인지 대조하는 열쇠.
 

@@ -73,6 +73,43 @@ class TestPipeline:
         with pytest.raises(KeyError, match="limits"):
             tp.run(str(p), str(tmp_path / "out"))
 
+    def test_controller_profile_passthrough(self, tmp_path, fb_env):
+        """controller_profile은 산출물 3종에 동봉 (튜닝 세션 계약 v1)."""
+        cfg = {
+            "waypoints": [[0, 0, 1], [1, 0, 1]],
+            "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0},
+            "controller_profile": "agile",
+        }
+        p = tmp_path / "prof.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        out = str(tmp_path / "out")
+        tp.run(str(p), out)
+        tj = json.loads(open(os.path.join(out, "trajectory.json"),
+                             encoding="utf-8").read())
+        meta = json.loads(open(os.path.join(out, "pipeline_meta.json"),
+                               encoding="utf-8").read())
+        assert tj["controller_profile"] == "agile"
+        assert meta["controller_profile"] == "agile"
+        from scipy.io import loadmat
+        mat = loadmat(os.path.join(out, "trajectory.mat"))
+        assert str(mat["controller_profile"][0]) == "agile"
+
+    def test_controller_profile_default_and_invalid(self, tmp_path, fb_env):
+        base = {
+            "waypoints": [[0, 0, 1], [1, 0, 1]],
+            "limits": {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0},
+        }
+        p = tmp_path / "default.json"
+        p.write_text(json.dumps(base), encoding="utf-8")
+        cfg, _ = tp.load_mission(str(p))
+        assert cfg["controller_profile"] == "precision"
+
+        bad = dict(base, controller_profile="turbo")
+        p2 = tmp_path / "bad_prof.json"
+        p2.write_text(json.dumps(bad), encoding="utf-8")
+        with pytest.raises(ValueError, match="controller_profile"):
+            tp.load_mission(str(p2))
+
 
 @pytest.fixture
 def fb_env(tmp_path, monkeypatch):

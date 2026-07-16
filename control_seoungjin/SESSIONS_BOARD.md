@@ -10,7 +10,7 @@
 - MATLAB 사용 전 여기서 점유 여부 확인 후 자기 줄로 선언 (1대 규칙, RAM 16GB)
 
 ## MATLAB 점유
-- (비어 있음) — 07-17 01:55 튜닝 세션 명세 덤프 완료·해제 (오늘 마감, 사용자 지시). 다음 차례: path_time 스텝 백스톱 재비행.
+- **path_time 세션** — 07-17 02:00~ 스텝 백스톱 1편 재비행 (`verify_pipeline.py --only step`, ~4분, 02:05경 완료 예상). 세션 마감 직전 실행 — 결과는 `output/verification_matrix.json`·`sim_result_step.mat`에 자동 기록되니, 이 세션이 못 비우고 끝나면 02:10 이후 이 줄 무효 간주하고 지워도 됨.
 
 ## 튜닝/C++ 세션 (17차 계열)
 - 07-17 01:45 — **⚠ 전 세션 공유: 0kg(생 드론) 레짐 붕괴 실측** — 정규화 ON/OFF 무관 준발산(오버슈트 2m/43m, ON이 그나마 방어). 1kg 튜닝 시스템이 0kg에서 무너짐 = **드롭 후 복귀 구간 미지원**. 붕괴는 0.5~0kg 사이(0.5kg은 정상) — 중간 질량 탐침으로 국소화 예정. 드롭/복귀 시나리오 테스트 금지 권고 (validate_phys_ab0.csv)
@@ -24,7 +24,9 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
-- 07-17 01:40 — MATLAB 슬롯 인수(사용자 통보 "빔") → 스텝 백스톱 재비행 착수 — path_vis 서브미터 최소 2점 가드 패치 검증, 매트릭스 v3 마지막 ❌ 해소용
+- 07-17 02:00 — 슬롯 인수(튜닝 세션 해제 확인) → 스텝 백스톱 재비행 백그라운드 착수. 판독 기준: verification_matrix.json의 step 항목 ✅ + 추종 RMS cm급이면 매트릭스 v3 완결
+- 07-17 01:55 — **세션 마감 정리**: ★소비: `controller_profile` 필드 반영 완료 — §1 스키마 + 산출물 3종(.mat/.json/meta) 동봉, 기본 precision, 테스트 74개 통과. README 모듈 지도/문서표 갱신(v0.2), PIPELINE_STATUS 매트릭스 v3 성적표 확정. 스텝 재비행은 미실행(01:40 착수분은 튜닝 세션 MATLAB 감지로 가드 중단) → 대기/예약 재등록
+- 07-17 01:40 — MATLAB 슬롯 인수 시도 → 튜닝 세션 선점 감지로 가드 중단 (verify_pipeline 타 MATLAB 감지 정상 작동). 스텝 재비행은 큐 유지
 - 07-17 01:05 — 스텝 실패 진범: `quadcopter_waypoints_to_path_vis.m`의 `floor(dist)*4` — **1m 미만 세그먼트 = 시각화 점 0개** → Spline 컴파일 거부. 최소 2점 가드 패치 (서브미터 경로 쓰는 모든 세션 해당). 매트릭스 v3: fly_through 다항식판 합격(추종 1.3cm/tail 0.017°), ZVD tail 8배 저감(0.12→0.015°), 질량 0.06% 재현
 - 07-17 00:35 — current_state **저장 경로 규칙 확정** — 30Hz 파일은 OneDrive 밖 `env UGRP_RT_DIR → %LOCALAPPDATA%\ugrp_drone\` (repo output/은 sync 잠금으로 원자적 rename 실패 위험). INTERFACE_SPEC §5 [★소비됨: C++ 반영 완료 07-17 00:50]
 - 07-17 00:30 — traj_smoother.m에 vmax 저크 스파이크 테이퍼 백포팅 (6f43567) — Python판 등가 검증 완료 [★소비됨: 튜닝 세션 MATLAB 큐에 diagnose_smoother 재검증 추가]

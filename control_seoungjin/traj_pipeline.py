@@ -74,6 +74,9 @@ F_MODE_DEFAULT = 1.80
 # tail 12.25° vs 1.8Hz 고수 9.93°). 대역 밖이면 갱신 거부 + 경고.
 F_MODE_BAND_HZ = (1.0, 3.0)
 SHAPER_DEFAULT = "zvd"          # 주파수 오차 강건 (핸드오프 권장 후보)
+# 컨트롤러 게인 프로파일 (튜닝 세션 계약 v1, 2026-07-17): 값의 진실은
+# parameters.m ctrl_profile switch / C++ qc_apply_profile — 여기선 검증·동봉만.
+CONTROLLER_PROFILES = ("precision", "balanced", "agile")
 # 원시 궤적 완화 정책 (계약 v0.2): 성형 편차가 TOL을 넘으면 거부 대신
 # "경로 보존 재시간화" — 공간 경로만 추출(RDP ε)해 시간을 새로 배분.
 # 경로 이탈 ~ε로 의도 보존, 소요시간 팽창률(dilation)을 벌점 신호로 회신.
@@ -174,6 +177,16 @@ def load_mission(path):
     for key in ("v_max", "a_max", "j_max", "snap_max"):
         if key not in lim:
             raise KeyError(f"limits에 필수 키 '{key}' 없음: {path}")
+
+    # 컨트롤러 게인 프로파일 (튜닝 세션 계약, 2026-07-17): 미션 단위로
+    # parameters.m ctrl_profile / C++ qc_apply_profile을 전환. 미지정=precision.
+    # 파이프라인은 검증·동봉만 하고 값 자체는 컨트롤러 측이 소비한다.
+    profile = cfg.get("controller_profile", "precision")
+    if profile not in CONTROLLER_PROFILES:
+        raise ValueError(
+            f"controller_profile='{profile}' 미지원 - "
+            f"{sorted(CONTROLLER_PROFILES)} 중 하나여야 함: {path}")
+    cfg["controller_profile"] = profile
 
     # 한계 예산: 계획 한계 <= (1-JITTER_MARGIN)·물리 한계 (snap 포함).
     # 완화 정책 (사용자 확정, 계약 v0.2): 초과분은 거부 대신 상한으로 클램프
@@ -745,17 +758,20 @@ def save_outputs(res, waypoints, out_dir=OUTPUT_DIR):
     os.makedirs(out_dir, exist_ok=True)
 
     mat_path = os.path.join(out_dir, "trajectory.mat")
+    profile = res.get("controller_profile", "precision")
     savemat(mat_path, {
         "timespot_spl": res["t"].reshape(-1, 1),
         "spline_data": res["shaped"],
         "spline_yaw": res["yaw"].reshape(-1, 1),
         "waypoints": np.asarray(waypoints, float),
         "jitter_delta": res["delta"],
+        "controller_profile": profile,
     })
 
     _atomic_write_json(os.path.join(out_dir, "trajectory.json"), {
         "dt": res["dt"],
         "trajectory_hash": res["trajectory_hash"],
+        "controller_profile": profile,
         "t": res["t"].tolist(),
         "pos": res["shaped"].tolist(),
         "yaw_rad": res["yaw"].tolist(),
@@ -767,6 +783,7 @@ def save_outputs(res, waypoints, out_dir=OUTPUT_DIR):
         "phys_limits": {"v_max": PHYS_VMAX, "a_max": PHYS_AMAX,
                         "j_max": PHYS_JMAX},
         "jitter_margin": JITTER_MARGIN,
+        "controller_profile": profile,
         "shaper": {"mode": res["shaper_mode"], "f_mode_hz": res["f_mode"]},
         "smoother": {
             "max_dev_m": float(np.max(info_sm["maxDev"])),
@@ -791,6 +808,7 @@ def run(input_path, out_dir=OUTPUT_DIR):
     f_mode = float(cfg.get("shaper", {}).get("f_mode_hz", F_MODE_DEFAULT))
     f_mode, fb = consume_attitude_feedback(f_mode)
     res = build_trajectory(cfg, waypoints, f_mode)
+    res["controller_profile"] = cfg["controller_profile"]
     if waypoints is None:
         # 원시 궤적 입구: 시각화용 경유점 = 경로의 RDP(5cm) 대표점.
         # 일직선 경로는 양끝 2점(공선 3점 이상을 주면 Ground/Trajectory/
