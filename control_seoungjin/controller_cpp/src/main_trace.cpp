@@ -13,6 +13,7 @@
 // 스모크: qc_trace.exe --smoke   (합성 스텝 입력 100스텝, 수치 정상 여부만 확인)
 
 #include "qc_controller.hpp"
+#include "qc_io.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -44,10 +45,60 @@ static int run_smoke() {
     return ok ? 0 : 1;
 }
 
+// --io-test <trajectory.json> <out_dir>: INTERFACE_SPEC 계약 왕복 검증
+//   §2 로드/샘플 → §5 current_state.json 1회 기록 → §3 합성 지터로 attitude_feedback 기록
+static int run_io_test(const char* trajPath, const char* outDir) {
+    std::string err;
+    qcio::Trajectory tr;
+    if (!qcio::load_trajectory(trajPath, tr, err)) {
+        std::fprintf(stderr, "궤적 로드 실패: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("궤적 로드: N=%zu dt=%.4f dur=%.2fs hash=%s\n",
+                tr.t.size(), tr.dt, tr.duration(), tr.hash.c_str());
+
+    const qcio::RefSample mid = qcio::sample_trajectory(tr, tr.duration() * 0.5);
+    std::printf("중간점 샘플: pos=[%.3f %.3f %.3f] vel=[%.3f %.3f %.3f]\n",
+                mid.pos[0], mid.pos[1], mid.pos[2], mid.vel[0], mid.vel[1], mid.vel[2]);
+
+    qcio::CurrentState st{};
+    for (int i = 0; i < 3; ++i) { st.pos[i] = mid.pos[i]; st.vel[i] = mid.vel[i]; st.acc[i] = mid.acc[i]; }
+    st.yaw = mid.yaw; st.ref = mid;
+    const std::string statePath = std::string(outDir) + "/current_state.json";
+    if (!qcio::write_current_state(statePath, st, err)) {
+        std::fprintf(stderr, "current_state 기록 실패: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("current_state 기록: %s\n", statePath.c_str());
+
+    // 합성 tail 지터(1.8Hz, 1.5도)로 분석기 왕복 확인
+    qcio::FlightLogger lg;
+    lg.tArrive = 2.0;
+    const double amp = 1.5 * 3.14159265358979323846 / 180.0;
+    for (double tt2 = 0; tt2 < 8.0; tt2 += 0.005) {
+        const double pit = (tt2 < 2.0) ? 0.1 * std::sin(2*3.141592653589793*0.5*tt2)
+                                       : amp * std::sin(2*3.141592653589793*1.8*(tt2-2.0));
+        lg.push(tt2, pit, 0.3*pit, 0.02);
+    }
+    const auto fb = lg.analyze();
+    std::printf("합성 지터 분석: f=%.3fHz (기대 1.8) tailRMS=%.3f도 (기대 ~1.06) amp=%.3f도 valid=%d\n",
+                fb.modeFreqHz, fb.tailPitchRmsDeg, fb.ampDeg, (int)fb.valid);
+    const std::string fbPath = std::string(outDir) + "/attitude_feedback_cpp.json";
+    if (!qcio::write_attitude_feedback(fbPath, fb, tr.hash, err)) {
+        std::fprintf(stderr, "feedback 기록 실패: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("attitude_feedback 기록: %s\n", fbPath.c_str());
+    const bool ok = std::fabs(fb.modeFreqHz - 1.8) < 0.1 && fb.valid;
+    std::printf("%s\n", ok ? "IO 테스트 통과" : "IO 테스트 실패 (지표 확인)");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--smoke") == 0) return run_smoke();
+    if (argc >= 4 && std::strcmp(argv[1], "--io-test") == 0) return run_io_test(argv[2], argv[3]);
     if (argc < 3) {
-        std::fprintf(stderr, "사용: qc_trace <input.csv> <output.csv> | --smoke\n");
+        std::fprintf(stderr, "사용: qc_trace <input.csv> <output.csv> | --smoke | --io-test <trajectory.json> <out_dir>\n");
         return 2;
     }
     std::FILE* fi = std::fopen(argv[1], "r");

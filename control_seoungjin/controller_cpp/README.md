@@ -16,6 +16,20 @@
 스모크에서 확인된 것: qc_phys 물성 합성이 MATLAB과 일치(스케일 5종=1.0),
 posErrSat 곱 불변식(최대 명령 기울기 16.8°) 재현.
 
+## 인터페이스 계약 (INTERFACE_SPEC v0.1 대응 — qc_io)
+
+| 스펙 | 파일 | 역할 | 상태 |
+|---|---|---|---|
+| §2 | `output/trajectory.json` | 소비 — 참조 궤적 로드 + 선형보간 샘플러 (`sample_trajectory`, 후방차분 vel/acc) | ✅ 실파일 검증 |
+| §5 | `output/current_state.json` | 생산 — 상시 20~50Hz, 원자적 쓰기(tmp→rename), ref_state 동봉 | ✅ 파이썬 파서 교차 검증 |
+| §3 | `output/attitude_feedback.json` | 생산 — 비행 후 1회 (`FlightLogger`: tail RMS·영교차 주파수·사인 피팅), used:false, 유효성 게이트(추종 RMS>30cm 거부) | ✅ 합성 지터 왕복 검증 |
+| §6 | `output/param_estimate.json` | (예정) 비율 소비 — 가드레일 3종 준수 필수 | 미착수 |
+
+타임스탬프는 `traj_pipeline.py`의 `TS_FMT`(`%Y-%m-%dT%H-%M-%S[.mmm]`, 콜론→하이픈)와
+동일 — C++ 산출물을 파이썬 파이프라인이 그대로 읽음을 확인함.
+경계: `qc_controller`(비행 루프)는 힙 금지, `qc_io`(컴패니언 측)는 std 컨테이너 허용.
+제어 루프 안에서 IO 호출 금지 — 궤적은 이륙 전 로드, 상태 쓰기는 저주기/별도 스레드.
+
 ## 파일
 
 - `include/qc_controller.hpp` — 설정(QcConfig)/상태(QcState)/스텝(qc_step). 물성 정규화

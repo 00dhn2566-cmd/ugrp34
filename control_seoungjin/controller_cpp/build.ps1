@@ -5,6 +5,6 @@ $gxx = "C:\msys64\mingw64\bin\g++.exe"
 if (-not (Test-Path $gxx)) { Write-Error "g++ 없음: $gxx"; exit 1 }
 $root = $PSScriptRoot
 & $gxx -std=c++17 -O2 -Wall -Wextra -static -I "$root\include" `
-    "$root\src\qc_controller.cpp" "$root\src\main_trace.cpp" `
+    "$root\src\qc_controller.cpp" "$root\src\qc_io.cpp" "$root\src\main_trace.cpp" `
     -o "$root\qc_trace.exe"
 if ($LASTEXITCODE -eq 0) { Write-Host "빌드 성공: $root\qc_trace.exe" } else { exit $LASTEXITCODE }
