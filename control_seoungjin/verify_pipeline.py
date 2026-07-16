@@ -108,6 +108,10 @@ def run_matrix(only=None, static=False):
                                     cwd=SUB, stdout=f, stderr=f).returncode
             row["matlab_exit"] = rc
             row.update(_parse_tracking(log))
+            # 미션별 mat 보존 (추정기/사후 분석용 — 다음 비행이 덮어쓰므로)
+            mat = os.path.join(SUB, "sim_result_baked.mat")
+            if os.path.isfile(mat):
+                shutil.copy(mat, os.path.join(SUB, f"sim_result_{name}.mat"))
             try:
                 fl = analyze(os.path.join(SUB, "sim_result_baked.mat"))
                 row["tail_pitch_rms_deg"] = fl["tail"]["pitch_rms_deg"]
