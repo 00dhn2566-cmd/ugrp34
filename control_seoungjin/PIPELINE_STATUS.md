@@ -155,7 +155,7 @@ Bias Load 피드포워드 과잉 → 드리프트/링잉. 투하 비활성화 �
 | 지터 A (셰이퍼 off) | ✅ | tail 0.12° (기준선) |
 | 지터 B (ZVD@1.8) | ✅ | tail 0.015° — **A 대비 8배 저감** (무투하 클린 데이터로 셰이퍼 효과 확증) |
 | 추정기 | ✅ | 질량 2.2712kg (실측 대비 0.06%, R² 0.98) / K̂_thrust R² 1.0 |
-| 스텝 백스톱 | 🔁 재비행 대기 | 진범 확정: path_vis `floor(dist)*4`=0 (1m 미만 세그먼트) → 최소 2점 가드 패치 완료. `verify_pipeline.py --only step` 큐 등록 (생성·게이트는 통과 상태) |
+| 스텝 백스톱 | ✅ (07-17 02:05 재비행) | 추종 2.79cm / tail 0.018° — path_vis 서브미터 최소 2점 가드 패치 유효. 재시간화 정상(스텝→S-커브, 팽창 x0.30, 경로 이탈 0.0cm). **매트릭스 v3 전 항목 완결** |
 
 ## controller_profile 동봉 (2026-07-17, 튜닝 세션 ★ 소비)
 
@@ -166,7 +166,6 @@ parameters.m `ctrl_profile` / C++ `qc_apply_profile`(튜닝 세션 소관), 파�
 
 ## 남은 일
 
-- [ ] **스텝 백스톱 1편 재비행** (`python verify_pipeline.py --only step`, ~4분) — path_vis 서브미터 패치 검증, 매트릭스 마지막 🔁 해소 (SESSIONS_BOARD 큐 등록됨)
 - [ ] counter_swing_offset 파이프라인 연결 (스윙 교정 상수 확보 후 — `diagnose_swing_calib.m`)
 - [ ] attitude_feedback ① 추론(tail RMS→해당 구간 Tm 연장) — 구간 매핑 설계 후
 - [ ] 촘촘 곡선 fly-through 보수적 감속 최적화 (현재 안전 폴백으로 감속 수용 — 백로그)
