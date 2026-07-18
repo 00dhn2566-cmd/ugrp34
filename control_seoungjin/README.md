@@ -4,7 +4,8 @@
 
 | 문서 | 내용 |
 |---|---|
-| [INTERFACE_SPEC.md](INTERFACE_SPEC.md) | **통신 규격 v0.2** — 저장 경로 체계(§0)/경로 JSON/궤적/피드백/원장/실시간 상태(§5)/추정기(§6)/RL 궤도 계약(§7) (구속력 있는 원본) |
+| [EXTERNAL_INTERFACE.md](EXTERNAL_INTERFACE.md) | **팀원 공개용 인터페이스 요약** — 다른 파트가 제어와 통신할 때 필요한 것만 (미션/회신/yaw/비상/조율점) |
+| [INTERFACE_SPEC.md](INTERFACE_SPEC.md) | **통신 규격 v0.2 (구속력 있는 원본)** — 저장 경로(§0)/경로 JSON·yaw(§1)/궤적(§2)/피드백(§3~4)/실시간 상태(§5)/추정기(§6)/RL 계약(§7)/작업 API(§8)/비상·감독자(§9) |
 | [PIPELINE_STATUS.md](PIPELINE_STATUS.md) | path_time 파이프라인 구축 상태 (path_time 세션 관리) |
 | [docs/HANDOFF_PATH_TO_CONTROLLER.md](docs/HANDOFF_PATH_TO_CONTROLLER.md) | 경로→컨트롤러 파이프라인 인수인계 (스무더/게이트/ZV 스펙, 튜닝 현황) |
 | [docs/HANDOFF_PATHTIME_PIPELINE.md](docs/HANDOFF_PATHTIME_PIPELINE.md) | path_time 세션 착수 문서 (자립형) |
