@@ -65,13 +65,40 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
     "mode": "zvd",                         //   "zv" | "zvd" (기본) | "none"(A/B 검증용 — 운용 금지)
     "f_mode_hz": 1.8                       //   짐 모드 주파수 (피드백으로 갱신됨)
   },
-  "controller_profile": "precision"        // 선택: "precision"(기본) | "balanced" | "agile"
+  "controller_profile": "precision",       // 선택: "precision"(기본) | "balanced" | "agile"
                                            //   — 컨트롤러 위치 게인 프로파일 (임무 단위 전환,
                                            //   튜닝 세션 계약 v1). 값의 진실은 parameters.m
                                            //   ctrl_profile / C++ qc_apply_profile. 파이프라인은
                                            //   검증 후 산출물 3종(.mat/.json/meta)에 동봉만 한다.
+  "yaw": {                                 // 선택 (설계 확정 2026-07-19, 구현 대기)
+    "mode": "heading",                     //   "heading"(기본, 진행 방향) | "hold"(고정 방위,
+                                           //   게걸음) | "look_at"(목표점 주시 — 창문 접근용)
+    "angle_rad": 0.0,                      //   hold일 때만
+    "target": [0.0, 0.0, 1.5],             //   look_at일 때만 (월드 좌표)
+    "rate_max": 1.0                        //   [rad/s] 선택 — 아래 yaw 물리 잠정치로 클램프
+  }
 }
 ```
+
+### yaw 명령 인터페이스 원칙 (설계 확정 2026-07-19, 구현 대기)
+
+- **상위는 "어디를 볼지"만** (mode/target), 회전 시간표는 파이프라인이 산정 —
+  waypoint 시간부여와 동일 철학. yaw는 (x,y,z)와 독립 평탄 출력이라 이동 궤적과
+  분리 스케줄 (스플라인·성형·시간축은 공유).
+- **yaw 물리 한계 (잠정, 실측 대기)**: rate 1.0 rad/s / acc 2.0 rad/s². yaw는
+  드래그 토크 차동이라 4축 중 권한 최약 + 모터가 호버에서 이미 토크 클램프
+  평형(HANDOFF_EMERGENCY §8 실측) — 과속 요잉 = 포화 = C 비상 인접. 보수 기본값
+  필수, 게이트에 yaw rate/acc 검사 추가.
+- **완화 정책 일관**: look_at이 요구하는 회전 속도가 한계를 넘으면 (근접 고속
+  통과 시 각속도 폭증) 거부하지 않고 rate 클램프 → 주시 오차(pointing error)를
+  §7 margins에 연속값으로 보고. 상위가 벌점으로 학습.
+- **look_at 특이점**: 목표점 수평 거리 < r_freeze(기본 0.3m)에서는 방위각이
+  발산하므로 마지막 yaw 동결 — 창문 통과 순간이 정확히 이 경우 (통과 직전
+  yaw 고정, 통과 후 다음 목표로 전환).
+- 셰이퍼(ZVD)는 yaw에 비적용 — 요잉은 추력을 기울이지 않아 짐 스윙과 사실상
+  비결합 (스윙에 가장 무해한 DOF).
+- 배치 프로토콜과의 결합: yaw 블록은 미션(집합) 단위, 새 명령 승리 스플라이스에
+  yaw 채널도 동일 연속 조건(각도·각속도)으로 승계.
 
 ### waypoint 배치 프로토콜 (상위 call 구조, 사용자 확정 2026-07-16)
 
