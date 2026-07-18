@@ -374,6 +374,15 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   "flight": null | {"track_rms_cm": 2.0, "att_peak_deg": 6.8,
                     "tail_pitch_rms_deg": 0.001, "tail_roll_rms_deg": 0.0,
                     "residual_mode_freq_hz": null},
+  "command_fidelity": null | {              // 명령 수행도 (설계 2026-07-19, 구현 대기)
+    "mission_completed": true,              // 완주 여부 (false면 abort_reason)
+    "waypoint_hit_cm": [0.9, 1.3, 0.4],     // 요청 waypoint별 실제 최근접 통과 오차
+    "duration_requested_vs_actual_s": [9.2, 9.4],
+    "pointing_rms_deg": 2.1,                // look_at/scan: 비행 중 실측 주시 오차
+    "scan_coverage_actual": 1.0,            // 계획이 아니라 실비행 기준 스캔 완료율
+    "keep_out_min_clearance_m": 0.8,        // 구역 최소 이격 실측 (음수 = 침범)
+    "fidelity_gaps": {"plan": 0.05, "track": 0.02}   // 갭 분해: 의도→궤적 / 궤적→비행
+  },
   "contract_version": "0.1"
 }
 ```
@@ -395,6 +404,13 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   RL이 의도한 경로가 아님.
 - **성능 보상**: `flight.track_rms_cm`(추종 정밀도), `flight.tail_*`(도착 후 잔류
   지터 — 짐 흔들림), `trajectory.duration_s`(속도) 트레이드오프.
+- **명령 수행도 (`command_fidelity`, 사용자 지적 2026-07-19 "명령을 얼마나 잘
+  수행했나도 지표")**: 추종 RMS는 "내 궤적 대비"라 파이프라인이 명령을 많이
+  고쳤으면 추종이 완벽해도 명령 수행은 나쁠 수 있다. 그래서 **의도 대비 실비행**
+  을 갭 2개로 분해해 보고: `fidelity_gaps.plan`(의도→궤적 — 클램프·팽창·재성형
+  총량) + `fidelity_gaps.track`(궤적→비행 — 추종). waypoint별 통과 오차, 실측
+  주시 오차(pointing_rms), 실측 스캔 완료율, 구역 이격까지 **전부 요청 기준**.
+  RL 보상은 track_rms(내부 지표)보다 command_fidelity(의도 지표)를 우선 권장.
 - reject_codes의 `code` 값은 안정 계약: 추가는 있어도 의미 변경/삭제는 없음.
 
 ## 8. 작업 API — 동사 카탈로그 (설계 확정 2026-07-17, **구현 전**)

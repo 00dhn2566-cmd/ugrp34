@@ -172,6 +172,7 @@ parameters.m `ctrl_profile` / C++ `qc_apply_profile`(튜닝 세션 소관), 파�
 
 ## 남은 일
 
+- [ ] **command_fidelity 블록 구현** (§7 설계 확정 2026-07-19) — analyze_flight_log 확장: waypoint별 최근접 통과 오차, look_at/scan 실측 주시 오차, 실측 스캔 완료율, 구역 이격, 갭 분해(plan/track). traj_report에 편입
 - [ ] **yaw 명령 인터페이스 구현** — 설계는 §1 확정(2026-07-19): heading/hold/look_at 3모드, yaw 전용 성형(1축 스무더 재사용, unwrap 각도) + 게이트 yaw rate/acc 검사(잠정 1.0/2.0), look_at 특이점 동결(r_freeze 0.3m), 주시 오차 margins 보고. 비전 통합(창문 주시) 전까지 필요
 - [ ] **작업 API(동사 카탈로그) 구현** — 설계는 INTERFACE_SPEC §8에 확정(2026-07-17, 사용자 지시로 설계만). 핵심: `traj_pipeline.py <verb>` 단일 진입점, `splice` CLI 신설(현재 함수만 존재), 종료 코드 0/1/2 계약, stdout 마지막 줄 기계용 JSON
 - [ ] **emergency 동사 설계·구현** (사용자 예약 2026-07-17 "나중에") — §8에 `emergency` 추가. 재료: current_state 상태 승계(스플라이스 검증됨) + `stop_dist` 정확식(정지 프로파일) + build_trajectory(v0≠0) 비상 분기. 결정 필요: 트리거(상위 call vs 대이탈 자동), 동작(제자리 정지 호버 우선), **비상 레짐 규칙 전환**(ZVD 생략 — 군지연 0.56s 사치, 지터 마진 20% 반납하고 물리 한계 풀사용)
