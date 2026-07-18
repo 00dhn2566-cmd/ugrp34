@@ -356,9 +356,39 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   `estimate` = `estimate_params.py`, `splice` = `traj_pipeline.replan_splice()` 함수 직접
   호출 (CLI 없음), `status` = 없음.
 
-## 9. 비상(emergency) 규약 — v0.1 (설계 확정 2026-07-18, 구현은 비상 전담 세션)
+## 9. 비상(emergency) 규약 — v0.2 (감독자 아키텍처, 사용자 제안 2026-07-18)
 
-두 종류의 비상을 구분한다 (사용자 정의 2026-07-18). **우선순위: B > A-1 > A-2 > 일반 명령.**
+### 아키텍처: 비행 감독자 (flight supervisor)
+
+**비행을 장악하는 단일 프로세스**가 모든 명령과 상황 보고를 받아 수락/거부/모드
+전환을 판단한다 (PX4 commander 패턴). 아래 A/B 정의와 우선순위는 이 감독자가
+집행하는 법이다.
+
+```
+[상위 RL/조종] --미션·비상명령--> [감독자] --수락된 미션--> [궤적 파이프라인(§8 동사)]
+[컨트롤러] --current_state·이벤트--> [감독자]        └--궤적--> [컨트롤러(제어루프)]
+```
+
+- **mode의 단일 소유자 = 감독자**: `flight_state.json` (§0 RT 경로, 원자적 쓰기)
+  `{written_at, mode, active_traj_hash, reason}` — mode는
+  `normal | recovering | hover_latched | emergency_stopping`. current_state(§5)는
+  물리 상태 보고 전용으로 남고 mode 필드는 넣지 않는다 (v0.3 확장 철회 — 소유권
+  분리: 컨트롤러=물리, 감독자=판단).
+- **철칙 1 — 결정 경로에만**: 감독자는 명령 수락/거부/모드 전환만 (~수 Hz).
+  30Hz+ 제어 루프는 컨트롤러 내부에 있고 감독자를 경유하지 않는다.
+- **철칙 2 — 반사는 컨트롤러 내장**: B(회생) 트리거·RECOVER 진입은 컨트롤러가
+  즉시 자체 수행(감독자 왕복 대기 금지)하고 감독자에 **통보**한다. 감독자는
+  통보받아 mode를 갱신하고 이후 명령을 게이트한다 (뇌/척수 분담).
+- **철칙 3 — 감독자 부재 시 안전 강하**: 감독자 하트비트(flight_state written_at
+  갱신)가 1s 이상 끊기면 컨트롤러는 현행 궤적 완주 후 §1 무명령 default(현재
+  자리 래치 호버)로 강하. 감독자 사망이 추락이 아니라 호버로 죽는 구조.
+- 명령 게이트: `recovering`/`emergency_stopping` 중 도착한 미션은 감독자가
+  `REJECTED_RECOVERING`으로 거부. 우선순위 중재(B > A-1 > A-2 > 일반)도 감독자
+  단일 지점에서 집행.
+- 구현 힌트: C++ 미션 러너가 감독자의 골격 후보. Gazebo/ROS2 단계에선 독립
+  노드로 승격 (§8 API의 종료 코드/stdout JSON이 감독자→파이프라인 호출 규약).
+
+두 종류의 비상을 구분한다 (사용자 정의 2026-07-18). **우선순위: B > A-1 > A-2 > 일반 명령** (감독자 집행).
 
 ### 유형 A — 상위 선언형
 
@@ -408,11 +438,13 @@ NORMAL → [트리거] → RECOVER → HOVER_LATCHED → [새 미션 수신] →
   질량 추정치와 함께 검증할 것. 짐이 크게 흔들리는 상태에서의 회생이 최악
   케이스 (질량 유효값 요동).
 
-### 상태 보고 (current_state v0.3 확장)
+### 상태 보고
 
-`current_state.json`에 `mode` 필드 추가: `"normal" | "recovering" | "hover_latched"
-| "emergency_stopping"`. 상위는 `recovering`/`emergency_stopping` 동안 보낸 미션이
-`REJECTED_RECOVERING`(신규 reject_code)으로 거부됨을 예상해야 한다.
+mode는 감독자 소유 `flight_state.json`으로 공표 (위 아키텍처 절 — current_state
+확장안은 철회, 소유권 분리 원칙). 상위는 `recovering`/`emergency_stopping` 동안
+보낸 미션이 `REJECTED_RECOVERING`(신규 reject_code)으로 거부됨을 예상해야 한다.
+컨트롤러의 RECOVER 진입/해제 통보는 이벤트 파일 또는 current_state 부가 신호로
+구현 세션이 정하되, **판단의 원본은 항상 flight_state.json**.
 
 ### 검증 의무 (구현 세션)
 
