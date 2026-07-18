@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "isaacsim_motor_commands.schema.json",
+  "title": "Isaac Sim motor-command stream -- PROVISIONAL",
+  "description": "The control<->sim boundary (CONVENTIONS.md 'Trajectory / motor-command interface'): a time-stamped stream of four per-rotor angular-velocity setpoints (rad/s). Motor/propeller physics is Isaac Sim's job; the controller only emits the rad/s setpoint per rotor. PROVISIONAL -- 성진 waits on 윤호 to finalise the Isaac Sim JSON schema. NOTE ON TIME: 'time' is FLOAT SECONDS (성진 control clock), NOT integer nanoseconds (that is the separate vision/VIO stream, CONVENTIONS.md 'Timestamps'). The motor 'fps' is only nominal -- it is VARIABLE, so the per-frame 'time' is authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fps", "frames"],
+  "properties": {
+    "fps": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Nominal command rate in frames per second (> 0). The motor command rate is VARIABLE; the authoritative time base is each frame's float-seconds 'time', not this fps."
+    },
+    "frames": {
+      "type": "array",
+      "description": "Ordered stream of motor-command frames (may be empty).",
+      "items": { "$ref": "#/definitions/motor_frame" }
+    }
+  },
+  "definitions": {
+    "motor_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time", "motor_cmd_w"],
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Timestamp in FLOAT SECONDS on 성진's control clock (e.g. 0.01), >= 0. Per-frame time is authoritative because the motor command rate is variable. NOT integer nanoseconds (that clock is the separate vision/VIO stream)."
+        },
+        "motor_cmd_w": {
+          "type": "array",
+          "description": "Exactly four rotor angular-velocity setpoints [w1, w2, w3, w4] in rad/s. Rotor index->geometry and CW/CCW spin sign are fixed by Isaac Sim's rotor config (a 윤호 decision -- see interface/README.md), not by this schema.",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    }
+  }
+}

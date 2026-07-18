@@ -1,0 +1,19 @@
+# --- core (needed for the pure-Python parts of common/, vision/, interface/) ---
+numpy>=1.24
+pyyaml>=6.0
+
+# --- vision / dataset tooling (optional; only for viz + real YOLO training) ---
+# ultralytics==8.4.87        # pinned by model_decisions.md; only for Job 1 training
+# pillow>=10.0               # label visualization fallback
+# matplotlib>=3.7            # label visualization
+
+# --- RL (optional; only when actually training) -------------------------------
+# gymnasium>=0.29
+# stable-baselines3>=2.3     # or your RL lib of choice
+# tensorboard>=2.15          # training curves
+
+# --- schema validation (optional; interface/ has a numpy-free fallback) --------
+# jsonschema>=4.0
+
+# NOTE: Isaac Sim / omni.replicator is NOT pip-installable here. The Replicator
+# writer in vision/ is import-guarded and runs inside the Isaac Sim python env.

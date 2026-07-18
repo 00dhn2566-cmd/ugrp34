@@ -1,0 +1,23 @@
+# Domain-randomisation ranges (spec 7.1 / 7.6). Loaded by
+# rl.domain_randomization.DomainRandomizationConfig.from_yaml.
+#
+# SCOPE: this randomises only the RL DYNAMICS + SENSOR-NOISE (per episode).
+# Lighting / scene / texture randomisation (spec 4.1) is applied at
+# scene-generation time in the vision/ (Isaac Sim + Replicator) pipeline, NOT here.
+# Window geometry (count/placement/colour/size) is randomised by
+# rl.window_env.sample_scene (also seeded).
+#
+# Ranges are gentle STUBS -- widen once the policy is stable on nominal dynamics
+# (curriculum, spec 7.3). Each entry is [min, max], sampled uniformly.
+domain_randomization:
+  enabled: true
+
+  # --- dynamics the low-level PID must cope with ---
+  mass_range: [0.9, 1.1]            # kg  (~ +/-10% around 1.0 kg)
+  thrust_scale_range: [0.9, 1.1]    # actuation gain multiplier
+  drag_coef_range: [0.15, 0.30]     # quadratic drag coefficient
+
+  # --- estimator noise std-devs (used ONLY when env observation_noise is on, spec 7.6) ---
+  pos_noise_std_range: [0.0, 0.10]  # m,   on relative window position (detector/VIO error)
+  vel_noise_std_range: [0.0, 0.10]  # m/s, on body-frame velocity
+  att_noise_std_range: [0.0, 0.02]  # unitless, on the gravity/attitude unit vector
