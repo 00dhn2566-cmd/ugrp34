@@ -10,9 +10,10 @@
 - MATLAB 사용 전 여기서 점유 여부 확인 후 자기 줄로 선언 (1대 규칙, RAM 16GB)
 
 ## MATLAB 점유
-- **튜닝/C++ 세션** — 07-17 시작~ 잔여 큐 순차: 골든 로그 → smoother 재검증 → 0kg 탐침 → agile 관문. 각 건 사이 해제 가능 (필요 시 요청).
+- (비어 있음) — 18차 튜닝 세션 골든 로그 완료·해제 (짧은 세션 마감). 잔여 큐는 대기/예약 참조.
 
 ## 튜닝/C++ 세션 (17차 계열)
+- 07-18 밤 — **골든 대조 1차 합격**: cmd_pitch/roll RMS 0.07%/0.00%, corr 0.9999 — C++ 위치 체인 = Simulink 동일성 증명. 덤프 확정 3건 반영(믹서 표/측정필터 0.05/고도 2단 클램프). **질량 1차식 게인 법칙 명세 확정(사용자)** — 선행: 0kg 앵커 (ad4b855)
 - 07-17 01:45 — **⚠ 전 세션 공유: 0kg(생 드론) 레짐 붕괴 실측** — 정규화 ON/OFF 무관 준발산(오버슈트 2m/43m, ON이 그나마 방어). 붕괴는 0.5~0kg 사이(0.5kg은 정상) — 탐침으로 국소화 예정 (validate_phys_ab0.csv). [정정 02:10: path_time 발견 "임무에 투하 없음(사용자 확인)"에 따라 "복귀 구간 미지원" 해석 철회 — 0kg은 운영 구간이 아니라 **과적합 경계** 이슈. 단 생 드론 시운전 시 주의는 유효]
 - 07-17 01:10 — **위치 게인 결정(사용자): 프로파일 3종 + 상위 선택** — precision(8/3.2, 기본)/balanced(12/4.8)/agile(24/10.8), 임무 단위 전환(v1). parameters.m `ctrl_profile` switch + C++ `qc_apply_profile` 동기 구현·검증. ★path_time 세션: 경로 JSON에 `controller_profile` 필드(§1) 추가 협의 — 미지정=precision, 값은 trajectory 산출물에 동봉해 컨트롤러 측에 전달 필요
 - 07-17 00:50 — ★소비: current_state 저장 경로 규칙 반영 완료 (qc_io::resolve_rt_dir — UGRP_RT_DIR→LOCALAPPDATA\ugrp_drone, 실검증). smoother 백포팅 재검증(diagnose_smoother)은 MATLAB 큐에 추가
