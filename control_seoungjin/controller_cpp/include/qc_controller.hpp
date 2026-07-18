@@ -123,23 +123,30 @@ struct QcConfig {
     // 모터 PI (per-motor 속도 루프)
     double kpMot = 0.00375, kiMot = 4.5e-4, limMot = 0.25;
 
-    // 측정 필터 시정수 [TODO-verify: Simulink filtM_* 대응 및 실제 배선 위치 확인]
-    double tauMeasAtt = 0.01;    // filtM_attitude — Filter Pitch/Roll
-    double tauPosPath = 0.005;   // filtM_position — 위치 명령 경로 Filter
+    // 측정 필터 시정수 (명세 덤프로 확정, 17차말 controller_spec.txt):
+    //   Filter Pitch/Roll = 1/(altitude_filtM·s+1) — filtM_attitude가 아니라 0.05!
+    //   (기전 ② "자세 측정 7도 지연"의 정체 = 이 50ms 필터)
+    double tauMeasAtt = 0.05;    // altitude_filtM (덤프 확정)
+    double tauMeasYaw = 0.01;    // yaw_filtM (Filter Yaw, 덤프 확정)
+    double tauMeasAlt = 0.01;    // Filter pz (고도 측정 필터, 덤프 확정)
+    double tauPosPath = 0.005;   // Position Control/Filter 3종 = 1/(filt_const·s+1)
+                                 // [TODO-verify: filt_const 수치 — 골든 트레이스로 확정]
 
     // 명령 경로 상수 [TODO-verify: Dir P/R 부호, Pitch/Roll Limit]
     double dirGain = 1.0 / 9.81; // Dir P/R (±1/9.81)
     double cmdLimDeg = 60.0;     // Pitch/Roll Limit ±60°
 
-    // 추력 바이어스 (구운 모델 재스케일 계열) [TODO-verify: 2π 배선, Bias Load 식]
+    // 추력 바이어스 (구운 모델 재스케일 계열; 2π·바이어스 구조는 실비행 재생으로 실증)
     double biasChassis = 56.5;               // rev/s
-    double biasLoadGain = 44.4;              // × pkgMass (44.4·pkgSize³·pkgDensity = 44.4·m_pkg)
+    double biasLoadGain = 44.4;              // × pkgMass (덤프 확정: Bias Load = 44.4·pkgSize³·pkgDensity)
+    double altCmdSat = 30.0;                 // Alt Cmd Sat ±30 (덤프 확정: PID ±10과 별개, 바이어스 합산 뒤 2단 클램프)
 
-    // 믹서 부호표 [TODO-verify: 차동 성분 부호는 덤프/골든트레이스로 확정]
+    // 믹서 부호표 (명세 덤프 확정: Motor Mixer Add4~7 signs = 모터1 +--+ / 2 --++ / 3 -+-+ / 4 ++++)
+    // [TODO-verify: 입력 포트 순서 (pitch,roll,yaw,base) 가정 — 골든 트레이스가 최종 판정]
     //             모터:      1     2     3     4
-    double mixPitch[4] = { +1,   +1,   -1,   -1 };
-    double mixRoll[4]  = { +1,   -1,   -1,   +1 };
-    double mixYaw[4]   = { +1,   -1,   +1,   -1 };
+    double mixPitch[4] = { +1,   -1,   -1,   +1 };
+    double mixRoll[4]  = { -1,   -1,   +1,   +1 };
+    double mixYaw[4]   = { -1,   +1,   -1,   +1 };
     // 모터 회전 방향 (실비행 재생으로 확정: 모터 2·3 내장 역회전 — 실측 w 부호가 음수.
     // 9차 "믹서 원래 부호 + direction 전부 Positive" 구성에서 모터 2,3이 스스로 음회전)
     double mixDir[4]   = { +1,   -1,   -1,   +1 };
@@ -197,13 +204,14 @@ struct QcState {
     Pid pidAttP, pidAttR;            // 자세 pitch/roll
     Pid pidYaw, pidAlt;
     Pid pidMot[4];
-    Lpf1 fMeasP, fMeasR;             // 자세 측정 필터
+    Lpf1 fMeasP, fMeasR;             // 자세 측정 필터 (tau=0.05, 덤프 확정)
+    Lpf1 fMeasY, fMeasZ;             // yaw(0.01)/고도(0.01) 측정 필터 (덤프 확정)
     Lpf1 fPosPath[3];                // 위치 명령 경로 필터
     void reset() {
         pidPosX.reset(); pidPosY.reset(); pidPosZ.reset();
         pidAttP.reset(); pidAttR.reset(); pidYaw.reset(); pidAlt.reset();
         for (auto& p : pidMot) p.reset();
-        fMeasP.reset(); fMeasR.reset();
+        fMeasP.reset(); fMeasR.reset(); fMeasY.reset(); fMeasZ.reset();
         for (auto& f : fPosPath) f.reset();
     }
 };

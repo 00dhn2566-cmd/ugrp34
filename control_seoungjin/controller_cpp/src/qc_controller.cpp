@@ -37,6 +37,8 @@ void qc_bind(QcState& st, const QcConfig& c) {
 
     st.fMeasP.tau = c.tauMeasAtt;
     st.fMeasR.tau = c.tauMeasAtt;
+    st.fMeasY.tau = c.tauMeasYaw;
+    st.fMeasZ.tau = c.tauMeasAlt;
     for (auto& f : st.fPosPath) f.tau = c.tauPosPath;
 }
 
@@ -74,13 +76,16 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     const double uP = st.pidAttP.step(out.cmdPitch - measP, dt);
     const double uR = st.pidAttR.step(out.cmdRoll  - measR, dt);
 
-    // ---- yaw / 고도 ----
-    const double uY = st.pidYaw.step(in.refYaw - in.measRpy[2], dt);
-    const double uA = st.pidAlt.step(in.refPos[2] - in.measAlt, dt);
+    // ---- yaw / 고도 (측정 필터: 덤프 확정 배선) ----
+    const double measY = st.fMeasY.step(in.measRpy[2], dt);   // Filter Yaw (0.01)
+    const double measZ = st.fMeasZ.step(in.measAlt, dt);      // Filter pz (0.01)
+    const double uY = st.pidYaw.step(in.refYaw - measY, dt);
+    const double uA = st.pidAlt.step(in.refPos[2] - measZ, dt);
 
-    // ---- 추력 바이어스 + 믹서 ----
-    // [TODO-verify] ref = 2π×(고도PID + BiasChassis + BiasLoad·m_pkg) 구조 (9차 규명) 재확인
-    const double base = uA + c.biasChassis + c.biasLoadGain * c.pkgMass;
+    // ---- 추력 바이어스 + 2단 클램프 + 믹서 ----
+    // 2π 스케일·바이어스 구조는 실비행 재생으로 실증. Alt Cmd Sat ±30 (덤프 확정)
+    const double base = clamp(uA + c.biasChassis + c.biasLoadGain * c.pkgMass,
+                              -c.altCmdSat, c.altCmdSat);
     for (int i = 0; i < 4; ++i) {
         // mixDir: 모터 2·3 내장 역회전 (실측 w 음수) — 크기 성분에 방향 부호를 입힘
         out.motorRef[i] = c.mixDir[i] * 2.0 * kPi *
