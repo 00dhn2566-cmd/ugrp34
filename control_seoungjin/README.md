@@ -9,6 +9,7 @@
 | [docs/HANDOFF_PATH_TO_CONTROLLER.md](docs/HANDOFF_PATH_TO_CONTROLLER.md) | 경로→컨트롤러 파이프라인 인수인계 (스무더/게이트/ZV 스펙, 튜닝 현황) |
 | [docs/HANDOFF_PATHTIME_PIPELINE.md](docs/HANDOFF_PATHTIME_PIPELINE.md) | path_time 세션 착수 문서 (자립형) |
 | [docs/HANDOFF_CPP_GAZEBO.md](docs/HANDOFF_CPP_GAZEBO.md) | C++ 제어기 → Gazebo 검증 세션 인수인계 |
+| [docs/HANDOFF_EMERGENCY.md](docs/HANDOFF_EMERGENCY.md) | 비상(emergency) 전담 세션 인수인계 (규약 원본은 INTERFACE_SPEC §9) |
 | [controller_cpp/README.md](controller_cpp/README.md) | C++ 이식 상태·빌드·골든 트레이스 절차 |
 | `controller/Quadcopter-Drone-Model-Simscape/TUNING_STATUS.md` | 튜닝 전 과정 기록 (§A~§Z, 게인 확정 근거) |
 | [COMMANDS.md](COMMANDS.md) | MATLAB 실행 명령·함정 모음 |
