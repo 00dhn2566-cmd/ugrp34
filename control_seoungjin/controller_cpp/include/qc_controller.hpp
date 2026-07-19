@@ -24,6 +24,14 @@ inline double clamp(double v, double lo, double hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+// 각도를 [-pi, pi]로 랩 (yaw 오차용 — ref +179도/측정 -179도 = 오차 +2도가 되게)
+inline double wrapPi(double a) {
+    constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+    a = std::fmod(a + 3.14159265358979323846, kTwoPi);
+    if (a < 0) a += kTwoPi;
+    return a - 3.14159265358979323846;
+}
+
 // 병렬형 PID + 필터드 미분 (Simulink PID 블록 대응: P + I/s + D·N/(1+N/s))
 // anti-windup 없음 — 원본과 동일 (출력만 클램프, 적분기는 계속 적분). TUNING_STATUS 명시.
 struct Pid {

@@ -157,3 +157,26 @@ stop_dist 정확식 정지 궤적이 유일한 안전 경로. "비상이니까 �
 **외란 내성 기준점 (트리거 임계의 거리감)**: 토크 펄스 0.3N·m×0.3s → 피크 2.28°,
 회복 0.73s (§X). 즉 2~3°대 교란은 일상 복구 범위 — B 트리거 45°는 그보다 20배
 위라 오발화 여유는 충분하나, 위 측정 지연(0.05s) 때문에 각속도 조건 병행을 권장.
+
+**MATLAB 실전 운용 노트 (튜닝 세션, 배치 시뮬 40+회 실전 — §4에 없는 것만):**
+- **스크립트 체이닝 금지**: 여러 진단 스크립트를 한 -batch 세션에 이어 돌리면 Scope
+  탭 포트 충돌("출력 포트가 이미 한 곳에서 사용") — **스크립트 1개 = MATLAB 프로세스
+  1개**. 검증 N편이면 N번 따로 띄워라.
+- `find_system`은 구운 모델에서 `'LookUnderMasks','all','FollowLinks','on'` 없으면
+  **빈 결과**를 조용히 돌려준다 (에러 아님 — 몇 시간 날리는 유형).
+- 블록 이름에 개행 포함됨 (`Altitude and\nYPR Control`) — 경로 하드코딩 대신
+  `regexprep(name,'\s+',' ')` 정규화 매칭으로 찾아라.
+- `add_block` 라이브러리 정식명: `'simulink/Discontinuities/Saturation'`
+  (Saturate 아님), `'simulink/Sinks/To Workspace'`, `'nesl_utility/PS-Simulink Converter'`.
+- `sim()`을 **함수 안**에서 부르면 To Workspace 변수가 함수 워크스페이스로 가서
+  `evalin('base',...)`가 못 본다 — 스크립트 레벨 루프로 짜라.
+- 신호 탭 표준 패턴: Scope의 `In Bus Element` 출력 → To Workspace(StructureWithTime)
+  분기. 기존 동명 탭은 delete_block 후 재생성. 실물 예: `diagnose/refine_pos_r1.m`의
+  sigMap 블록 (px/pz/real_roll/real_pitch 4종이 이미 매핑돼 있음 — 복사해 쓰라).
+- 실행기: **R2026a만 실행 가능** (`C:\Program Files\MATLAB\R2026a\bin\matlab.exe` —
+  R2025b 폴더는 빈 껍데기). Git Bash에서 `matlab.exe -batch "cd(...); 스크립트명"`
+  + 출력은 파일 리다이렉트 (콘솔 cp949라 한글 로그 깨짐 — 파일로 보면 됨).
+- 소요시간 감: 콜드 스타트 ~40s + T=14s 비행 1건 ~90s. 격자 9점 ≈ 14분.
+  비상 검증 4편은 별도 프로세스 4번 = ~10분 잡아라.
+- 진단 스크립트 템플릿: `diagnose/refine_*.m`이 전부 같은 골격 (모델 로드 → 드롭
+  비활성 → 궤적 주입 → 탭 → 루프 → CSV to results/) — 새로 쓰지 말고 복사 후 격자만 교체.

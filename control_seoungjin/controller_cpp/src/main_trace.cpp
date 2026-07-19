@@ -42,7 +42,13 @@ static int run_smoke() {
                 out.motorRef[0], out.motorRef[1], out.motorRef[2], out.motorRef[3]);
     std::printf("motorCmd = %.5f %.5f %.5f %.5f\n",
                 out.motorCmd[0], out.motorCmd[1], out.motorCmd[2], out.motorCmd[3]);
-    const bool ok = std::isfinite(out.cmdPitch) && std::isfinite(out.motorCmd[0]);
+    // yaw 랩 검증 (18차): 측정 -179도에서 ref +179도까지 최단 경로 = -2도 (358도로 돌면 안 됨)
+    const double d2r = 3.14159265358979323846 / 180.0;
+    const double wrapErr = qc::wrapPi(179.0 * d2r - (-179.0 * d2r)) / d2r;
+    const bool wrapOk = std::fabs(wrapErr - (-2.0)) < 1e-9;
+    std::printf("yaw 랩: +179 vs -179 최단 오차 = %+.1f도 -> %s\n", wrapErr, wrapOk ? "합격" : "불합격");
+
+    const bool ok = std::isfinite(out.cmdPitch) && std::isfinite(out.motorCmd[0]) && wrapOk;
     std::printf("%s\n", ok ? "스모크 통과 (수치 유한)" : "스모크 실패 (NaN/Inf)");
     return ok ? 0 : 1;
 }

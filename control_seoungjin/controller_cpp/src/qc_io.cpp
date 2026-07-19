@@ -2,6 +2,7 @@
 // JSON은 외부 의존 없이 필요한 만큼만 파싱 (숫자/문자열/배열/객체/불리언/널).
 
 #include "qc_io.hpp"
+#include "qc_controller.hpp"   // qc::wrapPi (yaw 랩 보간)
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -152,14 +153,16 @@ bool load_trajectory(const std::string& path, Trajectory& out, std::string& err)
     const mj::Value* jt   = root.find("t");
     const mj::Value* jpos = root.find("pos");
     const mj::Value* jyaw = root.find("yaw_rad");
-    if (!jt || !jpos || !jyaw) { err = "필수 키 누락 (t/pos/yaw_rad): " + path; return false; }
+    if (!jt || !jpos) { err = "필수 키 누락 (t/pos): " + path; return false; }
+    // yaw_rad는 선택 (사용자 확정 18차: 기본 = 무회전). 있으면 길이 검사, 없으면 0 고정.
+    const bool hasYaw = jyaw && !jyaw->a.empty();
 
     out = Trajectory{};
     if (jdt && jdt->t == mj::Value::T::Num) out.dt = jdt->n;
     if (jh && jh->t == mj::Value::T::Str) out.hash = jh->s;
 
     const size_t N = jt->a.size();
-    if (N < 2 || jpos->a.size() != N || jyaw->a.size() != N) {
+    if (N < 2 || jpos->a.size() != N || (hasYaw && jyaw->a.size() != N)) {
         err = "배열 길이 불일치/부족: " + path;
         return false;
     }
@@ -171,7 +174,7 @@ bool load_trajectory(const std::string& path, Trajectory& out, std::string& err)
         out.px.push_back(pi.a[0].n);
         out.py.push_back(pi.a[1].n);
         out.pz.push_back(pi.a[2].n);
-        out.yaw.push_back(jyaw->a[i].n);
+        out.yaw.push_back(hasYaw ? jyaw->a[i].n : 0.0);   // 기본 무회전
         if (i > 0 && out.t[i] <= out.t[i-1]) { err = "t 비단조 (스펙 §7 규칙5)"; return false; }
     }
     return true;
@@ -197,7 +200,9 @@ RefSample sample_trajectory(const Trajectory& tr, double tq) {
         size_t lo = 0, hi = N - 1;
         while (hi - lo > 1) { size_t m = (lo + hi) / 2; (tr.t[m] <= q ? lo : hi) = m; }
         const double w = (q - tr.t[lo]) / (tr.t[hi] - tr.t[lo]);
-        return tr.yaw[lo] + w * (tr.yaw[hi] - tr.yaw[lo]);
+        // 랩 인지 보간 (18차 yaw 입력 지원): ±180도 경계를 최단 경로로
+        const double d = qc::wrapPi(tr.yaw[hi] - tr.yaw[lo]);
+        return qc::wrapPi(tr.yaw[lo] + w * d);
     };
 
     const double h = tr.dt;   // 후방차분 vel/acc/jerk (성형기 원칙 1과 동일 규약)

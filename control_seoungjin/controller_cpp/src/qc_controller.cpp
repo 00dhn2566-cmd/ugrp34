@@ -79,7 +79,7 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     // ---- yaw / 고도 (측정 필터: 덤프 확정 배선) ----
     const double measY = st.fMeasY.step(in.measRpy[2], dt);   // Filter Yaw (0.01)
     const double measZ = st.fMeasZ.step(in.measAlt, dt);      // Filter pz (0.01)
-    const double uY = st.pidYaw.step(in.refYaw - measY, dt);
+    const double uY = st.pidYaw.step(wrapPi(in.refYaw - measY), dt);   // yaw 오차 랩 (18차: yaw 입력 지원)
     const double uA = st.pidAlt.step(in.refPos[2] - measZ, dt);
 
     // ---- 추력 바이어스 + 2단 클램프 + 믹서 ----
