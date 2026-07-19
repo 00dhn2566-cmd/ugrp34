@@ -21,7 +21,7 @@ void qc_bind(QcState& st, const QcConfig& c) {
 
     st.pidPosX = Pid{c.kpPos, c.kiPos, c.kdPos, c.filtDPos, 0};
     st.pidPosY = Pid{c.kpPos, c.kiPos, c.kdPos, c.filtDPos, 0};
-    st.pidPosZ = Pid{c.kpPos, c.kiPos, c.kdPos, c.filtDPos, 0};
+    st.pidPosZ = Pid{c.kpPosZ, c.kiPos, c.kdPosZ, c.filtDPos, 0};   // 18차 z분리
 
     // 18차: 자세/고도 질량 의존 = 1차식(sAMass/sZMass), yaw = 질량 동결(sQ만)
     st.pidAttP = Pid{c.kpAtt * s.sT * s.sAMass, c.kiAtt * s.sT * s.sAMass,
@@ -50,8 +50,9 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     // ---- 위치 루프 (world) ----
     double e[3];
     for (int i = 0; i < 3; ++i) {
+        const double lim = (i == 2) ? s.posErrSatZ : s.posErrSat;  // 18차 z분리 클램프
         e[i] = in.refPos[i] - in.measPos[i];
-        e[i] = clamp(e[i], -s.posErrSat, +s.posErrSat);   // PosErr Sat X/Y/Z (15차 채택)
+        e[i] = clamp(e[i], -lim, +lim);                   // PosErr Sat X/Y/Z (15차 채택)
     }
     double u[3] = { st.pidPosX.step(e[0], dt),
                     st.pidPosY.step(e[1], dt),

@@ -118,10 +118,12 @@ struct QcConfig {
     double pkgSizeRef[3] = {0.14, 0.14, 0.14};
 
     // 기저 게인 (parameters.m 채택치; 스케일 곱하기 전)
-    // 위치 (16차 현행 — 위치 미세조정 확정 시 갱신 예정)
+    // 위치 x/y (프로파일 결정). z는 18차 z분리로 별도 (agile에서만 달라짐 — 이동
+    // 시작/끝 기울기 추력손실로 인한 z 낙하를 z축 게인 고정으로 억제, 실증 42→1.3cm)
     double kpPos = 8, kiPos = 0.04, kdPos = 3.2, filtDPos = 100;
+    double kpPosZ = 8, kdPosZ = 3.2;         // z축 위치 게인 (precision/balanced = xy와 동일값)
     double pos2att = 2.4;                    // err2rp
-    double posErrSatCoef = 1.2;              // posErrSat = 1.2/kpPos (곱 불변식)
+    double posErrSatCoef = 1.2;              // posErrSat = 1.2/kpPos (곱 불변식, z는 1.2/kpPosZ)
     // 자세 (16차 채택: -85/-10/-127.5, filtD 2500) — 음수 필수 (플랜트 이득 음수)
     double kpAtt = -85, kiAtt = -10, kdAtt = -127.5, filtDAtt = 2500, limAtt = 800;
     // yaw (12차)
@@ -163,15 +165,29 @@ struct QcConfig {
 // --- 컨트롤러 프로파일 (17차 사용자 설계): 상위 계층이 임무 특성으로 선택 ---
 // r8 실측: 호버 지터(범인=kp)와 이동 추종의 구조적 맞교환 -> 검증된 선택지 3종.
 // 전환은 임무 단위(비행 전, v1). parameters.m의 ctrl_profile switch와 1:1 동기.
+// [18차 agile 재설계] 고정 24/10.8은 1kg 밖 붕괴 실측 -> 삼각 법칙 + z분리:
+//   x/y: kp = 24 - 16·|m_pkg-1| (1kg 정점, 0/2kg에서 precision 수렴 - 양끝 검증점)
+//   z  : 8/3.2 고정 (이동 시작/끝 기울기 추력손실 z 낙하 억제, 42->1.3cm 실증)
+//   유효 0.5~2kg (1.91~3.96cm, z꼬리 <1cm). 0.5kg 미만 혼돈 구간 - precision 권장.
+// 질량 의존이라 pkgMass 변경 후엔 qc_apply_profile 재호출 필요 (qc_bind 전).
 enum class Profile { Precision, Balanced, Agile };
 
 inline void qc_apply_profile(QcConfig& c, Profile p) {
     switch (p) {
-        case Profile::Precision: c.kpPos = 8;  c.kdPos = 3.2;  break;  // 호버 0.002도/이동 4.1cm (기본)
-        case Profile::Balanced:  c.kpPos = 12; c.kdPos = 4.8;  break;  // 0.10도/2.7cm
-        case Profile::Agile:     c.kpPos = 24; c.kdPos = 10.8; break;  // 0.25도/1.3cm (외란/질량 관문 대기)
+        case Profile::Precision:
+            c.kpPos = 8;  c.kdPos = 3.2;   break;  // 호버 0.002도/이동 4.1cm (기본)
+        case Profile::Balanced:
+            c.kpPos = 12; c.kdPos = 4.8;   break;  // 0.10도/2.7cm
+        case Profile::Agile: {
+            const double d = c.pkgMass < 1.0 ? 1.0 - c.pkgMass : c.pkgMass - 1.0;
+            const double tri = d > 1.0 ? 0.0 : 1.0 - d;
+            c.kpPos = 8 + 16 * tri;  c.kdPos = 3.2 + 7.6 * tri;  // 1kg: 24/10.8 (1.25cm)
+            c.kpPosZ = 8; c.kdPosZ = 3.2;
+            return;
+        }
     }
-    // posErrSat = 1.2/kpPos 곱 불변식은 qc_scales()가 자동 연동
+    c.kpPosZ = c.kpPos; c.kdPosZ = c.kdPos;   // precision/balanced: z = xy 동일 (기존 거동)
+    // posErrSat = 1.2/kpPos (z는 1.2/kpPosZ) 곱 불변식은 qc_scales()가 자동 연동
 }
 
 // 스케일 적용된 실효 게인 계산 (parameters.m 로직 대응)
@@ -179,7 +195,7 @@ inline void qc_apply_profile(QcConfig& c, Profile p) {
 // — 물성비는 0kg 레짐 붕괴로 반증(refine_mass_probe), 1차식은 0~2kg 6점 검증 통과
 // (refine_linear_law: 전 질량 무발산, 1kg 회귀 무결, 0.5 내삽 비열등, 2kg 외삽 우세).
 // sIa/sIz/sM은 진단/비교용으로만 유지. yaw는 질량 동결(sQ만 적용, 검증 구성 그대로).
-struct QcScales { double sT, sQ, sIa, sIz, sM, sAMass, sZMass, posErrSat; };
+struct QcScales { double sT, sQ, sIa, sIz, sM, sAMass, sZMass, posErrSat, posErrSatZ; };
 
 inline QcScales qc_scales(const QcConfig& c) {
     PhysOut now = qc_phys(c.droneMass, c.pkgMass, c.pkgSize);
@@ -195,7 +211,8 @@ inline QcScales qc_scales(const QcConfig& c) {
     const double mClamped = c.pkgMass < 2.0 ? c.pkgMass : 2.0;
     s.sAMass = 0.75 + 0.25 * mClamped;
     s.sZMass = 0.56 + 0.44 * mClamped;
-    s.posErrSat = c.posErrSatCoef / c.kpPos;
+    s.posErrSat  = c.posErrSatCoef / c.kpPos;
+    s.posErrSatZ = c.posErrSatCoef / c.kpPosZ;   // 18차 z분리 (비-agile은 kpPosZ==kpPos라 동일)
     return s;
 }
 
