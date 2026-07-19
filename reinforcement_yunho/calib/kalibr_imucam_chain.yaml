@@ -1,0 +1,104 @@
+# =============================================================================
+# Kalibr camera-IMU chain (camchain-imucam) -- cam0 block for OpenVINS.
+#
+# WHAT THIS FILE IS
+#   The camera side of the OpenVINS calibration, pulled in by
+#   estimator_config.yaml via `relative_config_imucam`. OpenVINS reads this
+#   Kalibr-style camchain to learn each camera's pinhole intrinsics, distortion,
+#   resolution, image topic, camera overlaps, and the rigid transform between the
+#   camera and the IMU (extrinsics used to fuse image tracks with IMU integration).
+#
+# WHO CONSUMES IT
+#   태민 (OpenVINS / VIO + window_recon_node.py). Checklist section 0.
+#
+# WHERE EACH NUMBER COMES FROM (fill order)
+#   intrinsics, resolution, distortion  <- 윤호's synthetic camera, i.e.
+#       vision/synth_intrinsics.yaml (spec 6, 길남's {width,height,fx,fy,cx,cy,
+#       distortion} schema). Do NOT hand-edit these here: run
+#       `python3 calib/fill_from_intrinsics.py ...` so the camchain always matches
+#       the camera the images were actually rendered with. Values below are
+#       PLACEHOLDERS (a 1280x720 pinhole) only so the file parses.
+#       *** The SAME fx/fy/cx/cy must ALSO be propagated into 태민's node source
+#           constants (FX, FY, CX, CY in visual_imaging_taemin/window_recon_node.py
+#           AND window_sim_node.py -- currently hard-coded 600/600/640/360), not
+#           just into this yaml. Those constants and this file must agree. ***
+#   T_cam_imu                            <- drone CAD / Isaac Sim scene graph
+#       (where the camera sits relative to the IMU, and which way it points).
+#       Identity placeholder below -- see the long direction note on that field.
+#   timeshift_cam_imu                    <- Kalibr imu-cam time calibration, or
+#       0.0 for a simulator where camera and IMU share one clock (see below).
+# =============================================================================
+
+cam0:
+  # Projection model of the synthetic camera. The Isaac Sim / USD camera and
+  # common.intrinsics.CameraIntrinsics are both ideal pinholes, so this is
+  # "pinhole" and the distortion below is all-zero. (spec 6)
+  camera_model: pinhole
+
+  # [fx, fy, cx, cy] in pixels. TODO: overwrite from vision/synth_intrinsics.yaml
+  # via calib/fill_from_intrinsics.py. common.intrinsics.CameraIntrinsics is the
+  # single source of truth for these numbers (its .kalibr_intrinsics() returns
+  # exactly this [fx, fy, cx, cy] vector). Placeholder = 90 deg HFOV @ 1280x720.
+  intrinsics: [640.0, 640.0, 640.0, 360.0]
+
+  # Distortion model + coefficients. The synthetic camera is rendered
+  # distortion-free (spec 6), so radtan with all-zero coeffs. radtan (a.k.a.
+  # plumb-bob) order for Kalibr's 4-coeff form is [k1, k2, p1, p2].
+  # TODO: keep [0,0,0,0] unless 윤호 deliberately renders lens distortion.
+  distortion_model: radtan
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+
+  # Image size in pixels, [width, height]. TODO: overwrite from
+  # synth_intrinsics.yaml (must equal the rendered PNG size; CONVENTIONS.md
+  # fixes the dataset at 1280x720).
+  resolution: [1280, 720]
+
+  # Which OTHER cameras this one overlaps (Kalibr camchain field). MONO default:
+  # empty list (no stereo partner). For STEREO, set cam0.cam_overlaps: [1] and add
+  # a cam1 block with cam_overlaps: [0] (and flip use_stereo/max_cameras in
+  # estimator_config.yaml).
+  cam_overlaps: []
+
+  # Rigid transform between the IMU (body) frame and the camera frame.
+  # *** DIRECTION IS PINNED -- read this before touching the numbers. ***
+  # Kalibr / OpenVINS store T_cam_imu, defined as:
+  #     p_cam = T_cam_imu @ p_imu
+  # i.e. it maps a point expressed in IMU coordinates INTO camera coordinates.
+  # 윤호 delivers exactly ONE physical extrinsic (the known camera<->IMU mount);
+  # it is stored HERE in that Kalibr direction (T_cam_imu).
+  #
+  # 태민's window_recon_node.py wants the INVERSE (cam-in-IMU): its `T_IC` maps
+  #     p_imu = T_IC @ p_cam           (T_IC == T_imu_cam == inverse of T_cam_imu)
+  # (there `R_WC = R_WI @ R_IC`, `c_W = p_WI + R_WI @ p_IC`, so R_IC/p_IC are the
+  # camera pose EXPRESSED IN the IMU frame). So there is ONE extrinsic in two
+  # conventions: this file holds T_cam_imu; 태민 must invert it (or equivalently
+  # take T_imu_cam) to fill window_recon_node.py's T_IC. Do NOT paste the same
+  # 4x4 into both places.
+  #
+  # TODO -- THIS IDENTITY IS A PLACEHOLDER. Fill from the drone CAD / Isaac Sim:
+  #   * translation (last column, top 3 rows): position of the camera optical
+  #     centre relative to the IMU, expressed in the IMU frame, in METRES.
+  #   * rotation (top-left 3x3): orientation of the camera-optical frame
+  #     (OpenCV: +X right, +Y down, +Z forward/along the optical axis) relative
+  #     to the IMU frame. A forward-looking camera on a body-frame IMU is
+  #     typically NOT identity (it involves the body->optical axis swap).
+  # In simulation this transform is known exactly from the Isaac Sim scene graph
+  # (camera prim pose relative to the IMU sensor prim). Keep the IMU frame
+  # consistent with kalibr_imu_chain.yaml (T_i_b there).
+  T_cam_imu:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+  # Time offset between camera and IMU clocks (seconds): t_imu = t_cam + shift.
+  # CONVENTIONS.md: on the sensor/VIO side camera and IMU share ONE ns clock, so
+  # for simulator data this is exactly 0.0. TODO: only change if you deliberately
+  # model sensor latency, or if Kalibr estimates a nonzero shift on real hardware.
+  # (See also imu0.time_offset in kalibr_imu_chain.yaml.)
+  timeshift_cam_imu: 0.0
+
+  # ROS topic the image stream is published on (what OpenVINS subscribes to).
+  # Must match the topic the Isaac Sim / rosbag publisher emits (checklist 5) and
+  # what OpenVINS expects for cam0 (태민's launch: /cam0/image_raw).
+  rostopic: /cam0/image_raw

@@ -1,0 +1,79 @@
+# =============================================================================
+# Kalibr IMU chain (imu.yaml) -- imu0 block for OpenVINS.
+#
+# WHAT THIS FILE IS
+#   The IMU side of the OpenVINS calibration, pulled in by estimator_config.yaml
+#   via `relative_config_imu`: the continuous-time noise model of the gyroscope
+#   and accelerometer plus the IMU update rate, topic, and cam-IMU time offset.
+#   OpenVINS uses these four noise/bias parameters to weight IMU pre-integration
+#   against visual measurements.
+#
+# WHO CONSUMES IT
+#   태민 (OpenVINS / VIO). Checklist section 0.
+#
+# WHERE EACH NUMBER COMES FROM
+#   The four noise densities / random walks come from EITHER the physical IMU
+#   datasheet + an Allan-variance calibration, OR -- for this simulator project
+#   -- from the Isaac Sim IMU sensor's configured noise. In sim these MUST be
+#   the same numbers you set on the Isaac Sim IMU sensor (see calib/README.md,
+#   "when are the IMU noise parameters set"): OpenVINS can only be correct if the
+#   noise model it is told matches the noise actually injected into the data.
+#   The values below are REALISTIC EXAMPLE placeholders for a consumer MEMS IMU
+#   (~ a Bosch BMI-class drone IMU). TODO: replace with your datasheet /
+#   Allan-variance / Isaac Sim IMU-sensor values. NOTE: for VIO it is common to
+#   INFLATE these above the raw datasheet numbers (e.g. 2-10x) for robustness.
+
+imu0:
+  # --- Accelerometer -------------------------------------------------------
+  # White-noise spectral density on the acceleration measurement.
+  # UNITS: m/s^2/sqrt(Hz)   (a.k.a. "velocity random walk" when integrated).
+  # TODO: from datasheet / Allan variance / Isaac Sim accel noise config.
+  accelerometer_noise_density: 0.002
+
+  # Bias instability modelled as a random walk on the accel bias.
+  # UNITS: m/s^3/sqrt(Hz)   (== m/s^2 per sqrt(second) of bias drift).
+  # TODO: from datasheet / Allan variance / Isaac Sim accel bias config.
+  accelerometer_random_walk: 0.0003
+
+  # --- Gyroscope -----------------------------------------------------------
+  # White-noise spectral density on the angular-rate measurement.
+  # UNITS: rad/s/sqrt(Hz)   (a.k.a. "angle random walk" when integrated).
+  # TODO: from datasheet / Allan variance / Isaac Sim gyro noise config.
+  gyroscope_noise_density: 0.00016
+
+  # Bias instability modelled as a random walk on the gyro bias.
+  # UNITS: rad/s^2/sqrt(Hz)  (== rad/s per sqrt(second) of bias drift).
+  # TODO: from datasheet / Allan variance / Isaac Sim gyro bias config.
+  gyroscope_random_walk: 0.000022
+
+  # IMU sample rate in Hz. The Isaac Sim IMU sensor must publish at this rate
+  # and the noise densities above are defined w.r.t. this bandwidth. (200 Hz is
+  # a common VIO IMU rate; keep it consistent with the sim publisher, checklist 5.)
+  update_rate: 200.0
+
+  # Kalibr IMU model. "calibrated" = a simple white-noise + random-walk model
+  # (no scale/misalignment/g-sensitivity terms). OpenVINS expects this.
+  model: calibrated
+
+  # Cam-IMU time offset (seconds) that Kalibr's imu chain commonly carries:
+  #     t_imu = t_cam + time_offset
+  # CONVENTIONS.md: camera and IMU share ONE clock on the sensor/VIO side, so for
+  # simulator data this is exactly 0.0. Mirror of timeshift_cam_imu in
+  # kalibr_imucam_chain.yaml -- keep the two consistent. TODO: only change if you
+  # deliberately model sensor latency, or Kalibr estimates a nonzero offset.
+  time_offset: 0.0
+
+  # Rigid transform from the IMU base/body frame (b) to the IMU sensor frame (i):
+  #     p_i = T_i_b @ p_b
+  # With a single IMU whose sensor frame IS the body frame this is identity.
+  # TODO: only change for a multi-IMU rig or a deliberately offset IMU frame;
+  # keep consistent with T_cam_imu in kalibr_imucam_chain.yaml.
+  T_i_b:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+  # ROS topic the IMU stream is published on (what OpenVINS subscribes to).
+  # Must match the Isaac Sim / rosbag IMU publisher (checklist 5).
+  rostopic: /imu0

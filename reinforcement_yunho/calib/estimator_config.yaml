@@ -1,0 +1,109 @@
+# =============================================================================
+# OpenVINS master estimator config -- MONO by default.
+#
+# WHAT THIS FILE IS
+#   The top-level config OpenVINS loads. 태민 launches OpenVINS with
+#       ros2 launch ov_msckf subscribe.launch.py config:=euroc_mav
+#   and the "euroc_mav" config directory is exactly a master estimator_config.yaml
+#   (this file) plus the two Kalibr-style chains it references at the bottom:
+#       relative_config_imu     -> kalibr_imu_chain.yaml     (imu0 noise + T_i_b + time_offset)
+#       relative_config_imucam  -> kalibr_imucam_chain.yaml  (cam0 intrinsics + T_cam_imu + cam_overlaps)
+#   OpenVINS reads the estimator params here and the sensor calibration from those
+#   two files (relative to THIS file's directory).
+#
+# WHO CONSUMES IT
+#   태민 (OpenVINS / VIO). Checklist section 0.
+#
+# MONO vs STEREO
+#   Upstream OpenVINS ships "euroc_mav" as STEREO (max_cameras: 2, use_stereo:
+#   true, cam0 + cam1). OUR pipeline renders a SINGLE Isaac Sim camera, so the
+#   default below is MONO: max_cameras: 1, use_stereo: false, cam0 only. A
+#   commented STEREO alternative is kept inline -- to go stereo, flip the two
+#   fields here AND add a cam1 block (+ cam_overlaps) to kalibr_imucam_chain.yaml.
+#
+# NOTE ON FILE FORMAT
+#   OpenVINS parses configs with OpenCV FileStorage, whose files conventionally
+#   start with a "%YAML:1.0" first line (and matrices use the !!opencv-matrix
+#   tag). We keep THIS repo's copies as PLAIN YAML (no %YAML:1.0, plain nested
+#   lists) so they load + validate with pyyaml on a numpy-only box (calib/
+#   smoke_test.py). When handing the config dir to a live OpenVINS build, prepend
+#   the "%YAML:1.0" line if that build's loader requires it; the key/value
+#   content is otherwise identical.
+# =============================================================================
+
+verbosity: "INFO"                 # ALL, DEBUG, INFO, WARNING, ERROR, SILENT
+
+use_fej: true                     # first-estimate Jacobians (good consistency)
+integration: "rk4"                # discrete, rk4, analytical
+
+# --- MONO DEFAULT (single Isaac Sim camera) ---------------------------------
+use_stereo: false                 # no stereo constraints with one camera
+max_cameras: 1                    # 1 = mono, 2 = stereo (see STEREO block below)
+# --- STEREO alternative (uncomment + add cam1 to the camchain) --------------
+#   use_stereo: true
+#   max_cameras: 2
+#   (also set cam0.cam_overlaps: [1] and add a cam1 block with cam_overlaps: [0]
+#    + rostopic /cam1/image_raw in kalibr_imucam_chain.yaml)
+
+calib_cam_extrinsics: true        # optimise T_cam_imu (R_ItoC, p_CinI) online
+calib_cam_intrinsics: true        # optimise focal/center/distortion online
+calib_cam_timeoffset: true        # optimise cam<->imu timeoffset online
+
+max_clones: 11                    # sliding-window pose clones
+max_slam: 50                      # SLAM features held in the state
+max_slam_in_update: 25            # SLAM features updated per batch
+max_msckf_in_update: 40           # MSCKF features per update
+dt_slam_delay: 3                  # seconds before SLAM features are initialised
+
+gravity_mag: 9.81                 # |g| at this location (m/s^2)
+
+feat_rep_msckf: "GLOBAL_3D"
+feat_rep_slam: "ANCHORED_MSCKF_INVERSE_DEPTH"
+feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
+
+# --- zero-velocity update ---------------------------------------------------
+try_zupt: true
+zupt_chi2_multipler: 0            # 0 => disparity-only detection
+zupt_max_disparity: 0.5          # 0 => imu-only detection
+zupt_only_at_beginning: false
+
+# --- initialization ---------------------------------------------------------
+init_window_time: 2.0             # seconds of data collected to initialise
+init_imu_thresh: 1.5             # accel variance threshold to detect motion
+init_max_disparity: 10.0         # max disparity to still call the platform static
+init_max_features: 50            # features tracked during initialisation
+init_dyn_use: false              # dynamic (moving-start) initialisation
+
+# --- front-end feature tracking ---------------------------------------------
+use_klt: true                     # KLT tracker (vs ORB descriptor matching)
+num_pts: 200                      # features per camera to extract/track
+fast_threshold: 20               # FAST corner extraction threshold
+grid_x: 5                         # extraction sub-grid, horizontal
+grid_y: 5                         # extraction sub-grid, vertical
+min_px_dist: 10                  # minimum spacing between features (px)
+knn_ratio: 0.70                  # descriptor knn ratio (ORB path)
+track_frequency: 21.0            # tracking rate (fps)
+downsample_cameras: false
+histogram_method: "HISTOGRAM"     # NONE, HISTOGRAM, CLAHE
+
+# --- aruco (unused here) ----------------------------------------------------
+use_aruco: false
+num_aruco: 1024
+downsize_aruco: true
+
+# --- measurement noises / chi2 multipliers ----------------------------------
+up_msckf_sigma_px: 1
+up_msckf_chi2_multipler: 1
+up_slam_sigma_px: 1
+up_slam_chi2_multipler: 1
+up_aruco_sigma_px: 1
+up_aruco_chi2_multipler: 1
+
+use_mask: false
+
+# --- the two Kalibr chains this config pulls in (paths relative to here) -----
+# imu0 noise/bias + T_i_b + time_offset; MUST match the Isaac Sim IMU sensor.
+relative_config_imu: "kalibr_imu_chain.yaml"
+# cam0 intrinsics/distortion/resolution + T_cam_imu (+ cam_overlaps); intrinsics
+# come from 윤호's synth_intrinsics.yaml via calib/fill_from_intrinsics.py.
+relative_config_imucam: "kalibr_imucam_chain.yaml"

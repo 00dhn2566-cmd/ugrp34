@@ -1,0 +1,20 @@
+# Reward weights (spec 7.2) -- SEPARATE from training/env config on purpose:
+# CONVENTIONS.md "RL boundaries" says reward weights live in their own yaml and
+# are never hard-coded. Loaded by rl.reward.RewardConfig.from_yaml.
+#
+# !! STUB VALUES !! Reward DESIGN ownership is UNASSIGNED on the checklist. These
+# are starting points to be tuned; watch the per-term breakdown that the env logs
+# (info["reward_terms"]) for reward hacking.
+#
+# The 5 terms are fixed (spec 7.2): window_pass, collision, progress, attitude,
+# energy. Penalty weights are POSITIVE magnitudes here; rl.reward applies the sign.
+reward:
+  # --- positive rewards ---
+  w_window_pass: 10.0    # per window opening cleanly traversed
+  success_bonus: 20.0    # one-off extra when the FINAL window is passed
+  w_progress: 1.0        # per metre of distance closed to the target this step (dense shaping)
+
+  # --- penalties (magnitudes; applied as negatives in code) ---
+  w_collision: 10.0      # one-off when a wall / window frame is hit
+  w_attitude: 0.10       # * tilt^2 (rad^2) each step -- discourage violent tilting
+  w_energy: 0.01         # * commanded-accel magnitude (m/s^2) each step -- control effort

@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "isaacsim_trajectory.schema.json",
+  "title": "Isaac Sim trajectory stream (control output) -- PROVISIONAL",
+  "description": "성진's control output (control_seoungjin/sample: run_and_log.py writes isaacsim_trajectory.json; CONVENTIONS.md 'Trajectory / motor-command interface'): a time-stamped stream of body poses. Quaternions are wxyz to match common.geometry.quat_wxyz_to_R. PROVISIONAL -- 성진 waits on 윤호 to finalise the Isaac Sim JSON schema; 성진 emits the simplest form and only the conversion logic changes once this is pinned. NOTE ON TIME: on the 성진 control JSON side 'time' is FLOAT SECONDS, NOT integer nanoseconds -- the ns integer clock is the separate vision/VIO stream (CONVENTIONS.md 'Timestamps'); do not conflate the two.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fps", "frames"],
+  "properties": {
+    "fps": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Nominal sample rate in frames per second (> 0). Informational: the authoritative time base is each frame's float-seconds 'time'."
+    },
+    "frames": {
+      "type": "array",
+      "description": "Ordered stream of pose frames (may be empty).",
+      "items": { "$ref": "#/definitions/trajectory_frame" }
+    }
+  },
+  "definitions": {
+    "trajectory_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time", "position", "yaw_rad", "orientation_quat_wxyz"],
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Timestamp in FLOAT SECONDS on 성진's control clock (e.g. 0.01), >= 0. NOT integer nanoseconds (that clock is the separate vision/VIO stream, CONVENTIONS.md 'Timestamps')."
+        },
+        "position": {
+          "type": "array",
+          "description": "Body-origin position [x, y, z] in the +Z-up world frame, metres.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "yaw_rad": {
+          "type": "number",
+          "description": "Heading (yaw) in radians about world +Z. 성진's orientation_quat_wxyz is yaw-only; this is the same heading, kept for consumers that only need it."
+        },
+        "orientation_quat_wxyz": {
+          "type": "array",
+          "description": "Body orientation as a unit quaternion in WXYZ order [w, x, y, z], world<-body, yaw-only (feeds common.geometry.quat_wxyz_to_R).",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    }
+  }
+}

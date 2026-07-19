@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "waypoints_config.schema.json",
+  "title": "성진 controller INPUT config (RL -> control seam)",
+  "description": "The REAL entry point of 성진's controller (control_seoungjin/sample/run_and_log.py, spec'd in control_seoungjin/sample/INPUT_FORMAT.md). A waypoints + limits + dt config, YAML or JSON. THIS is where RL plugs in: the policy emits waypoints, they become this config, and 성진 plans a minimum-time trajectory through them (path_time.plan_waypoints). There is NO yaw/time/quat in the input -- yaw is auto-derived from the velocity heading downstream. 성진 itself does NO validation (KeyError on a missing key); this schema is the added RL->control safety net.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["waypoints", "limits"],
+  "properties": {
+    "waypoints": {
+      "type": "array",
+      "description": "Ordered [x, y, z] points to pass through, in metres, world frame +Z-up. N >= 2; the first point is the start.",
+      "minItems": 2,
+      "items": {
+        "type": "array",
+        "description": "A single [x, y, z] point, metres.",
+        "items": { "type": "number" },
+        "minItems": 3,
+        "maxItems": 3
+      }
+    },
+    "limits": {
+      "type": "object",
+      "description": "Per-axis trajectory limits handed to plan_waypoints. Each is a scalar (same limit on x/y/z) OR an [x, y, z] triple (per-axis). Enforced PER-AXIS, not on the vector magnitude (INPUT_FORMAT.md) -- a diagonal move can exceed the scalar limit in magnitude.",
+      "additionalProperties": false,
+      "required": ["v_max", "a_max", "j_max", "snap_max"],
+      "properties": {
+        "v_max": { "$ref": "#/definitions/limit", "description": "max velocity [m/s]" },
+        "a_max": { "$ref": "#/definitions/limit", "description": "max acceleration [m/s^2]" },
+        "j_max": { "$ref": "#/definitions/limit", "description": "max jerk [m/s^3]" },
+        "snap_max": { "$ref": "#/definitions/limit", "description": "max snap [m/s^4]" }
+      }
+    },
+    "dt": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Output sample interval in seconds (optional, default 0.01)."
+    }
+  },
+  "definitions": {
+    "limit": {
+      "description": "A positive scalar OR a 3-element [x, y, z] array of positive numbers.",
+      "oneOf": [
+        { "type": "number", "exclusiveMinimum": 0 },
+        {
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      ]
+    }
+  }
+}
