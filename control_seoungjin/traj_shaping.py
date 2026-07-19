@@ -249,6 +249,39 @@ def traj_zv(t, pos, f_mode, mode="zv"):
 # counter_swing_offset — 역위상 카운터 가속 오프셋 (지터 소거 2호기, 사용자 설계)
 # ---------------------------------------------------------------------------
 
+def counter_params_from_calib(calib, tail, band_hz=(1.0, 3.0)):
+    """swing_calib.json(schema 0.2) + 피드백 tail 실측 → counter_swing_offset 인자.
+
+    변환 사슬 (교정 v2 공진 체류 근거):
+      진폭: 측정 스윙 amp_deg / S[도/(m/s²)] = 카운터 가속 → /ω² = 위치 진폭
+      위상: counter_swing_offset은 "오프셋 위상 = 측정 위상 그대로" 규약(내부
+            에서 +π)이므로, 가속→스윙 전달 지연(phase_lag_rad)만큼 미리 빼서
+            전달 — 유발 스윙이 측정 스윙과 정확히 역위상이 되게.
+
+    가드: S<=0/결측이면 즉사(쓰레기 교정 소비 방지), f0는 짐 모드 대역 밖이면
+    즉사 (대역 가드 원칙 재사용 — 대역 밖 = 비궤적성 진동).
+    Returns dict(amp_pos_m, phase_rad, f_mode).
+    """
+    S = float(calib.get("S_deg_per_ms2") or 0.0)
+    if S <= 0.0:
+        raise ValueError("swing_calib: S_deg_per_ms2 결측/비양수 - 교정 재실행 필요")
+    f0 = calib.get("f0_hz")
+    if f0 is None or not np.isfinite(f0):
+        f0 = calib.get("drive_freq_hz")
+    f0 = float(f0)
+    if not (band_hz[0] <= f0 <= band_hz[1]):
+        raise ValueError(
+            f"swing_calib: f0={f0}Hz가 짐 모드 대역 {band_hz} 밖 - 소비 거부")
+    w = 2.0 * np.pi * f0
+    a_counter = float(tail["amp_deg"]) / S              # [m/s^2]
+    return {
+        "amp_pos_m": a_counter / w**2,
+        "phase_rad": float(tail["phase_rad"])
+                     - float(calib.get("phase_lag_rad", 0.0)),
+        "f_mode": f0,
+    }
+
+
 def counter_swing_offset(t, amp_pos_m, phase_rad, t_ref_s, f_mode,
                          jerk_budget, ramp_cycles=2.0):
     """잔류 지터를 역위상 사인 위치 오프셋으로 소거하는 델타 레이어 생성.

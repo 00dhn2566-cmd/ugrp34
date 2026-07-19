@@ -205,6 +205,34 @@ class TestZV:
 # ---------------------------------------------------------------------------
 
 class TestCounterSwing:
+    def test_calib_params_conversion(self):
+        """swing_calib -> counter 인자: 진폭 사슬 + 위상 지연 차감."""
+        from traj_shaping import counter_params_from_calib
+        calib = {"f0_hz": 1.75, "S_deg_per_ms2": 5.0, "phase_lag_rad": 0.4}
+        tail = {"amp_deg": 1.0, "phase_rad": 1.0}
+        p = counter_params_from_calib(calib, tail)
+        w = 2.0 * np.pi * 1.75
+        assert p["amp_pos_m"] == pytest.approx((1.0 / 5.0) / w**2)
+        assert p["phase_rad"] == pytest.approx(1.0 - 0.4)
+        assert p["f_mode"] == 1.75
+
+    def test_calib_garbage_rejected(self):
+        """쓰레기 교정(S 결측/f0 대역 밖) 소비 거부 - 07-18 폐기 사건 재발 방지."""
+        from traj_shaping import counter_params_from_calib
+        tail = {"amp_deg": 1.0, "phase_rad": 0.0}
+        with pytest.raises(ValueError, match="S_deg_per_ms2"):
+            counter_params_from_calib({"f0_hz": 1.75}, tail)
+        with pytest.raises(ValueError, match="대역"):
+            counter_params_from_calib(
+                {"f0_hz": 4.4, "S_deg_per_ms2": 5.0}, tail)
+
+    def test_calib_f0_nan_falls_back_to_drive(self):
+        from traj_shaping import counter_params_from_calib
+        calib = {"f0_hz": float("nan"), "drive_freq_hz": 1.8,
+                 "S_deg_per_ms2": 5.0}
+        p = counter_params_from_calib(calib, {"amp_deg": 0.5, "phase_rad": 0.0})
+        assert p["f_mode"] == 1.8
+
     def test_amplitude_clamped_by_jerk_budget(self):
         t = np.arange(0.0, 20.0, DT)
         jerk_budget = 2.0        # 물리 10의 지터 예산 20%
