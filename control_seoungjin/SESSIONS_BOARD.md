@@ -26,6 +26,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-19 — 사용자 부재 자율 모드 진입. **real_yaw 태핑 이미 존재 확인** (run_traj_baked.m El5, StructureWithTime) — command_fidelity 실측 경로 즉시 사용 가능, 튜닝 세션 ★(yaw 채널 요청)은 자연 해소. 교정 v2 스크립트 완성(976864a — 공진 체류 가진), EXTERNAL_INTERFACE에 command_fidelity·superseded 보상 규칙 반영
 - 07-19 — **command_fidelity 구현 완료 (§7)** (ab248e5) — 시간창 waypoint 통과 오차(왕복 오인 방지 실증)/구역 이격/주시 오차(랩·동결 처리)/실측 스캔 완료율/갭 성분 dict/superseded 구분. traj_report --flight-mat 시 자동 병합. yaw 실측 채널 없으면 None (★튜닝 세션: real_yaw 태핑 요청 유지). 비상 세션 traj_pipeline.py 수정과 무충돌 (analyze/report만 작업). 테스트 128개 통과 (비상 WIP 3건 제외 — 걔들 정지거리 공식 튜닝 중, 내 변경 무관)
 - 07-19 — **yaw 구현 완료 (§1 설계 그대로)** — 4모드 + scan 3정책(move/coupled/scan) + yaw 성형·게이트. 스캔 rate 불가침 원칙 코드화(성형 상한=요청 rate), 시간 왜곡 경로 snap 측정-only 강등(§7 일관). 테스트 117개 통과(비상 세션 24개 포함 회귀 0). spline_yaw 계약 불변 — 컨트롤러 수정 불필요
 - 07-19 — ★튜닝/C++ 세션 (yaw 계약, 사용자 지시 "yaw 입력 없으면 default"): `spline_yaw`는 **항상 존재** (yaw 블록 미지정 시 궤적 층이 heading 자동 생성) — 컨트롤러의 "입력 없음" default는 **궤적 부재 상태(무명령 래치/부팅)에서 yaw = 현재 방위 유지** 하나만 정의하면 됨. + scan 모드 대비 yaw 스텝/램프 추종 성능(kp_yaw) 점검과 yaw 실측 로그 채널 확보(command_fidelity §7용) 요청
@@ -50,6 +51,7 @@
 - (이하 이 세션이 직접 기록)
 
 ## 비상(emergency) 세션
+- 07-19 — **A-1 비상 정지 구현 완료** (`traj_emergency.py` + §8 `emergency` 동사 + 테스트 19개, 전체 145개 통과·회귀 0) — 실측 상태 저크 제한 최단 정지: v0=1.5에서 정지 거리 0.819m(2단 정확식 0.821 대비 -0.3%), 게이트 풀한계 통과(jPk 9.0), 비상 레짐(ZVD 생략/마진 반납/snap 측정만), STATE_STALE 거부. 잔여: MATLAB 검증 ① (대기/예약 등록)
 - 07-19 — **감독자 골격 v0.1 완료** (`flight_supervisor.py` + 테스트 24개, 전체 스위트 106개 통과) — flight_state.json 단일 소유·하트비트, 미션 게이트(REJECTED_RECOVERING), 우선순위 중재(B>C>A-1>A-2, 하위는 유예), A-1/A-2 소비, B hash 무효 선언(원장), `heartbeat_stale()` 철칙 3 기준 구현. B/C 트리거 임계 후보(측정지연 0.05s 보정 포함)는 EMERGENCY_STATUS.md에 정리. 다음: A-1 emergency 동사(MATLAB 불필요분) → 검증 ①은 MATLAB 큐 대기
 - 07-19 — **세션 착수** — 필독 5종(HANDOFF_EMERGENCY/§9/§8 실측/PIPELINE_STATUS/HANDOFF_CPP_GAZEBO) 정독, ★소비 2건. 임무: 감독자 + 비상 A-1/A-2/B/C + MATLAB 검증 4편. 1단계(감독자 골격, 파이썬 프로토타입) 착수 — MATLAB 불필요(튜닝 세션 점유 확인, 검증 비행은 큐 대기 예정)
 
@@ -58,6 +60,8 @@
 
 ## 대기/예약 (세션 무관)
 - [MATLAB] 튜닝 세션 잔여: 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) → 0kg 붕괴 국소화 탐침(0.3/0.1/0.03kg) → agile 프로파일 외란/질량 관문 — 스크립트 준비 완료 (0kg A/B·명세 덤프는 완료됨)
-- [MATLAB] path_time 세션: 2호기 교정 **재설계판** — 표준 펄스 실패(07-18)로 정공법 전환: Simscape 짐 바디 외력 펄스 주입 스크립트 신규 작성 필요 (모델 메모리 수정, save 금지). 설계 후 1회 비행 ~5분
+- [MATLAB] path_time 세션: 2호기 교정 v2 **공진 체류 가진** (`diagnose/diagnose_swing_calib2.m`, 976864a — 스크립트 완성, f0 스윕 3점 ~8분). 방법론 변경: 외력 주입이 아니라 궤적 가진 (2호기 액추에이터 = 드론 가속이라 교정도 같은 경로). 슬롯 나면 실행 → swing_calib.json
+- [MATLAB] path_time 세션: yaw 실비행 1편 (scan coupled 미션 — 컨트롤러 yaw 추종 + real_yaw 실측 + command_fidelity 왕복 검증, ~4분). 교정 v2 다음 순위
+- [MATLAB] 비상 세션: 검증 ① A-1 정지 (고속 이동 중 정지 → run_traj_baked, 합격선 오버슈트 <10cm·래치 드리프트 <5cm/8s, ~10분) — 슬롯 해제 시 요청
 - [사용자] 푸시 2줄 (서브모듈 → 부모 순서)
 - [Docker] qc-cpp 컨테이너 빌드 (Desktop 기동 시)

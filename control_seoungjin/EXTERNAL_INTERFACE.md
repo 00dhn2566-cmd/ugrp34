@@ -49,8 +49,9 @@
 | `reject_codes` | SCHEMA_ERROR / TIME_NOT_MONOTONIC / RESHAPED_BEYOND_TOL / GATE_EXCEEDED / KEEP_OUT_VIOLATION | 거부 사유 (안정 계약 — 코드 추가만 되고 의미 변경 없음) |
 | `adjustments` | LIMITS_CLAMPED / TIME_DILATED (+팽창 배율) | 연속 벌점 — "요청보다 얼마나 양보됐나" |
 | `margins` | 물리 한계 대비 피크 비율 (1.0 = 한계) | 1.0에 가까울수록 여유 없는 궤도 |
-| `flight.*` | (비행 후) 추종 RMS, 잔류 지터 등 | 성능 보상 |
-| `scan_coverage` | (스캔 미션) 도착 시점 스캔 완료율 0~1 | 스캔 희생 정도 |
+| `flight.*` | (비행 후) 추종 RMS, 잔류 지터 등 | 성능 보상 (내부 지표) |
+| `command_fidelity.*` | (비행 후) **명령 수행도 — 요청 기준 실측**: waypoint별 통과 오차, 실측 주시 오차, 실측 스캔 완료율, 구역 이격, 갭 분해(plan/track) | **보상은 이걸 우선 사용** — 추종 RMS는 "고쳐진 궤적 대비"라 명령을 많이 고치면 왜곡됨 |
+| `command_fidelity.abort_reason` | `superseded` = 새 명령 승리로 대체됨 | **실패 아님 — 보상 계산에서 제외** (안 그러면 재계획 기피 학습) |
 
 ## 3. yaw 명령 (§1 yaw 절) — 카메라 방향이 필요할 때
 
