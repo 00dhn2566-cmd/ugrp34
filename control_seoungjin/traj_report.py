@@ -114,6 +114,7 @@ def static_report(input_path):
             "shaper": {"mode": res["shaper_mode"], "f_mode_hz": res["f_mode"]},
         },
         "flight": None,
+        "command_fidelity": None,
         "contract_version": CONTRACT_VERSION,
     }
     return report, res
@@ -132,11 +133,22 @@ def add_flight_metrics(report, mat_path):
     return report
 
 
+def add_command_fidelity(report, mat_path, mission_path, abort_reason=None):
+    """Tier 2b: 명령 수행도 (§7 — '의도 대비 실비행', analyze_flight_log 재사용)."""
+    from analyze_flight_log import command_fidelity
+    report["command_fidelity"] = command_fidelity(
+        mat_path, mission_path, report=report, abort_reason=abort_reason)
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser(description="궤도 판정 리포트 (RL 계약)")
     ap.add_argument("--input", required=True)
     ap.add_argument("--flight-mat", default=None,
                     help="비행 후 sim_result_baked.mat — Tier 2 metric 병합")
+    ap.add_argument("--abort-reason", default=None,
+                    help="감독자가 아는 중단 사유 (superseded = 새 명령 대체"
+                         " - 실패 아님, RL 보상 제외)")
     ap.add_argument("--out", default=REPORT_PATH)
     args = ap.parse_args()
 
@@ -146,6 +158,8 @@ def main():
             print("[경고] rejected 궤도에 비행 metric 병합 요청 - 무시")
         else:
             add_flight_metrics(report, args.flight_mat)
+            add_command_fidelity(report, args.flight_mat, args.input,
+                                 abort_reason=args.abort_reason)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     tp._atomic_write_json(args.out, report)
     print(json.dumps(report, indent=2, ensure_ascii=False))

@@ -183,6 +183,195 @@ def write_feedback(report, feedback_path=FEEDBACK_PATH, meta_path=META_PATH):
 TRACK_RMS_VALID_CM = 30.0
 
 
+# ---------------------------------------------------------------------------
+# 명령 수행도 (command_fidelity, INTERFACE_SPEC §7 — "의도 대비 실비행")
+# 구현 확정사항 3건 준수:
+#   1) fidelity_gaps는 스칼라 금지 - 성분별 dict (단위 다른 양 합성은 상위 몫)
+#   2) waypoint 통과 오차는 계획 통과 시각 ±시간창 내 최근접 (왕복 경로에서
+#      "돌아올 때 스친 것" 오인 방지)
+#   3) superseded(새 명령 승리 대체)는 실패와 별도 - 보상 계산 제외용
+# ---------------------------------------------------------------------------
+
+HIT_WINDOW_S = 2.0          # 계획 통과 시각 주변 관측 창 [s]
+ENDPOINT_DONE_CM = 20.0     # 완주 판정 종점 오차 임계
+LOOKAT_EXCLUDE_R = 0.3      # 주시 오차 집계 제외 반경 (§1 특이점 동결과 동일)
+
+
+def waypoint_hits_cm(t_act, pos_act, t_plan, pos_plan, waypoints,
+                     window_s=HIT_WINDOW_S):
+    """요청 waypoint별 실제 최근접 통과 오차 [cm] — 계획 통과 시각 ±창 한정.
+
+    RDP 병합된 요청 점도 호출자가 '요청 원본'을 주면 그대로 측정된다
+    (병합은 계획 사정이지 의도 변경이 아님 — §7).
+    """
+    t_act = np.asarray(t_act, float)
+    pos_act = np.asarray(pos_act, float)
+    t_plan = np.asarray(t_plan, float)
+    pos_plan = np.asarray(pos_plan, float)
+    hits = []
+    for wp in np.asarray(waypoints, float):
+        tau = t_plan[int(np.argmin(np.linalg.norm(pos_plan - wp, axis=1)))]
+        mask = np.abs(t_act - tau) <= window_s
+        if not mask.any():
+            hits.append(None)
+            continue
+        d = np.linalg.norm(pos_act[mask] - wp, axis=1)
+        hits.append(round(float(d.min()) * 100.0, 2))
+    return hits
+
+
+def zone_min_clearance_m(pos_act, zones, inflate_m=0.0):
+    """금지 구역 최소 이격 [m] (음수 = 침범 깊이). zones 없으면 None."""
+    if not zones:
+        return None
+    pos_act = np.asarray(pos_act, float)
+    best = None
+    for z in zones:
+        if z.get("shape") == "sphere":
+            c = np.asarray(z["center"], float)
+            r = float(z["radius_m"]) + inflate_m
+            d = np.linalg.norm(pos_act - c, axis=1) - r
+        elif z.get("shape") == "box":
+            lo = np.asarray(z["min"], float) - inflate_m
+            hi = np.asarray(z["max"], float) + inflate_m
+            out = np.maximum(np.maximum(lo - pos_act, pos_act - hi), 0.0)
+            outside = np.linalg.norm(out, axis=1)
+            inside = np.min(np.minimum(pos_act - lo, hi - pos_act), axis=1)
+            d = np.where(outside > 0, outside, -inside)
+        else:
+            raise ValueError(f"zone shape '{z.get('shape')}' 미지원")
+        m = float(np.min(d))
+        best = m if best is None else min(best, m)
+    return round(best, 3) if best is not None else None
+
+
+def pointing_rms_deg(yaw_act, pos_act, target, exclude_r=LOOKAT_EXCLUDE_R):
+    """look_at 실측 주시 오차 RMS [deg] — 동결 반경 내 샘플은 집계 제외."""
+    yaw_act = np.asarray(yaw_act, float)
+    pos_act = np.asarray(pos_act, float)
+    tgt = np.asarray(target, float)
+    dx = tgt[0] - pos_act[:, 0]
+    dy = tgt[1] - pos_act[:, 1]
+    keep = np.hypot(dx, dy) >= exclude_r
+    if not keep.any():
+        return None
+    want = np.arctan2(dy[keep], dx[keep])
+    err = np.angle(np.exp(1j * (yaw_act[keep] - want)))   # wrap [-pi, pi]
+    return round(float(np.degrees(np.sqrt(np.mean(err ** 2)))), 3)
+
+
+def scan_coverage_actual(yaw_act, scan_cfg):
+    """실비행 yaw가 실제로 훑은 스캔 구간 비율 (0~1)."""
+    yaw_act = np.asarray(yaw_act, float)
+    a0, a1 = float(scan_cfg["from_rad"]), float(scan_cfg["to_rad"])
+    lo, hi = min(a0, a1), max(a0, a1)
+    sweep = hi - lo
+    if sweep <= 0:
+        return 1.0
+    covered = (min(float(yaw_act.max()), hi) - max(float(yaw_act.min()), lo))
+    return round(float(np.clip(covered / sweep, 0.0, 1.0)), 4)
+
+
+def command_fidelity(mat_path, mission_path,
+                     traj_json_path=None, meta_path=META_PATH,
+                     report=None, abort_reason=None):
+    """비행 로그 + 요청 미션 + 계획 궤적 → command_fidelity 블록 (§7).
+
+    abort_reason: 감독자가 아는 중단 사유 ('superseded' = 새 명령 승리 대체 —
+    실패 아님, RL 보상 제외 대상). None이면 종점 도달로 완주 추론.
+    yaw 실측 채널(real_yaw)이 로그에 없으면 주시/스캔 실측은 None (측정 불가
+    를 0으로 속이지 않음).
+    """
+    with open(mission_path, encoding="utf-8") as f:
+        mission = json.load(f)
+    traj_json_path = traj_json_path or os.path.join(OUTPUT_DIR,
+                                                    "trajectory.json")
+    with open(traj_json_path, encoding="utf-8") as f:
+        traj = json.load(f)
+    t_plan = np.asarray(traj["t"], float)
+    pos_plan = np.asarray(traj["pos"], float)
+
+    m = loadmat(mat_path, squeeze_me=True, struct_as_record=False)
+    need = ("sim_time", "act_x1", "act_y1", "act_z1")
+    if not all(k in m for k in need):
+        raise KeyError("command_fidelity: act 위치 로그 없음 - 태핑 확인")
+    st = np.ravel(m["sim_time"])
+    n = min(len(st), *(len(np.ravel(m[f"act_{ax}1"])) for ax in "xyz"))
+    t_act = st[:n]
+    pos_act = np.column_stack([np.ravel(m[f"act_{ax}1"])[:n] for ax in "xyz"])
+
+    # 완주 판정 (§7 확정 3: superseded는 실패와 별도 코드)
+    endpoint_cm = float(np.linalg.norm(pos_act[-1] - pos_plan[-1]) * 100.0)
+    if abort_reason:
+        completed = False
+    else:
+        completed = (t_act[-1] >= t_plan[-1] - 0.5
+                     and endpoint_cm < ENDPOINT_DONE_CM)
+
+    # 도착 시각 (요청 대비 실제): 종점 20cm 이내 최초 진입
+    d_end = np.linalg.norm(pos_act - pos_plan[-1], axis=1)
+    arrived = np.where(d_end < ENDPOINT_DONE_CM / 100.0)[0]
+    t_arrive = float(t_act[arrived[0]]) if len(arrived) else None
+
+    wps = mission.get("waypoints")
+    hits = (waypoint_hits_cm(t_act, pos_act, t_plan, pos_plan, wps)
+            if wps else None)
+
+    ko = mission.get("keep_out") or {}
+    clearance = zone_min_clearance_m(pos_act, ko.get("zones"),
+                                     float(ko.get("inflate_m", 0.0)))
+
+    # yaw 실측 (채널 있으면) — look_at 주시 오차 / scan 실측 완료율
+    yaw_cfg = mission.get("yaw") or {}
+    point_rms, cov_actual = None, None
+    try:
+        t_y, yaw_act = _ts_struct(m, "real_yaw")
+        yaw_i = np.interp(t_act, t_y, np.ravel(yaw_act))
+        if yaw_cfg.get("mode") == "look_at":
+            point_rms = pointing_rms_deg(yaw_i, pos_act, yaw_cfg["target"])
+        if yaw_cfg.get("mode") == "scan":
+            cov_actual = scan_coverage_actual(yaw_i, yaw_cfg["scan"])
+    except KeyError:
+        pass    # yaw 채널 미확보 - None 유지 (0으로 속이지 않음)
+
+    # 갭 분해 (§7 확정 1: 스칼라 금지, 성분별 dict)
+    plan_gap = {"clamp_ratio": None, "dilation": None, "reshape_dev_m": None}
+    if report:
+        for adj in report.get("adjustments") or []:
+            if adj["code"] == "LIMITS_CLAMPED":
+                det = adj["detail"]
+                plan_gap["clamp_ratio"] = round(max(
+                    1.0 - float(v["applied"]) / float(np.max(np.asarray(
+                        v["requested"], float))) for v in det.values()), 4)
+            if adj["code"] == "TIME_DILATED":
+                plan_gap["dilation"] = adj["detail"].get("dilation")
+    if os.path.isfile(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        plan_gap["reshape_dev_m"] = meta.get("smoother", {}).get("max_dev_m")
+        ysc = (meta.get("yaw") or {}).get("scan") or {}
+        if plan_gap["dilation"] is None and ysc.get("time_dilation"):
+            plan_gap["dilation"] = ysc["time_dilation"]
+
+    fl = analyze(mat_path)
+    return {
+        "mission_completed": completed,
+        "abort_reason": abort_reason,
+        "waypoint_hit_cm": hits,
+        "duration_requested_vs_actual_s": [round(float(t_plan[-1]), 2),
+                                           (round(t_arrive, 2)
+                                            if t_arrive else None)],
+        "pointing_rms_deg": point_rms,
+        "scan_coverage_actual": cov_actual,
+        "keep_out_min_clearance_m": clearance,
+        "fidelity_gaps": {
+            "plan": plan_gap,
+            "track": {"rms_cm": fl["moving"]["track_rms_cm"],
+                      "endpoint_cm": round(endpoint_cm, 2)},
+        },
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="시뮬 로그 → 지터 검출 → 피드백 JSON")
     ap.add_argument("--mat", default=DEFAULT_MAT)
