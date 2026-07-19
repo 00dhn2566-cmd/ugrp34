@@ -411,6 +411,19 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   총량) + `fidelity_gaps.track`(궤적→비행 — 추종). waypoint별 통과 오차, 실측
   주시 오차(pointing_rms), 실측 스캔 완료율, 구역 이격까지 **전부 요청 기준**.
   RL 보상은 track_rms(내부 지표)보다 command_fidelity(의도 지표)를 우선 권장.
+  **구현 확정사항 3건 (설계 리뷰 2026-07-19 밤 — 어기면 지표가 거짓말함):**
+  1. `fidelity_gaps`는 **스칼라 금지, 성분별 dict** — `plan: {clamp_ratio,
+     dilation, reshape_dev_m}` / `track: {rms_cm, endpoint_cm}`. 단위가 다른
+     양(비율/시간/거리)을 한 숫자로 합치는 공식은 정의 불가 — 합성은 RL 보상
+     설계자의 몫으로 넘긴다.
+  2. `waypoint_hit_cm`은 **계획 통과 시각 ±수 초 시간창 내** 최근접 거리 —
+     시간 무관 최근접은 왕복 경로에서 "돌아올 때 스친 것"을 통과로 오인.
+     RDP 병합된 요청 점도 측정 대상 (병합은 계획 사정, 의도 아님).
+  3. `mission_completed: false`의 `abort_reason`에 **`superseded`(새 명령 승리로
+     대체됨)를 별도 코드로** — RL이 이를 실패 벌점으로 먹으면 "명령 변경 = 벌"을
+     학습해 재계획 기피 정책이 나온다. superseded는 보상 계산에서 제외할 것.
+  - 구현 참고: 주시 오차 실측은 비행 로그에 yaw 실측 채널 필요 —
+    run_traj_baked.m 로그 탭에 yaw 채널 확보 여부부터 확인.
 - reject_codes의 `code` 값은 안정 계약: 추가는 있어도 의미 변경/삭제는 없음.
 
 ## 8. 작업 API — 동사 카탈로그 (설계 확정 2026-07-17, **구현 전**)
