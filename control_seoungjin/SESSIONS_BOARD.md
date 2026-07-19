@@ -26,6 +26,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-19 — **command_fidelity 구현 완료 (§7)** (ab248e5) — 시간창 waypoint 통과 오차(왕복 오인 방지 실증)/구역 이격/주시 오차(랩·동결 처리)/실측 스캔 완료율/갭 성분 dict/superseded 구분. traj_report --flight-mat 시 자동 병합. yaw 실측 채널 없으면 None (★튜닝 세션: real_yaw 태핑 요청 유지). 비상 세션 traj_pipeline.py 수정과 무충돌 (analyze/report만 작업). 테스트 128개 통과 (비상 WIP 3건 제외 — 걔들 정지거리 공식 튜닝 중, 내 변경 무관)
 - 07-19 — **yaw 구현 완료 (§1 설계 그대로)** — 4모드 + scan 3정책(move/coupled/scan) + yaw 성형·게이트. 스캔 rate 불가침 원칙 코드화(성형 상한=요청 rate), 시간 왜곡 경로 snap 측정-only 강등(§7 일관). 테스트 117개 통과(비상 세션 24개 포함 회귀 0). spline_yaw 계약 불변 — 컨트롤러 수정 불필요
 - 07-19 — ★튜닝/C++ 세션 (yaw 계약, 사용자 지시 "yaw 입력 없으면 default"): `spline_yaw`는 **항상 존재** (yaw 블록 미지정 시 궤적 층이 heading 자동 생성) — 컨트롤러의 "입력 없음" default는 **궤적 부재 상태(무명령 래치/부팅)에서 yaw = 현재 방위 유지** 하나만 정의하면 됨. + scan 모드 대비 yaw 스텝/램프 추종 성능(kp_yaw) 점검과 yaw 실측 로그 채널 확보(command_fidelity §7용) 요청
 - 07-19 — **작업 API §8 구현 완료** (★자기소비: "다음 구현자" 항목) — 동사 6종 CLI (splice 신설: current_state 무정지 전환 + STATE_STALE 거부, check: 부작용 0), 종료 코드 0/1/2, stdout 기계용 JSON. 테스트 82개 통과. 감독자(비상 세션)가 이 CLI로 파이프라인 호출하면 됨 + command_fidelity 구현 확정사항 3건 §7 반영 (572fee4)
