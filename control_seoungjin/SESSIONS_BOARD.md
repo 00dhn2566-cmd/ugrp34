@@ -10,7 +10,7 @@
 - MATLAB 사용 전 여기서 점유 여부 확인 후 자기 줄로 선언 (1대 규칙, RAM 16GB)
 
 ## MATLAB 점유
-- (비어 있음 — 튜닝/C++ 세션 07-19 본작업 완료·해제. 대기/예약 큐 참조)
+- **path_time 세션(자율)** — 07-19 밤: 큐 순차 2건 — ①교정 v2(diagnose_swing_calib2, ~8분) ②yaw 실비행 2편(verify_pipeline --only scan,look_at, ~8분). 끝나면 이 줄 비움. 비상 세션 검증 ①은 그 다음 순서.
 
 ## 튜닝/C++ 세션 (17차 계열)
 - 07-19 — **agile 최종 채택: 삼각 법칙 + z분리** (9026688) — kp_xy=24-16|m-1| (양끝 precision 수렴), z는 8/3.2 고정(벡터 게인+posErrSatZ). 삼각 경사 1.5/1.75/2kg 합격(1.91~3.96cm, z꼬리<1cm — 2kg 한계사이클 소멸), 최종 관문(채택 경로) 외란 1.55도/0.44s + 1kg 이동 1.28cm 합격. C++ qc_apply_profile 동기(precision 골든 비트 동일). MATLAB 해제. ★전 세션: `run_traj_baked.m`에 `qc_zsplit_apply(mdl)` 호출 추가됨 — 직접 load_system 하는 스크립트로 agile 돌릴 땐 이 헬퍼 호출 필수 (비-agile은 무해·선택). ★path_time/RL: agile 유효구간 0.5~2kg, 0.5kg 미만은 precision 권장 (혼돈 구간 실측)

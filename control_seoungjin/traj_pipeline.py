@@ -52,6 +52,7 @@ from path_time import (                         # noqa: E402
     plan_waypoints_flythrough,
 )
 from traj_shaping import (                      # noqa: E402
+    keep_out_check,
     smooth_with_axis_sharing,
     traj_gate,
     traj_smoother,
@@ -612,6 +613,8 @@ def replan_splice(res1, tau_s, new_waypoints, cfg):
         shaped = traj_zv(t_c, smoothed, f_mode, shaper_mode)
     ok, gate_rep = traj_gate(t_c, shaped, PHYS_VMAX, PHYS_AMAX,
                              do_error=True, jmax=PHYS_JMAX, smax=PHYS_SNAP)
+    # A-2 금지 구역 (§9): 스플라이스 결합 타임라인도 전 샘플 검사 (비상 세션)
+    ko_rep = keep_out_check(shaped, cfg.get("keep_out"), do_error=True)
     return {
         "t": t_c, "base": base_c, "smoothed": smoothed, "shaped": shaped,
         "delta": shaped - smoothed, "yaw": _heading_yaw(t_c, shaped),
@@ -619,6 +622,7 @@ def replan_splice(res1, tau_s, new_waypoints, cfg):
         "smoother_info": info_sm, "gate_report": gate_rep, "gate_ok": ok,
         "trajectory_hash": _traj_hash(t_c, shaped),
         "splice_at_s": float(t1[k]),
+        "keep_out_report": ko_rep,
     }
 
 
@@ -955,6 +959,12 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     ok, gate_rep = traj_gate(t, shaped, PHYS_VMAX, PHYS_AMAX,
                              do_error=gate_error, jmax=PHYS_JMAX, smax=smax)
 
+    # 5b) A-2 금지 구역 (§9, 비상 세션): 최종 성형 궤적 전 샘플 교차 검사.
+    #     위반 = KeepOutViolation 즉사 (gate_error=False면 리포트만).
+    ko_rep = keep_out_check(shaped, cfg.get("keep_out"), do_error=gate_error)
+    if ko_rep["violated"]:
+        ok = False
+
     yaw, yaw_meta = _make_yaw(ycfg, t, shaped)
     if scan_meta:
         yaw_meta["scan"] = scan_meta
@@ -968,6 +978,7 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         "limits_effective": lim, "retimed": retimed,
         "limits_clamped": cfg.get("_limits_clamped"),
         "yaw_meta": yaw_meta,
+        "keep_out_report": ko_rep,
     }
 
 
@@ -1057,7 +1068,8 @@ def run(input_path, out_dir=OUTPUT_DIR):
 #   stdout 마지막 줄 = 기계용 JSON 한 줄 — 상위 파서는 마지막 줄만 읽는다
 # ---------------------------------------------------------------------------
 
-VERBS = ("plan", "splice", "check", "feedback", "estimate", "status")
+VERBS = ("plan", "splice", "check", "feedback", "estimate", "status",
+         "emergency")
 EXIT_OK, EXIT_INTERNAL, EXIT_REJECTED = 0, 1, 2
 
 
@@ -1102,6 +1114,74 @@ def cli_splice(args):
            "report_path": os.path.join(args.out_dir, "pipeline_meta.json"),
            "trajectory_hash": res["trajectory_hash"]})
     return EXIT_OK
+
+
+def cli_emergency(args):
+    """A-1 비상 정지 (§9, 비상 세션): 실측 상태 최단 정지 -> 래치 호버.
+
+    비상 레짐: ZVD 생략 + 마진 반납(물리 한계 풀사용) + snap 측정만.
+    상태는 기준(ref_state) 아닌 **실측**(pos/vel/acc) 사용 — 기존 규칙.
+    신선도 위반은 splice와 동일하게 STATE_STALE 거부 (낡은 실측에서 만든
+    정지 궤적 = 엉뚱한 곳으로 제동).
+    """
+    from traj_emergency import build_emergency_stop   # 지연 임포트
+    try:
+        st = load_current_state(args.state)
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        _emit({"verdict": "rejected",
+               "reject_codes": [{"code": "STATE_STALE", "detail": str(e)}],
+               "report_path": None, "trajectory_hash": None})
+        return EXIT_REJECTED
+    res = build_emergency_stop(st, hold_s=args.hold_s)
+    # A-2 연동 (§9 적용 범위): 정지 궤적도 구역 검사. 단 정지는 거부하지
+    # 않는다 — 물리적으로 불가피한 침범은 KEEP_OUT_UNAVOIDABLE로 보고만
+    # (정지가 관통 회피보다 우선. 측방 회피 제동은 후속 확장).
+    ko = _load_keep_out(args.keep_out)
+    ko_rep = keep_out_check(res["shaped"], ko, do_error=False)
+    if ko_rep["violated"]:
+        print(f"[emergency] 경고: 제동 경로가 금지 구역 침범 "
+              f"(이격 {ko_rep['min_clearance_m']:.2f}m) - "
+              "KEEP_OUT_UNAVOIDABLE 보고")
+        _append_emergency_ledger("keep_out_unavoidable", {
+            "min_clearance_m": ko_rep["min_clearance_m"],
+            "zone_idx": ko_rep["zone_idx"],
+            "traj_hash": res["trajectory_hash"]})
+    res["keep_out_report"] = ko_rep
+    p0 = np.asarray(st["pos"], float)
+    stop_pt = np.asarray(res["emergency"]["stop_point"], float)
+    save_outputs(res, np.vstack([p0, stop_pt]), args.out_dir)
+    em = res["emergency"]
+    print(f"[emergency] stop: 거리 {em['stop_dist_m']*100:.1f}cm, "
+          f"제동 {em['stop_T_s']:.2f}s, hold {em['hold_s']:.1f}s")
+    _emit({"verdict": "accepted",
+           "report_path": os.path.join(args.out_dir, "pipeline_meta.json"),
+           "trajectory_hash": res["trajectory_hash"],
+           "emergency": em,
+           "keep_out": (dict(ko_rep, code="KEEP_OUT_UNAVOIDABLE")
+                        if ko_rep["violated"] else ko_rep)})
+    return EXIT_OK
+
+
+KEEP_OUT_PATH = os.path.join(OUTPUT_DIR, "keep_out.json")   # 감독자가 영속화
+
+
+def _load_keep_out(path):
+    """감독자가 영속화한 keep_out 상태 로드 (없으면 None — 구역 미설정)."""
+    p = path or KEEP_OUT_PATH
+    if not os.path.isfile(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _append_emergency_ledger(event, detail):
+    """비상 이벤트 원장 기록 (§9 — append-only, 기존 스키마와 별개 형태)."""
+    os.makedirs(os.path.dirname(LEDGER_PATH), exist_ok=True)
+    with open(LEDGER_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "event": event,
+            "at": datetime.now().strftime(TS_FMT + ".%f")[:-3],
+            "detail": detail}, ensure_ascii=False) + "\n")
 
 
 def cli_check(args):
@@ -1155,7 +1235,8 @@ def cli_status(args):
 
 
 _CLI = {"plan": cli_plan, "splice": cli_splice, "check": cli_check,
-        "feedback": cli_feedback, "estimate": cli_estimate, "status": cli_status}
+        "feedback": cli_feedback, "estimate": cli_estimate,
+        "status": cli_status, "emergency": cli_emergency}
 
 
 def main(argv=None):
@@ -1170,13 +1251,20 @@ def main(argv=None):
         ap.add_argument("--input",
                         default=os.path.join(INPUT_DIR, "example_mission.json"),
                         help="경로 JSON (기본: input/example_mission.json)")
-    if verb in ("plan", "splice"):
+    if verb in ("plan", "splice", "emergency"):
         ap.add_argument("--out-dir", default=OUTPUT_DIR)
-    if verb == "splice":
+    if verb in ("splice", "emergency"):
         ap.add_argument("--state", default=None,
                         help="current_state.json (기본: RT 경로 - §0)")
+    if verb == "splice":
         ap.add_argument("--emergency", action="store_true",
                         help="비상 재계획 - 기준 아닌 측정 상태에서 이어붙임")
+    if verb == "emergency":
+        ap.add_argument("--hold-s", type=float, default=2.0,
+                        help="정지 후 래치 관측 hold [s] (기본 2.0)")
+        ap.add_argument("--keep-out", default=None,
+                        help="keep_out JSON (기본: output/keep_out.json - "
+                             "감독자 영속화 파일)")
     if verb in ("feedback", "estimate"):
         ap.add_argument("--log", required=True,
                         help="비행 로그 .mat (sim_result_baked.mat)")
@@ -1186,8 +1274,11 @@ def main(argv=None):
         rc = _CLI[verb](args)
     except (KeyError, ValueError, FileNotFoundError) as e:
         # 검증 계열 실패 = 거부 (스키마/예산/게이트/시간역행 - 즉사 원칙의 CLI 번역)
+        # 예외가 reject_code를 가지면 그 코드로 (예: KEEP_OUT_VIOLATION §9)
         _emit({"verdict": "rejected",
-               "reject_codes": [{"code": "SCHEMA_ERROR", "detail": str(e)}],
+               "reject_codes": [{"code": getattr(e, "reject_code",
+                                                 "SCHEMA_ERROR"),
+                                 "detail": str(e)}],
                "report_path": None, "trajectory_hash": None})
         rc = EXIT_REJECTED
     except Exception as e:                   # noqa: BLE001 - 최후 방벽

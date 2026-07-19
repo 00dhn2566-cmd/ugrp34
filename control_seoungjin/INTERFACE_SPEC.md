@@ -445,6 +445,7 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
 | `feedback` | 비행 로그 → 지터 보고 | `feedback --log <sim_result.mat>` | 비행 로그 | §3 attitude_feedback (used:false) |
 | `estimate` | 플랜트 상수 추정 | `estimate --log <sim_result.mat>` | 비행 로그 | §6 param_estimate |
 | `status` | 현황 조회 | `status` | — | §5 요약 + 원장 최근 N건 + 최신 report (stdout JSON) |
+| `emergency` | **A-1 비상 정지** (§9, 구현 2026-07-19 비상 세션) | `emergency [--state <current_state.json>] [--out-dir] [--hold-s 2.0] [--keep-out <keep_out.json>]` | §5 (**실측** 사용) + §9 keep_out(선택, 기본 `output/keep_out.json` — 감독자 영속화) | §2 산출물 3종 (정지 궤적, 비상 레짐: ZVD 생략·마진 반납·snap 측정만) + stdout JSON에 `emergency{stop_point,stop_dist_m,stop_T_s}`·`keep_out` 동봉. 제동 경로 구역 침범 시 거부 대신 `KEEP_OUT_UNAVOIDABLE` 보고+원장 기록 |
 
 공통 규약:
 - **종료 코드**: `0` 성공(조정 있어도 성공 — adjustments는 report로 통지) /
@@ -475,7 +476,8 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
 
 - **mode의 단일 소유자 = 감독자**: `flight_state.json` (§0 RT 경로, 원자적 쓰기)
   `{written_at, mode, active_traj_hash, reason}` — mode는
-  `normal | recovering | hover_latched | emergency_stopping`. current_state(§5)는
+  `normal | recovering | hover_latched | emergency_stopping | power_degraded`
+  (C 추가 2026-07-19, 아래 유형 C 절). current_state(§5)는
   물리 상태 보고 전용으로 남고 mode 필드는 넣지 않는다 (v0.3 확장 철회 — 소유권
   분리: 컨트롤러=물리, 감독자=판단).
 - **철칙 1 — 결정 경로에만**: 감독자는 명령 수락/거부/모드 전환만 (~수 Hz).
@@ -531,6 +533,14 @@ v2.0/a2.0/j10 풀사용), snap 측정만. 정지 거리 수학은 `stop_dist`(tr
 - 비행 중 갱신으로 현행 궤적이 구역과 교차하게 되면: 즉시 회피 재계획(스플라
   이스, 새 명령 승리와 동일 통로). 회피 불가능(현재 위치가 이미 구역 내 등)이면
   A-1 정지로 강등 + 보고.
+- **구현 확정 (2026-07-19 비상 세션)**: 미션 JSON 선택 필드는 최상위
+  `"keep_out": {"zones": [...], "inflate_m": 0.5}` (위 zones 스키마 그대로) —
+  plan/splice 게이트가 최종 성형 궤적 전 샘플을 검사해 위반 시
+  `KEEP_OUT_VIOLATION` 거부. 회피 재계획 프리미티브는
+  `traj_shaping.keep_out_avoid_waypoints()` (재조밀화 push-out, 시작/종점이
+  구역 안이면 unavoidable로 즉사 = A-1 강등 신호). 감독자 keep_out 영속화
+  파일 `output/keep_out.json`을 emergency 동사가 기본 소비. 검사 리포트는
+  산출물 res의 `keep_out_report{min_clearance_m, violated}`.
 
 ### 유형 B — 자체 회생형 (자세 상실 복구)
 

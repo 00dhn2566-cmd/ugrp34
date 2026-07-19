@@ -22,7 +22,225 @@ __all__ = [
     "traj_gate",
     "smooth_with_axis_sharing",
     "counter_swing_offset",
+    "KeepOutViolation",
+    "keep_out_clearance",
+    "keep_out_check",
+    "keep_out_avoid_waypoints",
 ]
+
+
+# ---------------------------------------------------------------------------
+# A-2 금지 구역 (INTERFACE_SPEC §9 — 비상 세션 추가)
+#   적용 범위: 위치 제어가 살아 있는 모든 모드 (계획/스플라이스/비상 재계획
+#   전부 게이트에서 전 샘플 교차 검사). B 회생만 면제 (자세 상실 중엔
+#   위치 제어 부재로 준수 불가능).
+# ---------------------------------------------------------------------------
+
+class KeepOutViolation(ValueError):
+    """금지 구역 침범 — reject_code 안정 계약 (추가만, 의미 변경/삭제 금지)."""
+    reject_code = "KEEP_OUT_VIOLATION"
+
+
+def keep_out_clearance(pos, zones, inflate_m=0.5):
+    """전 샘플 x 전 구역 최소 이격 [m] (음수 = inflate 포함 구역 내부).
+
+    zone 스키마 (§9): {"shape":"box","min":[x,y,z],"max":[x,y,z]} 또는
+    {"shape":"sphere","center":[x,y,z],"radius_m":r}.
+    inflate_m: 드론 반경 + 현수 짐 반경 + 정적 편각 최대 처짐 몫 (§9 —
+    짐은 드론 위치보다 로프 길이만큼 밑에서 흔들린다).
+
+    Returns
+    -------
+    (min_clearance_m, sample_idx, zone_idx) — 구역이 없으면 (inf, -1, -1)
+    """
+    pos = np.atleast_2d(np.asarray(pos, float))
+    best = (np.inf, -1, -1)
+    for zi, z in enumerate(zones):
+        shape = z.get("shape")
+        if shape == "box":
+            lo = np.asarray(z["min"], float)
+            hi = np.asarray(z["max"], float)
+            if np.any(hi < lo):
+                raise ValueError(f"keep_out box: max < min ({z})")
+            d_out = np.maximum(np.maximum(lo - pos, pos - hi), 0.0)
+            outside = np.linalg.norm(d_out, axis=1)
+            depth = np.min(np.minimum(pos - lo, hi - pos), axis=1)
+            dist = np.where(outside > 0.0, outside, -depth)
+        elif shape == "sphere":
+            c = np.asarray(z["center"], float)
+            r = float(z["radius_m"])
+            dist = np.linalg.norm(pos - c, axis=1) - r
+        else:
+            raise ValueError(f"keep_out zone shape 미지원: {shape!r} "
+                             "(box | sphere)")
+        clearance = dist - float(inflate_m)
+        k = int(np.argmin(clearance))
+        if clearance[k] < best[0]:
+            best = (float(clearance[k]), k, zi)
+    return best
+
+
+def keep_out_check(pos, keep_out, do_error=True):
+    """§9 게이트 검사: 침범 시 KeepOutViolation 즉사 (조용히 통과 금지).
+
+    keep_out: {"zones": [...], "inflate_m": 0.5} (§9 keep_out_update 스키마).
+    do_error=False면 raise 대신 리포트만 (비상 정지 불가피 보고 경로용).
+
+    Returns
+    -------
+    rep : {"min_clearance_m", "sample_idx", "zone_idx", "violated"}
+    """
+    zones = (keep_out or {}).get("zones", [])
+    if not zones:
+        return {"min_clearance_m": None, "sample_idx": None,
+                "zone_idx": None, "violated": False}
+    inflate = float(keep_out.get("inflate_m", 0.5))
+    c, k, zi = keep_out_clearance(pos, zones, inflate)
+    rep = {"min_clearance_m": c, "sample_idx": k, "zone_idx": zi,
+           "violated": bool(c < 0.0)}
+    if rep["violated"] and do_error:
+        raise KeepOutViolation(
+            f"금지 구역 침범: 최소 이격 {c:.3f}m (구역 #{zi}, 샘플 #{k}, "
+            f"inflate {inflate}m) - 회피 재계획 필요")
+    return rep
+
+
+def _push_out_dir(p, zone):
+    """구역 중심에서 바깥으로 미는 단위 방향 (이격 증가 방향)."""
+    if zone["shape"] == "sphere":
+        d = p - np.asarray(zone["center"], float)
+        n = np.linalg.norm(d)
+        return d / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+    lo = np.asarray(zone["min"], float)
+    hi = np.asarray(zone["max"], float)
+    inside = np.all((p >= lo) & (p <= hi))
+    if inside:
+        # 내부: 박스 중심에서 방사 방향 (sphere와 동일 규약).
+        # 최근접 면 축 방식은 경로가 그 축과 평행할 때 점이 경로를 따라
+        # 미끄러지기만 하는 퇴화(미수렴 실측 60회)가 있어 기각.
+        d = p - 0.5 * (lo + hi)
+        n = np.linalg.norm(d)
+        return d / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+    d = np.maximum(np.maximum(lo - p, p - hi), 0.0)
+    sign = np.where(p > hi, 1.0, np.where(p < lo, -1.0, 0.0))
+    d = d * sign
+    n = np.linalg.norm(d)
+    return d / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+
+
+def _densify_polyline(wp, step):
+    """세그먼트별 등간격 재샘플 (양끝 포함) — 현(chord) 침범 검사의 전제."""
+    acc = [np.asarray(wp[0], float)]
+    for a, b in zip(wp[:-1], wp[1:]):
+        n = max(int(np.ceil(np.linalg.norm(b - a) / step)), 1)
+        for k in range(1, n + 1):
+            acc.append(a + (b - a) * k / n)
+    return np.asarray(acc)
+
+
+def _rdp_polyline(pts, eps):
+    """RDP 폴리라인 단순화 (traj_pipeline._rdp와 동일 알고리즘 — 순환
+    임포트 회피용 사본. 원본 수정 시 함께 갱신)."""
+    pts = np.asarray(pts, float)
+    n = len(pts)
+    keep = np.zeros(n, bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    while stack:
+        i, j = stack.pop()
+        if j <= i + 1:
+            continue
+        a, b = pts[i], pts[j]
+        ab = b - a
+        L2 = float(np.dot(ab, ab))
+        seg = pts[i + 1:j]
+        if L2 < 1e-24:
+            d = np.linalg.norm(seg - a, axis=1)
+        else:
+            t = np.clip((seg - a) @ ab / L2, 0.0, 1.0)
+            d = np.linalg.norm(seg - a - t[:, None] * ab, axis=1)
+        k = int(np.argmax(d))
+        if d[k] > eps:
+            m = i + 1 + k
+            keep[m] = True
+            stack.append((i, m))
+            stack.append((m, j))
+    return pts[keep]
+
+
+def keep_out_avoid_waypoints(waypoints, keep_out, extra_margin_m=0.1,
+                             sample_step_m=0.05, max_iter=60):
+    """§9 A-2 회피 재계획: 구역을 지나는 waypoint 폴리라인을 우회로로 수정.
+
+    방법 (v1 — 재조밀화 push-out 반복):
+      매 반복: ① 폴리라인을 sample_step_m 간격 재샘플 (밀린 점 사이의 현이
+      구역을 관통하는지 새 중간점으로 검사 — 구역 중심 정관통 경로에서 점만
+      좌우로 갈라지고 현이 남는 퇴화 대응) ② 이격 < extra_margin_m 샘플을
+      경계 바깥 방향으로 밀기 ③ 전 샘플 이격 확보 시 종료.
+      종료 후 RDP(2cm)로 간소화, 간소화가 침범을 재유발하면 조밀 경로 유지.
+    첫/끝 waypoint가 이미 구역 안이면 회피 불가능 — KeepOutViolation
+    (unavoidable=True) 즉사. §9: 이 경우 A-1 정지 강등 + 보고가 규정.
+
+    Returns: (new_waypoints (M,3), moved: bool)
+    """
+    zones = (keep_out or {}).get("zones", [])
+    wp = np.asarray(waypoints, float)
+    if not zones:
+        return wp, False
+    inflate = float(keep_out.get("inflate_m", 0.5))
+    margin = float(extra_margin_m)
+
+    for end_pt in (wp[0], wp[-1]):
+        c, _, zi = keep_out_clearance(end_pt.reshape(1, 3), zones, inflate)
+        if c < 0.0:
+            e = KeepOutViolation(
+                f"회피 불가능: 시작/종점이 이미 구역 #{zi} 안 (이격 {c:.3f}m)"
+                " - A-1 정지 강등 대상 (§9)")
+            e.unavoidable = True
+            raise e
+
+    pts = wp.copy()
+    moved = False
+    for _ in range(max_iter):
+        pts = _densify_polyline(pts, sample_step_m)
+        # 근접 중복 병합 (반복 재샘플로 인한 점 증식 방지)
+        merged = [pts[0]]
+        for p in pts[1:]:
+            if np.linalg.norm(p - merged[-1]) > 0.4 * sample_step_m:
+                merged.append(p)
+        if np.linalg.norm(merged[-1] - pts[-1]) > 1e-12:
+            merged.append(pts[-1])               # 종점 보존
+        pts = np.asarray(merged)
+
+        dirty = False
+        for z in zones:
+            c_all = np.array([keep_out_clearance(p.reshape(1, 3), [z],
+                                                 inflate)[0] for p in pts])
+            bad = np.where(c_all < margin)[0]
+            bad = bad[(bad != 0) & (bad != len(pts) - 1)]   # 양끝 고정
+            if len(bad) == 0:
+                continue
+            dirty = moved = True
+            for i in bad:
+                d = _push_out_dir(pts[i], z)
+                # 이격을 c -> margin까지 올리는 부족분 + 2cm 여유
+                pts[i] = pts[i] + d * (margin - c_all[i] + 0.02)
+        if not dirty:
+            break
+    else:
+        raise KeepOutViolation(
+            f"회피 재계획 미수렴 ({max_iter}회) - 구역 배치가 경로를 막음")
+
+    if not moved:
+        return wp, False
+
+    # 간소화 (RDP 2cm) + 가드: 간소화 후 현이 다시 침범하면 조밀 경로 유지
+    out = _rdp_polyline(pts, 0.02)
+    c_chk, _, _ = keep_out_clearance(
+        _densify_polyline(out, sample_step_m), zones, inflate)
+    if c_chk < 0.0:
+        out = pts
+    return out, True
 
 
 # ---------------------------------------------------------------------------
