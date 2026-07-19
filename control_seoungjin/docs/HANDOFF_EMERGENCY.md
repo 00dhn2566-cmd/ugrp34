@@ -65,6 +65,10 @@
 
 ## 4. MATLAB 함정 목록 (하나라도 어기면 몇 시간 날림)
 
+> **실행 사용서는 [MATLAB_USAGE.md](MATLAB_USAGE.md)** (전 세션 공용, 튜닝 세션 작성) —
+> 실행 명령·템플릿 복사 규칙·신호 태핑 표·비상 특화 인프라(외란 주입/IC 기울기/펄스
+> 설계 스크립트 위치)까지 절차 전부. 아래는 금지 사항 요약.
+
 - **구운 모델 `Models/quadcopter_package_delivery.slx`에 절대 `save_system` 금지** —
   메모리 수정만, 닫을 때 저장 안 함. 앵커 보정·클램프가 파일에 구워져 있음.
 - 궤적 변수는 **모델 워크스페이스**에 assignin (`get_param(mdl,'ModelWorkspace')`) —
