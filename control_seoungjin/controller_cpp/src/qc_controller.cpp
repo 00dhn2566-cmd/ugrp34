@@ -23,14 +23,15 @@ void qc_bind(QcState& st, const QcConfig& c) {
     st.pidPosY = Pid{c.kpPos, c.kiPos, c.kdPos, c.filtDPos, 0};
     st.pidPosZ = Pid{c.kpPos, c.kiPos, c.kdPos, c.filtDPos, 0};
 
-    st.pidAttP = Pid{c.kpAtt * s.sT * s.sIa, c.kiAtt * s.sT * s.sIa,
-                     c.kdAtt * s.sT * s.sIa, c.filtDAtt, c.limAtt};
+    // 18차: 자세/고도 질량 의존 = 1차식(sAMass/sZMass), yaw = 질량 동결(sQ만)
+    st.pidAttP = Pid{c.kpAtt * s.sT * s.sAMass, c.kiAtt * s.sT * s.sAMass,
+                     c.kdAtt * s.sT * s.sAMass, c.filtDAtt, c.limAtt};
     st.pidAttR = st.pidAttP;
 
-    st.pidYaw = Pid{c.kpYaw * s.sQ * s.sIz, c.kiYaw * s.sQ * s.sIz,
-                    c.kdYaw * s.sQ * s.sIz, c.filtDYaw, c.limYaw};
-    st.pidAlt = Pid{c.kpAlt * s.sT * s.sM, c.kiAlt * s.sT * s.sM,
-                    c.kdAlt * s.sT * s.sM, c.filtDAlt, c.limAlt};
+    st.pidYaw = Pid{c.kpYaw * s.sQ, c.kiYaw * s.sQ,
+                    c.kdYaw * s.sQ, c.filtDYaw, c.limYaw};
+    st.pidAlt = Pid{c.kpAlt * s.sT * s.sZMass, c.kiAlt * s.sT * s.sZMass,
+                    c.kdAlt * s.sT * s.sZMass, c.filtDAlt, c.limAlt};
 
     for (int i = 0; i < 4; ++i)
         st.pidMot[i] = Pid{c.kpMot, c.kiMot, 0, 100, c.limMot};

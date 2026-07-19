@@ -175,7 +175,11 @@ inline void qc_apply_profile(QcConfig& c, Profile p) {
 }
 
 // 스케일 적용된 실효 게인 계산 (parameters.m 로직 대응)
-struct QcScales { double sT, sQ, sIa, sIz, sM, posErrSat; };
+// 18차: 자세/고도의 질량 의존은 물성비(sIa/sM)가 아니라 질량 1차식(sAMass/sZMass)을 쓴다
+// — 물성비는 0kg 레짐 붕괴로 반증(refine_mass_probe), 1차식은 0~2kg 6점 검증 통과
+// (refine_linear_law: 전 질량 무발산, 1kg 회귀 무결, 0.5 내삽 비열등, 2kg 외삽 우세).
+// sIa/sIz/sM은 진단/비교용으로만 유지. yaw는 질량 동결(sQ만 적용, 검증 구성 그대로).
+struct QcScales { double sT, sQ, sIa, sIz, sM, sAMass, sZMass, posErrSat; };
 
 inline QcScales qc_scales(const QcConfig& c) {
     PhysOut now = qc_phys(c.droneMass, c.pkgMass, c.pkgSize);
@@ -186,6 +190,11 @@ inline QcScales qc_scales(const QcConfig& c) {
     s.sIa = now.I_att / ref.I_att;
     s.sIz = now.I_yaw / ref.I_yaw;
     s.sM  = now.m_tot / ref.m_tot;
+    // 질량 1차식 (18차): 배율(m) = s0 + (1-s0)·m_pkg, 0kg 앵커 실측 sA=0.75/sZ=0.56,
+    // 1kg(앵커 탑재)에서 정확히 1 = 현행 채택 게인. 외삽은 2kg 캡(검증 상한).
+    const double mClamped = c.pkgMass < 2.0 ? c.pkgMass : 2.0;
+    s.sAMass = 0.75 + 0.25 * mClamped;
+    s.sZMass = 0.56 + 0.44 * mClamped;
     s.posErrSat = c.posErrSatCoef / c.kpPos;
     return s;
 }

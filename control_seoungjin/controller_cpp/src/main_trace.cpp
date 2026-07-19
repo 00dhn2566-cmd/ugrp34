@@ -27,6 +27,8 @@ static int run_smoke() {
     const qc::QcScales s = qc::qc_scales(cfg);
     std::printf("스케일: sT=%.6f sQ=%.6f sIa=%.6f sIz=%.6f sM=%.6f posErrSat=%.4f\n",
                 s.sT, s.sQ, s.sIa, s.sIz, s.sM, s.posErrSat);
+    std::printf("질량 1차식(18차): sAMass=%.6f sZMass=%.6f (m_pkg=%.3f, 1kg에서 1)\n",
+                s.sAMass, s.sZMass, cfg.pkgMass);
 
     qc::QcInput in{};
     in.refPos[0] = 1.0; in.refPos[2] = 1.0;   // x로 1m 스텝 (스모크 전용 — 실전은 성형 궤적)

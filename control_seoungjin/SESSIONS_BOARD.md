@@ -13,6 +13,9 @@
 - **튜닝/C++ 세션** — 07-19~ PID 튜닝 본작업: 0kg 탐침(6구성 ~10분) → 0kg 앵커 좌표하강 → 1차식 법칙. 라운드 사이 해제 가능 (필요 시 요청).
 
 ## 튜닝/C++ 세션 (17차 계열)
+- 07-19 — **질량 1차식 게인 법칙 채택 완료** (사용자 지시 이행): 0kg 앵커 sA=0.75/sZ=0.56 (r2 재현 확인) → 6질량 검증 합격(0~2kg 무발산, 1kg 회귀 무결 4.08cm, 0.5 내삽 비열등, 2kg 외삽 우세) → parameters.m `sA_mass/sZ_mass` 반영 + C++ `qc_scales` 동기(1kg 골든 재생 비트 동일). yaw는 질량 동결. 약점: 0~0.25kg 전이 20~29cm(안정 유지). 상세 TUNING_STATUS §Y 18차
+- 07-19 — **0kg 앵커 r1 완료** (9점 격자): 승자 sA=0.75/sZ=0.56 (추종 21.4cm/오버 37cm, 유일 무발산). 예측 뒤집힘 — 자세도 25% 감쇠가 최선 (동결 sA=1.0은 오버 759~4294cm 발산). sZ 하단 모서리라 r2 (sA 0.65~0.85 × sZ 0.40~0.56) 실행 중 (~14분). 이후: 1차식 6점 검증 → parameters.m 반영
+- 07-19 — 질량 탐침 완료: 붕괴 경계 0.3~0.1kg. xy 붕괴=자세 게인 과소(sIa≤0.61), z 붕괴=고도 게인 과대(sM=1.0, z피크 83~84cm) — 채널 분리 확인, 0kg 앵커 설계 근거 (refine_mass_probe.csv)
 - 07-19 — 비상 세션용: HANDOFF_EMERGENCY **§8 추가** (제어기 내부 실측 — 클램프 지도/여유 추력 구조/측정 지연 0.05s/anti-windup 부재/한계사이클/플랜트 진실 주입 도구/C++ 협의 규칙). B·C 반사 설계 전 필독 (577c884) [★소비됨: 비상 세션 정독 완료 07-19]
 - 07-18 밤 — **골든 대조 1차 합격**: cmd_pitch/roll RMS 0.07%/0.00%, corr 0.9999 — C++ 위치 체인 = Simulink 동일성 증명. 덤프 확정 3건 반영(믹서 표/측정필터 0.05/고도 2단 클램프). **질량 1차식 게인 법칙 명세 확정(사용자)** — 선행: 0kg 앵커 (ad4b855)
 - 07-17 01:45 — **⚠ 전 세션 공유: 0kg(생 드론) 레짐 붕괴 실측** — 정규화 ON/OFF 무관 준발산(오버슈트 2m/43m, ON이 그나마 방어). 붕괴는 0.5~0kg 사이(0.5kg은 정상) — 탐침으로 국소화 예정 (validate_phys_ab0.csv). [정정 02:10: path_time 발견 "임무에 투하 없음(사용자 확인)"에 따라 "복귀 구간 미지원" 해석 철회 — 0kg은 운영 구간이 아니라 **과적합 경계** 이슈. 단 생 드론 시운전 시 주의는 유효]
@@ -51,6 +54,8 @@
 - (이하 이 세션이 직접 기록)
 
 ## 비상(emergency) 세션
+- 07-19 — ★튜닝/C++ 세션: 비상 협의 의제 3건 — ① 컨트롤러 측 하트비트 감시(철칙 3: flight_state.json written_at 나이>1.0s → 현행 궤적 완주 후 래치 호버. 기준 구현 `flight_supervisor.heartbeat_stale()`, C++ 미션 러너/qc_io에 이식 요청) ② B RECOVER 상태기계 C++ 이식(골든 확장 후 — 트리거 후보 EMERGENCY_STATUS 참조) ③ C-반사 믹서 자세 우선 배분(qc_controller.hpp 수정이라 골든 재대조 필수, 믹서 부호표 §8 기반. w_sat 임계 실측은 qc_trace Ct 0.8 열화로 비상 세션이 수행 예정)
+- 07-19 — **A-2 금지 구역 + 감독자 v0.2 완료 (사용자 부재 자율 모드)** — keep_out 이격 검사(box/sphere, 전 샘플)·게이트 연동(plan/splice/emergency, KEEP_OUT_VIOLATION)·회피 재계획(재조밀화 push-out — 정관통 퇴화 2건 실측 해결)·감독자 러너(action→§8 CLI subprocess 실전 왕복)·C-모드 트리거 감시(옵트인, w_sat 실측 대기)·검증 ①② 오케스트레이터 `verify_emergency.py` 작성(미실행, MATLAB 슬롯 대기). §8 표에 emergency 동사 등재 + §9 A-2 구현 확정 추기. **테스트 169개 전체 통과** (신규 40, 회귀 0). 상세 EMERGENCY_STATUS.md
 - 07-19 — **A-1 비상 정지 구현 완료** (`traj_emergency.py` + §8 `emergency` 동사 + 테스트 19개, 전체 145개 통과·회귀 0) — 실측 상태 저크 제한 최단 정지: v0=1.5에서 정지 거리 0.819m(2단 정확식 0.821 대비 -0.3%), 게이트 풀한계 통과(jPk 9.0), 비상 레짐(ZVD 생략/마진 반납/snap 측정만), STATE_STALE 거부. 잔여: MATLAB 검증 ① (대기/예약 등록)
 - 07-19 — **감독자 골격 v0.1 완료** (`flight_supervisor.py` + 테스트 24개, 전체 스위트 106개 통과) — flight_state.json 단일 소유·하트비트, 미션 게이트(REJECTED_RECOVERING), 우선순위 중재(B>C>A-1>A-2, 하위는 유예), A-1/A-2 소비, B hash 무효 선언(원장), `heartbeat_stale()` 철칙 3 기준 구현. B/C 트리거 임계 후보(측정지연 0.05s 보정 포함)는 EMERGENCY_STATUS.md에 정리. 다음: A-1 emergency 동사(MATLAB 불필요분) → 검증 ①은 MATLAB 큐 대기
 - 07-19 — **세션 착수** — 필독 5종(HANDOFF_EMERGENCY/§9/§8 실측/PIPELINE_STATUS/HANDOFF_CPP_GAZEBO) 정독, ★소비 2건. 임무: 감독자 + 비상 A-1/A-2/B/C + MATLAB 검증 4편. 1단계(감독자 골격, 파이썬 프로토타입) 착수 — MATLAB 불필요(튜닝 세션 점유 확인, 검증 비행은 큐 대기 예정)
@@ -62,6 +67,6 @@
 - [MATLAB] 튜닝 세션 잔여: 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) → 0kg 붕괴 국소화 탐침(0.3/0.1/0.03kg) → agile 프로파일 외란/질량 관문 — 스크립트 준비 완료 (0kg A/B·명세 덤프는 완료됨)
 - [MATLAB] path_time 세션: 2호기 교정 v2 **공진 체류 가진** (`diagnose/diagnose_swing_calib2.m`, 976864a — 스크립트 완성, f0 스윕 3점 ~8분). 방법론 변경: 외력 주입이 아니라 궤적 가진 (2호기 액추에이터 = 드론 가속이라 교정도 같은 경로). 슬롯 나면 실행 → swing_calib.json
 - [MATLAB] path_time 세션: yaw 실비행 1편 (scan coupled 미션 — 컨트롤러 yaw 추종 + real_yaw 실측 + command_fidelity 왕복 검증, ~4분). 교정 v2 다음 순위
-- [MATLAB] 비상 세션: 검증 ① A-1 정지 (고속 이동 중 정지 → run_traj_baked, 합격선 오버슈트 <10cm·래치 드리프트 <5cm/8s, ~10분) — 슬롯 해제 시 요청
+- [MATLAB] 비상 세션: 검증 ①·② (`python verify_emergency.py` — A-1 정지 오버슈트/드리프트 + A-2 회피 실측 이격, MATLAB 3회 ~20분, 타 MATLAB 가드 내장) — 슬롯 해제 시 실행. 첫 실행이라 로그 전체 확인 필요
 - [사용자] 푸시 2줄 (서브모듈 → 부모 순서)
 - [Docker] qc-cpp 컨테이너 빌드 (Desktop 기동 시)
