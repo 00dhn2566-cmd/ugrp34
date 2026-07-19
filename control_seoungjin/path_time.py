@@ -350,13 +350,24 @@ def _find_min_time_bc(p0, pf, v0, a0, j0, vf, af, jf,
                 for i in range(3)]
 
     d = np.maximum(np.abs(pf - p0), 1e-9)
-    T_lo = float(np.max([
-        np.max(d / v_max),
-        np.max(np.sqrt(2.0 * d / a_max)),
-        np.max((6.0 * d / j_max) ** (1.0 / 3.0)),
-        np.max((24.0 * d / snap_max) ** (1.0 / 4.0)),
-        1e-4,
-    ]))
+    # 하한 공식 주의 (촘촘 곡선 3배 지연 사건, 2026-07-19): sqrt(2d/a) 등은
+    # **정지-정지 전용** 하한. 통과 속도가 있으면 진짜 최소시간(~d/v)보다
+    # 위에 깔려서 이분탐색이 못 내려가고, 그 T에서 "긴 시간 동안 짧은 거리를
+    # 빠른 경계속도로" = 왕복 배회 궤적이 강제돼 실현가능 창까지 위로 밀림
+    # (0.2m 세그먼트 실측: 참 0.25s vs 구 하한 0.84s -> 세그먼트당 ~4s).
+    # 경계가 움직이면 전 상태에서 유효한 하한은 평균속도 한계 d/v_max 뿐.
+    rest_bc = (np.linalg.norm(v0) + np.linalg.norm(vf)
+               + np.linalg.norm(a0) + np.linalg.norm(af)) < 1e-9
+    if rest_bc:
+        T_lo = float(np.max([
+            np.max(d / v_max),
+            np.max(np.sqrt(2.0 * d / a_max)),
+            np.max((6.0 * d / j_max) ** (1.0 / 3.0)),
+            np.max((24.0 * d / snap_max) ** (1.0 / 4.0)),
+            1e-4,
+        ]))
+    else:
+        T_lo = float(max(np.max(d / v_max), 1e-4))
 
     T_hi = None
     T_probe = T_lo
@@ -418,16 +429,17 @@ def plan_waypoints_flythrough(waypoints,
     # a=0 강제는 코너에서 부자연·보수적. 구심 가속을 경계조건으로 준다)
     v_pass_mag = float(np.min(v_max))
     a_avail = float(np.min(a_max))
-    v_nodes = [np.zeros(3)]
-    a_nodes = [np.zeros(3)]
+
+    # 1패스: 노드별 목표 속력 (꺾임각 + 곡률 원호 법칙)
+    speeds = np.zeros(n_wp)
+    bis_dirs = [np.zeros(3)] * n_wp
+    kappas = np.zeros(n_wp)
     for i in range(1, n_wp - 1):
         bis = dirs[i - 1] + dirs[i]
         nb = np.linalg.norm(bis)
         cos_half = 0.5 * nb                 # 단위벡터 합: |d1+d2| = 2cos(θ/2)
         if nb < 1e-9 or cos_half <= 0.0:
-            v_nodes.append(np.zeros(3))     # 반전 코너 -> 정지
-            a_nodes.append(np.zeros(3))
-            continue
+            continue                        # 반전 코너 -> 정지 유지
         # Menger 곡률 (3점 외접원): 코너를 "원호로 지나는" 물리 해석
         a_, b_, c_ = waypoints[i - 1], waypoints[i], waypoints[i + 1]
         cross = np.linalg.norm(np.cross(b_ - a_, c_ - a_))
@@ -439,14 +451,39 @@ def plan_waypoints_flythrough(waypoints,
             # 원호 법칙 — 계수 0.5: 구심 가속은 노드 기록분 외에 세그먼트
             # 내부(접선 가감속 + 저크/스냅 천이)에도 여유가 필요
             speed = min(speed, np.sqrt(0.5 * a_avail / kappa))
-        L_adj = min(lens[i - 1], lens[i])
-        speed = min(speed, np.sqrt(2.0 * a_avail * L_adj))
-        v_nodes.append((bis / nb) * speed)
+        speeds[i] = speed
+        bis_dirs[i] = bis / nb
+        kappas[i] = kappa
+
+    # 2패스: 전후진 가속 제약 평활 (촘촘 곡선 보수성 해소, 2026-07-19).
+    # 구(舊) 상한 sqrt(2·a·L_adj)는 "인접 세그먼트 안 완전 정지"를 노드마다
+    # 요구 — 촘촘 입력(L 0.2m)에선 직선급 경로도 0.57m/s로 깎였다 (실측
+    # 백로그). fly-through는 이웃 노드도 속도를 가지므로 필요한 것은 완전
+    # 정지가 아니라 이웃과의 Δv 가속 실현성: v_i² ≤ v_j² + 2·a·L (전진 j=i-1,
+    # 후진 j=i+1 — 양끝 v=0이 앵커). 세그먼트 내부 저크/스냅 천이 몫은
+    # 가용 가속의 절반만 써서 남긴다 (사전 가능성 패스가 최후 백스톱).
+    a_link = 0.5 * a_avail
+    for i in range(1, n_wp):                # 전진
+        cap = np.sqrt(speeds[i - 1] ** 2 + 2.0 * a_link * lens[i - 1])
+        speeds[i] = min(speeds[i], cap)
+    for i in range(n_wp - 2, -1, -1):       # 후진
+        cap = np.sqrt(speeds[i + 1] ** 2 + 2.0 * a_link * lens[i])
+        speeds[i] = min(speeds[i], cap)
+
+    v_nodes = [np.zeros(3)]
+    a_nodes = [np.zeros(3)]
+    for i in range(1, n_wp - 1):
+        speed = speeds[i]
+        if speed <= 0.0:
+            v_nodes.append(np.zeros(3))
+            a_nodes.append(np.zeros(3))
+            continue
+        v_nodes.append(bis_dirs[i] * speed)
         # 구심 가속 기록: a = v²·κ · (중심 방향 = 접선 변화 방향)
         n_vec = dirs[i] - dirs[i - 1]
         nn = np.linalg.norm(n_vec)
-        if kappa > 1e-9 and nn > 1e-9:
-            a_nodes.append((n_vec / nn) * (speed ** 2 * kappa))
+        if kappas[i] > 1e-9 and nn > 1e-9:
+            a_nodes.append((n_vec / nn) * (speed ** 2 * kappas[i]))
         else:
             a_nodes.append(np.zeros(3))
     v_nodes.append(np.zeros(3))
