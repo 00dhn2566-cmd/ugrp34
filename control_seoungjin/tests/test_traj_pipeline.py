@@ -94,6 +94,95 @@ class TestPipeline:
         mat = loadmat(os.path.join(out, "trajectory.mat"))
         assert str(mat["controller_profile"][0]) == "agile"
 
+    def _last_json(self, capsys):
+        out = capsys.readouterr().out.strip().splitlines()
+        return json.loads(out[-1])
+
+    def test_verb_plan_exit0_and_machine_json(self, mission, tmp_path, fb_env, capsys):
+        path, _ = mission
+        out = str(tmp_path / "out")
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["plan", "--input", path, "--out-dir", out])
+        assert ei.value.code == tp.EXIT_OK
+        tail = self._last_json(capsys)
+        assert tail["verdict"] == "accepted"
+        assert tail["trajectory_hash"]
+        assert os.path.isfile(tail["report_path"])
+
+    def test_verb_omitted_is_plan(self, mission, tmp_path, fb_env, capsys):
+        path, _ = mission
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["--input", path, "--out-dir", str(tmp_path / "out")])
+        assert ei.value.code == tp.EXIT_OK
+
+    def test_verb_check_no_side_effects(self, mission, tmp_path, capsys):
+        path, _ = mission
+        before = set(os.listdir(tp.OUTPUT_DIR)) if os.path.isdir(tp.OUTPUT_DIR) else set()
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["check", "--input", path])
+        assert ei.value.code == tp.EXIT_OK
+        after = set(os.listdir(tp.OUTPUT_DIR)) if os.path.isdir(tp.OUTPUT_DIR) else set()
+        assert before == after, "check는 output/에 아무것도 쓰면 안 됨"
+        assert self._last_json(capsys)["verdict"] in ("accepted", "adjusted")
+
+    def test_verb_check_rejected_exit2(self, tmp_path, capsys):
+        cfg = {"waypoints": [[0, 0, 1], [1, 0, 1]],
+               "limits": {"v_max": 1.7, "a_max": 0.8, "j_max": 2.0,
+                          "snap_max": 10.0},
+               "strict": True}
+        p = tmp_path / "strict.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["check", "--input", str(p)])
+        assert ei.value.code == tp.EXIT_REJECTED
+        assert self._last_json(capsys)["verdict"] == "rejected"
+
+    def test_verb_splice_stale_state_rejected(self, mission, tmp_path, capsys):
+        path, _ = mission
+        st = {"timestamp": "2026-07-16T00-00-00.000",
+              "ref_state": {"pos": [0, 0, 1], "vel": [0, 0, 0],
+                            "acc": [0, 0, 0]}}
+        sp = tmp_path / "current_state.json"
+        sp.write_text(json.dumps(st), encoding="utf-8")
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["splice", "--input", path, "--state", str(sp),
+                     "--out-dir", str(tmp_path / "out")])
+        assert ei.value.code == tp.EXIT_REJECTED
+        tail = self._last_json(capsys)
+        assert tail["reject_codes"][0]["code"] == "STATE_STALE"
+
+    def test_verb_splice_fresh_state_flies(self, mission, tmp_path, capsys):
+        from datetime import datetime
+        path, _ = mission
+        st = {"timestamp": datetime.now().strftime(tp.TS_FMT + ".%f")[:-3],
+              "ref_state": {"pos": [0.0, 0.0, 1.0], "vel": [0.3, 0.0, 0.0],
+                            "acc": [0.0, 0.0, 0.0]}}
+        sp = tmp_path / "current_state.json"
+        sp.write_text(json.dumps(st), encoding="utf-8")
+        out = str(tmp_path / "out")
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["splice", "--input", path, "--state", str(sp),
+                     "--out-dir", out])
+        assert ei.value.code == tp.EXIT_OK
+        tail = self._last_json(capsys)
+        assert tail["verdict"] in ("accepted", "adjusted")
+        assert os.path.isfile(os.path.join(out, "trajectory.mat"))
+
+    def test_verb_bad_input_rejected_not_crash(self, tmp_path, capsys):
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps({"waypoints": [[0, 0, 1], [1, 0, 1]]}),
+                     encoding="utf-8")
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["plan", "--input", str(p), "--out-dir", str(tmp_path / "o")])
+        assert ei.value.code == tp.EXIT_REJECTED
+        assert self._last_json(capsys)["verdict"] == "rejected"
+
+    def test_verb_status_runs(self, capsys):
+        with pytest.raises(SystemExit) as ei:
+            tp.main(["status"])
+        assert ei.value.code == tp.EXIT_OK
+        assert "verdict" in self._last_json(capsys)
+
     def test_controller_profile_default_and_invalid(self, tmp_path, fb_env):
         base = {
             "waypoints": [[0, 0, 1], [1, 0, 1]],

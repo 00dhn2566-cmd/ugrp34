@@ -163,6 +163,14 @@ Bias Load 피드포워드 과잉 → 드리프트/링잉. 투하 비활성화 �
 | 추정기 | ✅ | 질량 2.2712kg (실측 대비 0.06%, R² 0.98) / K̂_thrust R² 1.0 |
 | 스텝 백스톱 | ✅ (07-17 02:05 재비행) | 추종 2.79cm / tail 0.018° — path_vis 서브미터 최소 2점 가드 패치 유효. 재시간화 정상(스텝→S-커브, 팽창 x0.30, 경로 이탈 0.0cm). **매트릭스 v3 전 항목 완결** |
 
+## 작업 API §8 구현 완료 (2026-07-19)
+
+`traj_pipeline.py <verb>` 단일 진입점 6동사 전부 구현 — plan(하위 호환: 동사
+생략 시 plan) / **splice(신설 CLI — current_state 기준 무정지 전환, 신선도 위반
+STATE_STALE 거부)** / check(부작용 0 — output 미기록·피드백 비소비, RL 대량
+사전 질의용) / feedback / estimate / status. 종료 코드 0(성공·조정 포함)/2(거부)/
+1(내부 오류), stdout 마지막 줄 = 기계용 JSON. 테스트 8건 추가 (82개 통과).
+
 ## controller_profile 동봉 (2026-07-17, 튜닝 세션 ★ 소비)
 
 경로 JSON 선택 필드 `controller_profile`(`precision` 기본/`balanced`/`agile`) —
@@ -174,7 +182,6 @@ parameters.m `ctrl_profile` / C++ `qc_apply_profile`(튜닝 세션 소관), 파�
 
 - [ ] **command_fidelity 블록 구현** (§7 설계 확정 2026-07-19) — analyze_flight_log 확장: waypoint별 최근접 통과 오차, look_at/scan 실측 주시 오차, 실측 스캔 완료율, 구역 이격, 갭 분해(plan/track). traj_report에 편입
 - [ ] **yaw 명령 인터페이스 구현** — 설계는 §1 확정(2026-07-19): heading/hold/look_at 3모드, yaw 전용 성형(1축 스무더 재사용, unwrap 각도) + 게이트 yaw rate/acc 검사(잠정 1.0/2.0), look_at 특이점 동결(r_freeze 0.3m), 주시 오차 margins 보고. 비전 통합(창문 주시) 전까지 필요
-- [ ] **작업 API(동사 카탈로그) 구현** — 설계는 INTERFACE_SPEC §8에 확정(2026-07-17, 사용자 지시로 설계만). 핵심: `traj_pipeline.py <verb>` 단일 진입점, `splice` CLI 신설(현재 함수만 존재), 종료 코드 0/1/2 계약, stdout 마지막 줄 기계용 JSON
 - [ ] **emergency 동사 설계·구현** (사용자 예약 2026-07-17 "나중에") — §8에 `emergency` 추가. 재료: current_state 상태 승계(스플라이스 검증됨) + `stop_dist` 정확식(정지 프로파일) + build_trajectory(v0≠0) 비상 분기. 결정 필요: 트리거(상위 call vs 대이탈 자동), 동작(제자리 정지 호버 우선), **비상 레짐 규칙 전환**(ZVD 생략 — 군지연 0.56s 사치, 지터 마진 20% 반납하고 물리 한계 풀사용)
 - [ ] **2호기 교정 재설계** (07-18 실측: 10/20cm 표준 펄스로는 짐 모드 미가진 — 진폭 0.07/0.21°, f0=NaN, 선형성 1.50 불합격 → swing_calib.json 폐기). 후보 ①대진폭 펄스 ②ZV-off 공격 왕복 ③**짐 직접 외란 주입(정공법 — 2호기 목적이 외란 대응)**: Simscape 짐 바디에 External Force 블록으로 펄스 외력 → 응답에서 f0/S/위상. ③은 모델 수정 필요(메모리만, save 금지)
 - [ ] **counter_swing 2호기 — 필수로 승격** (사용자 역할 확정: 외란 유발 스윙 감쇠도 궤적 층 소관). 4단계: ① 교정 비행 → 자세°↔가속 상수 (`diagnose_swing_calib.m`) ② tail 기반 오프라인 연결(다음 비행에 반영 — 현 인프라로 가능) **②.5 waypoint 단위 상쇄(사용자 원안 2026-07-17): 세그먼트 N 로그에서 지터 {amp,phase} 추출 → 세그먼트 N+1 시작에 역위상 delta 주입. 실시간판보다 타이밍 여유 초 단위(위상은 f0으로 전파) — ③보다 먼저 할 것** ③ 비행 중 실시간: 스윙 관측기(자세 잔차 1~3Hz 대역 추출) + delta 실시간 주입(스플라이스 통로 재사용, 지연 <140ms 요건). **공통: 시간 예산(사용자 지적 2026-07-17)** — 1.8Hz에서 상쇄 잔류 <20%려면 위상 기준 시각 오차 **±35ms** 이내 (278ms 틀리면 역위상이 정위상 = 증폭). 공통 시간축은 벽시계가 아닌 궤적 시간(t_on_traj_s + traj_hash, §5)으로 이미 확정. 실기에선 주입 경로 지연(감지→컨트롤러 반영) 실측 후 위상 전진 보정 필요 — 교정 비행 항목에 포함할 것

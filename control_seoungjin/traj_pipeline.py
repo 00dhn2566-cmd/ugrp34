@@ -24,8 +24,15 @@ delta는 trajectory.mat에 jitter_delta로 별도 저장 — attitude_feedback �
 attitude_feedback.json 핸드셰이크: used:false만 소비 → mode_freq_hz로 셰이퍼
 f0 갱신 → 궤적 생성 성공 후 used:true 재기록 (이중 보정 방지).
 
-사용:
-    python traj_pipeline.py --input input/example_mission.json
+사용 (작업 API, INTERFACE_SPEC §8 — 동사 생략 = plan, 기존 호출 하위 호환):
+    python traj_pipeline.py plan --input input/example_mission.json
+    python traj_pipeline.py splice --input input/new_mission.json [--state <current_state.json>]
+    python traj_pipeline.py check --input input/mission.json     # 부작용 없음
+    python traj_pipeline.py feedback --log <sim_result_baked.mat>
+    python traj_pipeline.py estimate --log <sim_result_baked.mat>
+    python traj_pipeline.py status
+종료 코드: 0 성공(조정 포함) / 2 거부 / 1 내부 오류.
+stdout 마지막 줄 = 기계용 JSON 한 줄 ({"verdict", "report_path", "trajectory_hash"}).
 """
 
 import argparse
@@ -824,13 +831,150 @@ def run(input_path, out_dir=OUTPUT_DIR):
     return res
 
 
-def main():
-    ap = argparse.ArgumentParser(description="경로 JSON → 컨트롤러 궤적 체인")
-    ap.add_argument("--input", default=os.path.join(INPUT_DIR, "example_mission.json"),
-                    help="경로 JSON (기본: input/example_mission.json)")
-    ap.add_argument("--out-dir", default=OUTPUT_DIR)
-    args = ap.parse_args()
-    run(args.input, args.out_dir)
+# ---------------------------------------------------------------------------
+# 작업 API — 동사 진입점 (INTERFACE_SPEC §8)
+#   종료 코드: 0 성공(조정 포함) / 2 거부(reject) / 1 내부 오류
+#   stdout 마지막 줄 = 기계용 JSON 한 줄 — 상위 파서는 마지막 줄만 읽는다
+# ---------------------------------------------------------------------------
+
+VERBS = ("plan", "splice", "check", "feedback", "estimate", "status")
+EXIT_OK, EXIT_INTERNAL, EXIT_REJECTED = 0, 1, 2
+
+
+def _emit(obj):
+    """기계용 JSON 한 줄 (§8 계약: stdout 마지막 줄). 사람용 로그는 이 위에."""
+    print(json.dumps(obj, ensure_ascii=False))
+
+
+def _verdict_of(res):
+    return ("adjusted" if (res.get("limits_clamped") or res.get("retimed"))
+            else "accepted")
+
+
+def cli_plan(args):
+    res = run(args.input, args.out_dir)
+    _emit({"verdict": _verdict_of(res),
+           "report_path": os.path.join(args.out_dir, "pipeline_meta.json"),
+           "trajectory_hash": res["trajectory_hash"]})
+    return EXIT_OK
+
+
+def cli_splice(args):
+    """비행 중 새 명령 (새 명령 승리 policy) — current_state 기준 무정지 전환."""
+    cfg, wp_new = load_mission(args.input)
+    if wp_new is None:
+        raise ValueError("splice는 waypoints 입구만 지원 (trajectory 입구 불가)")
+    try:
+        st = load_current_state(args.state)
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        # 신선도/부재/스키마 — 낡은 상태 이어붙이기는 미분킥 자초라 전부 거부
+        _emit({"verdict": "rejected",
+               "reject_codes": [{"code": "STATE_STALE", "detail": str(e)}],
+               "report_path": None, "trajectory_hash": None})
+        return EXIT_REJECTED
+    wp, v0, a0, _j0 = splice_waypoints_from_state(
+        st, wp_new.tolist(), emergency=args.emergency)
+    f_mode = float(cfg.get("shaper", {}).get("f_mode_hz", F_MODE_DEFAULT))
+    res = build_trajectory(cfg, wp, f_mode, v0=v0, a0=a0)
+    res["controller_profile"] = cfg["controller_profile"]
+    save_outputs(res, wp, args.out_dir)
+    _emit({"verdict": _verdict_of(res),
+           "report_path": os.path.join(args.out_dir, "pipeline_meta.json"),
+           "trajectory_hash": res["trajectory_hash"]})
+    return EXIT_OK
+
+
+def cli_check(args):
+    """실행 없이 검정만 — 부작용 0 (output/ 미기록, 피드백/원장 비소비).
+    RL이 후보 궤도를 대량 사전 질의해도 상태 오염 없음."""
+    import traj_report                      # 지연 임포트 (순환 방지)
+    report, _res = traj_report.static_report(args.input)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    _emit({"verdict": report["verdict"], "report_path": None,
+           "trajectory_hash": (report.get("trajectory") or {}).get("hash")})
+    return EXIT_OK if report["verdict"] != "rejected" else EXIT_REJECTED
+
+
+def cli_feedback(args):
+    from analyze_flight_log import analyze, write_feedback
+    rep = analyze(args.log)
+    write_feedback(rep)
+    _emit({"verdict": "accepted", "report_path": FEEDBACK_PATH,
+           "trajectory_hash": rep.get("trajectory_hash")})
+    return EXIT_OK
+
+
+def cli_estimate(args):
+    from estimate_params import ESTIMATE_PATH, estimate, write_estimate
+    est = estimate(args.log)
+    write_estimate(est)
+    _emit({"verdict": "accepted", "report_path": ESTIMATE_PATH,
+           "trajectory_hash": None})
+    return EXIT_OK
+
+
+def cli_status(args):
+    """현황 요약: 실시간 상태 + 원장 최근 N건 + 최신 산출물 meta."""
+    out = {"current_state": None, "ledger_recent": [], "latest_meta": None}
+    try:
+        out["current_state"] = load_current_state()
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        out["current_state_error"] = str(e)
+    if os.path.isfile(LEDGER_PATH):
+        with open(LEDGER_PATH, encoding="utf-8") as f:
+            lines = [json.loads(ln) for ln in f if ln.strip()]
+        out["ledger_recent"] = lines[-LEDGER_RECENT_N:]
+    meta_p = os.path.join(OUTPUT_DIR, "pipeline_meta.json")
+    if os.path.isfile(meta_p):
+        with open(meta_p, encoding="utf-8") as f:
+            out["latest_meta"] = json.load(f)
+    print(json.dumps(out, indent=2, ensure_ascii=False, default=str))
+    _emit({"verdict": "accepted", "report_path": None,
+           "trajectory_hash": (out["latest_meta"] or {}).get("trajectory_hash")})
+    return EXIT_OK
+
+
+_CLI = {"plan": cli_plan, "splice": cli_splice, "check": cli_check,
+        "feedback": cli_feedback, "estimate": cli_estimate, "status": cli_status}
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    verb = "plan"                            # 하위 호환: 동사 생략 = plan
+    if argv and argv[0] in VERBS:
+        verb = argv.pop(0)
+
+    ap = argparse.ArgumentParser(
+        description=f"경로 JSON -> 컨트롤러 궤적 체인 (작업 API §8, 동사: {verb})")
+    if verb in ("plan", "splice", "check"):
+        ap.add_argument("--input",
+                        default=os.path.join(INPUT_DIR, "example_mission.json"),
+                        help="경로 JSON (기본: input/example_mission.json)")
+    if verb in ("plan", "splice"):
+        ap.add_argument("--out-dir", default=OUTPUT_DIR)
+    if verb == "splice":
+        ap.add_argument("--state", default=None,
+                        help="current_state.json (기본: RT 경로 - §0)")
+        ap.add_argument("--emergency", action="store_true",
+                        help="비상 재계획 - 기준 아닌 측정 상태에서 이어붙임")
+    if verb in ("feedback", "estimate"):
+        ap.add_argument("--log", required=True,
+                        help="비행 로그 .mat (sim_result_baked.mat)")
+    args = ap.parse_args(argv)
+
+    try:
+        rc = _CLI[verb](args)
+    except (KeyError, ValueError, FileNotFoundError) as e:
+        # 검증 계열 실패 = 거부 (스키마/예산/게이트/시간역행 - 즉사 원칙의 CLI 번역)
+        _emit({"verdict": "rejected",
+               "reject_codes": [{"code": "SCHEMA_ERROR", "detail": str(e)}],
+               "report_path": None, "trajectory_hash": None})
+        rc = EXIT_REJECTED
+    except Exception as e:                   # noqa: BLE001 - 최후 방벽
+        _emit({"verdict": "error", "detail": f"{type(e).__name__}: {e}",
+               "report_path": None, "trajectory_hash": None})
+        rc = EXIT_INTERNAL
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
