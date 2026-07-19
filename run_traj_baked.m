@@ -25,6 +25,7 @@ load_system('quadcopter_library');
 quadcopter_package_parameters;
 mdl = 'quadcopter_package_delivery';
 load_system(mdl);
+qc_zsplit_apply(mdl);   % 18차 z분리: PosErr Sat Z -> posErrSatZ (메모리 수술, 전 프로파일 무해)
 
 % --- 궤적 로드 + 형식 검증 (침묵 no-op 금지: 이상하면 즉사) ---
 trajFile = fullfile(modelDir, 'trajectory.mat');

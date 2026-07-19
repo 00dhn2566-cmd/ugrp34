@@ -113,27 +113,46 @@ filtM_position = 0.005;
 % 대신 검증된 선택지를 제공하고 선택권을 상위로. 전환은 임무 단위(비행 전) - v1.
 %   precision: 호버 지터 0.002도 / 이동 4.1cm  (16차 지터 킬 보존, 기본값)
 %   balanced : 호버 지터 0.10도  / 이동 2.7cm
-%   agile    : 호버 지터 0.25도  / 이동 1.3cm  (r6 승자 24/10.8 - 이동 검증, 외란/질량 관문 대기)
+%   agile    : 호버 지터 0.25도  / 이동 1.32cm@1kg (18차 삼각 법칙 - 아래 참조)
 % 사용: 시뮬 전 base 워크스페이스에 ctrl_profile='agile' 지정 (미지정 = precision).
 % 상위 인터페이스: 경로 JSON controller_profile 필드 (INTERFACE_SPEC 협의 중 - 상황판 ★).
+%
+% [18차 agile 재설계 - 삼각 법칙 + z분리 (사용자 결정 "z가 문제/위치 PID도 1차식")]
+% 고정 24/10.8은 1kg 밖에서 붕괴 실측: 0kg 격자 전멸(위치 kp 자체가 범인), 0.5kg 발산,
+% 2kg 정착 후 z 한계사이클 85cm(자세 지터->기울기 추력손실->고도 진동). 채택 형태:
+%   위치 x/y: kp = 24 - 16·|m_pkg - 1| (1kg 정점, 0/2kg에서 precision 8로 수렴 - 양끝 검증점)
+%   위치 z  : 8/3.2 고정 (z분리 - 이동 시작/끝 z 낙하 42->1.3cm 실증. 벡터 게인 [xy xy z])
+%   유효 구간: 0.5~2kg 실증 (1.91~3.96cm, z꼬리 0.6~0.9cm). 0.5kg 미만은 혼돈 구간 -
+%   안정은 유지하나 재현성 없음, 상위 계층은 저질량에서 precision 권장.
+% 주의: .slx의 PosErr Sat Z는 posErrSat를 참조 - agile로 돌릴 땐 시뮬 전에
+%   qc_zsplit_apply(mdl) 호출 필수 (메모리에서 posErrSatZ로 분기, save 금지 규칙 준수).
 if ~exist('ctrl_profile', 'var'); ctrl_profile = 'precision'; end
 switch ctrl_profile
     case 'precision'
         kp_position = 8;   kd_position = 3.2;
+        posErrSat   = 1.2 / kp_position;
+        posErrSatZ  = posErrSat;
     case 'balanced'
         kp_position = 12;  kd_position = 4.8;
+        posErrSat   = 1.2 / kp_position;
+        posErrSatZ  = posErrSat;
     case 'agile'
-        kp_position = 24;  kd_position = 10.8;
+        tri_agile   = max(0, 1 - abs(m_pkg_now - 1));   % 1kg=1, 0/2kg=0
+        kp_xy       = 8   + 16  * tri_agile;
+        kd_xy       = 3.2 + 7.6 * tri_agile;
+        kp_position = [kp_xy, kp_xy, 8];                % 벡터 - PID 블록 축별 적용
+        kd_position = [kd_xy, kd_xy, 3.2];
+        posErrSat   = 1.2 / kp_xy;                      % x/y 클램프 (곱 불변식)
+        posErrSatZ  = 1.2 / 8;                          % z 클램프 (qc_zsplit_apply 필요)
     otherwise
         error('ctrl_profile 미지원: %s (precision|balanced|agile)', ctrl_profile);
 end
 ki_position    = 0.04; % r7 스윕 {0.02,0.04,0.08} 완전 동률 - 전 프로파일 공통 (와인드업 신호 없음)
 filtD_position = 100;
 pos2attitude   = 2.4;
-posErrSat      = 1.2 / kp_position;  % 오차 클램프 (사용자 설계, 15차): 곱 불변식 C x kp = 1.2
-                                     % -> P항 최대 명령 기울기 = 1.2 x 0.2446 = 16.8도 보존.
-                                     % kp_position을 튜닝해도 클램프가 자동 연동 (현재 0.15m).
-                                     % .slx의 PosErr Sat X/Y/Z가 이 변수를 참조.
+% posErrSat: 오차 클램프 (사용자 설계, 15차): 곱 불변식 C x kp = 1.2
+% -> P항 최대 명령 기울기 = 1.2 x 0.2446 = 16.8도 보존. 프로파일 switch에서 자동 연동.
+% .slx의 PosErr Sat X/Y가 posErrSat 참조, Z는 qc_zsplit_apply 후 posErrSatZ 참조.
 
 filtM_attitude = 0.01;
 kp_attitude    = -85 * sT * sA_mass; % 미세조정(16차): 실모델 좌표하강 3라운드 수렴 - 호버 지터 0.076->0.0020도 (38배).
