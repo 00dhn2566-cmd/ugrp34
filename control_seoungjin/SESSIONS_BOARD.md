@@ -34,6 +34,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-19 밤 — **2호기 교정 v2 성공** — 공진 곡선 확정: 1.75Hz 가진 정상진폭 4.72° (1.65/1.85Hz는 1.42/1.88° — 피크 명확), 판정 기준(>0.5°) 통과 → swing_calib.json 유효 (07-18 실패의 방법론 교체가 정답이었음). **S=31.4°/(m/s²)** = 1° 상쇄에 0.032m/s² — 저크 예산 내 ~5° 상쇄 가능. 꼬리 f0 1.907Hz(대진폭)·감쇠비 0.93. 2호기 배선 재료 완비 (소비 함수 counter_params_from_calib 기구현). yaw 실비행 2편 진행 중
 - 07-19 저녁 — **yunho/sim-rl-scaffold 병합** (ac29e20, 사용자 지시) — reinforcement_yunho/ 신규 49파일(+8387: Isaac Sim 씬/데이터셋/RL 환경 스캐폴드), 타 폴더 무접촉·무충돌. + yaw 검증 미션 2종 등록(정적 통과) + fly-through 촘촘 병리 조사(세그당 4s 진범 추적 — 수정 2건 커밋, 저크 폭주 미해명분은 PIPELINE_STATUS에 승계 기록). 세션 마감
 - 07-19 — 사용자 부재 자율 모드 진입. **real_yaw 태핑 이미 존재 확인** (run_traj_baked.m El5, StructureWithTime) — command_fidelity 실측 경로 즉시 사용 가능, 튜닝 세션 ★(yaw 채널 요청)은 자연 해소. 교정 v2 스크립트 완성(976864a — 공진 체류 가진), EXTERNAL_INTERFACE에 command_fidelity·superseded 보상 규칙 반영
 - 07-19 — **command_fidelity 구현 완료 (§7)** (ab248e5) — 시간창 waypoint 통과 오차(왕복 오인 방지 실증)/구역 이격/주시 오차(랩·동결 처리)/실측 스캔 완료율/갭 성분 dict/superseded 구분. traj_report --flight-mat 시 자동 병합. yaw 실측 채널 없으면 None (★튜닝 세션: real_yaw 태핑 요청 유지). 비상 세션 traj_pipeline.py 수정과 무충돌 (analyze/report만 작업). 테스트 128개 통과 (비상 WIP 3건 제외 — 걔들 정지거리 공식 튜닝 중, 내 변경 무관)
