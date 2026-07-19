@@ -13,6 +13,10 @@
 - **튜닝/C++ 세션** — 07-19~ PID 튜닝 본작업: 0kg 탐침(6구성 ~10분) → 0kg 앵커 좌표하강 → 1차식 법칙. 라운드 사이 해제 가능 (필요 시 요청).
 
 ## 튜닝/C++ 세션 (17차 계열)
+- 07-19 — smoother 백포팅 재검증 **합격** (diagnose_smoother: 발산 궤적 적발/정상 무개입 0.0000m/성형 후 안정 비행 |x| 1.08m·자세 13.2도·모터 81% 무포화) — path_time ★큐 소비 완료
+- 07-19 — agile 1차식 A/B/C 실측 (8734bf1): A(외삽) 1.5kg부터 발산 — 위치 절벽 33 불변. B(1kg캡) 수평 전 질량 해결, z피크 잔존. C(z분리, 사용자 "z가 문제") 이동 중 z 해결(42→1.3cm), 2kg 85cm는 **정착 후 한계사이클**로 판명. 0~0.25kg는 혼돈 구간(재현성 없음). 삼각 법칙(kp_xy=24-16|m-1|, 2kg=precision 수렴) 경사 검증 중
+- 07-19 — **agile 0kg 격자 전멸 (9/9)** — 위치 24/10.8 고정 시 sA/sZ 어떤 조합도 0kg 생존 불가 (최선 54cm/오버 483cm) → **범인 = 위치 kp 자체** (z축 결합: 위치 kp가 z 위치 오차에도 걸림). 사용자 확정 "위치 PID도 똑같이 1차식" — kp(m)=8+16m, kd(m)=3.2+7.6m (0kg=precision 앵커와 일치=실측 생존점, 1kg=agile 24/10.8). A(2kg 외삽 kp40)/B(위치 1kg 캡) 8구성 검증 실행 중
+- 07-19 — **agile 관문 판정: 외란 합격 / 질량 불합격** — 외란 펄스 이탈 1.65도·회복 0.44s(여유 큼), 1kg 이동 1.32cm(r6 재현). 그러나 **0.5kg 완전 발산**(추종 193cm/자세 48도) + 2kg z피크 85cm(위치 kp가 z축에도 걸려 고도 과출력). agile은 1kg 전용임이 실증 — 처분(제거/1kg 제한/agile-lite 교체)은 사용자 결정 대기 (verify_agile_gates.csv)
 - 07-19 — **질량 1차식 게인 법칙 채택 완료** (사용자 지시 이행): 0kg 앵커 sA=0.75/sZ=0.56 (r2 재현 확인) → 6질량 검증 합격(0~2kg 무발산, 1kg 회귀 무결 4.08cm, 0.5 내삽 비열등, 2kg 외삽 우세) → parameters.m `sA_mass/sZ_mass` 반영 + C++ `qc_scales` 동기(1kg 골든 재생 비트 동일). yaw는 질량 동결. 약점: 0~0.25kg 전이 20~29cm(안정 유지). 상세 TUNING_STATUS §Y 18차
 - 07-19 — **0kg 앵커 r1 완료** (9점 격자): 승자 sA=0.75/sZ=0.56 (추종 21.4cm/오버 37cm, 유일 무발산). 예측 뒤집힘 — 자세도 25% 감쇠가 최선 (동결 sA=1.0은 오버 759~4294cm 발산). sZ 하단 모서리라 r2 (sA 0.65~0.85 × sZ 0.40~0.56) 실행 중 (~14분). 이후: 1차식 6점 검증 → parameters.m 반영
 - 07-19 — 질량 탐침 완료: 붕괴 경계 0.3~0.1kg. xy 붕괴=자세 게인 과소(sIa≤0.61), z 붕괴=고도 게인 과대(sM=1.0, z피크 83~84cm) — 채널 분리 확인, 0kg 앵커 설계 근거 (refine_mass_probe.csv)
@@ -29,6 +33,7 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-19 저녁 — **yunho/sim-rl-scaffold 병합** (ac29e20, 사용자 지시) — reinforcement_yunho/ 신규 49파일(+8387: Isaac Sim 씬/데이터셋/RL 환경 스캐폴드), 타 폴더 무접촉·무충돌. + yaw 검증 미션 2종 등록(정적 통과) + fly-through 촘촘 병리 조사(세그당 4s 진범 추적 — 수정 2건 커밋, 저크 폭주 미해명분은 PIPELINE_STATUS에 승계 기록). 세션 마감
 - 07-19 — 사용자 부재 자율 모드 진입. **real_yaw 태핑 이미 존재 확인** (run_traj_baked.m El5, StructureWithTime) — command_fidelity 실측 경로 즉시 사용 가능, 튜닝 세션 ★(yaw 채널 요청)은 자연 해소. 교정 v2 스크립트 완성(976864a — 공진 체류 가진), EXTERNAL_INTERFACE에 command_fidelity·superseded 보상 규칙 반영
 - 07-19 — **command_fidelity 구현 완료 (§7)** (ab248e5) — 시간창 waypoint 통과 오차(왕복 오인 방지 실증)/구역 이격/주시 오차(랩·동결 처리)/실측 스캔 완료율/갭 성분 dict/superseded 구분. traj_report --flight-mat 시 자동 병합. yaw 실측 채널 없으면 None (★튜닝 세션: real_yaw 태핑 요청 유지). 비상 세션 traj_pipeline.py 수정과 무충돌 (analyze/report만 작업). 테스트 128개 통과 (비상 WIP 3건 제외 — 걔들 정지거리 공식 튜닝 중, 내 변경 무관)
 - 07-19 — **yaw 구현 완료 (§1 설계 그대로)** — 4모드 + scan 3정책(move/coupled/scan) + yaw 성형·게이트. 스캔 rate 불가침 원칙 코드화(성형 상한=요청 rate), 시간 왜곡 경로 snap 측정-only 강등(§7 일관). 테스트 117개 통과(비상 세션 24개 포함 회귀 0). spline_yaw 계약 불변 — 컨트롤러 수정 불필요
@@ -64,7 +69,7 @@
 - (미착수 — 착수 시 docs/HANDOFF_CPP_GAZEBO.md 필독, 여기 첫 줄 기록)
 
 ## 대기/예약 (세션 무관)
-- [MATLAB] 튜닝 세션 잔여: 골든 로그(diagnose_golden_trace) → smoother 백포팅 재검증(diagnose_smoother) → 0kg 붕괴 국소화 탐침(0.3/0.1/0.03kg) → agile 프로파일 외란/질량 관문 — 스크립트 준비 완료 (0kg A/B·명세 덤프는 완료됨)
+- [MATLAB] 튜닝 세션 잔여: agile 전용 1차식 (0kg 격자 → 6질량 재검증 → 관문 재실행) — 실행 중. 완료분: 골든 로그·smoother 재검증·질량 탐침·표준 1차식·agile 관문 전부 07-19 소화
 - [MATLAB] path_time 세션: 2호기 교정 v2 **공진 체류 가진** (`diagnose/diagnose_swing_calib2.m`, 976864a — 스크립트 완성, f0 스윕 3점 ~8분). 방법론 변경: 외력 주입이 아니라 궤적 가진 (2호기 액추에이터 = 드론 가속이라 교정도 같은 경로). 슬롯 나면 실행 → swing_calib.json
 - [MATLAB] path_time 세션: yaw 실비행 1편 (scan coupled 미션 — 컨트롤러 yaw 추종 + real_yaw 실측 + command_fidelity 왕복 검증, ~4분). 교정 v2 다음 순위
 - [MATLAB] 비상 세션: 검증 ①·② (`python verify_emergency.py` — A-1 정지 오버슈트/드리프트 + A-2 회피 실측 이격, MATLAB 3회 ~20분, 타 MATLAB 가드 내장) — 슬롯 해제 시 실행. 첫 실행이라 로그 전체 확인 필요
