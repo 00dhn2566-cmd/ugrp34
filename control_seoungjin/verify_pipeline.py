@@ -40,6 +40,8 @@ MISSIONS = [
     ("step", "input/step_mission.json", "원시 스텝 백스톱"),
     ("jitter_a", "input/aggressive_mission.json", "셰이퍼 off (지터 기준선)"),
     ("jitter_b", "input/aggressive_mission_b.json", "ZVD@1.8 (소거 검증)"),
+    ("scan", "input/scan_mission.json", "yaw scan coupled (2pi 스윕, 이동 팽창)"),
+    ("look_at", "input/lookat_mission.json", "yaw look_at + fly_through (주시 비행)"),
 ]
 
 
