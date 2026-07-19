@@ -26,6 +26,8 @@
 - 07-16 20:00 — 자세 게인 채택(-85/-127.5/2500, 지터 38배), 물성 정규화(sIa/sIz/sM+관성 실측), 타당성 축A 통과. main 반영·푸시됨
 
 ## path_time 세션
+- 07-19 — **yaw 구현 완료 (§1 설계 그대로)** — 4모드 + scan 3정책(move/coupled/scan) + yaw 성형·게이트. 스캔 rate 불가침 원칙 코드화(성형 상한=요청 rate), 시간 왜곡 경로 snap 측정-only 강등(§7 일관). 테스트 117개 통과(비상 세션 24개 포함 회귀 0). spline_yaw 계약 불변 — 컨트롤러 수정 불필요
+- 07-19 — ★튜닝/C++ 세션 (yaw 계약, 사용자 지시 "yaw 입력 없으면 default"): `spline_yaw`는 **항상 존재** (yaw 블록 미지정 시 궤적 층이 heading 자동 생성) — 컨트롤러의 "입력 없음" default는 **궤적 부재 상태(무명령 래치/부팅)에서 yaw = 현재 방위 유지** 하나만 정의하면 됨. + scan 모드 대비 yaw 스텝/램프 추종 성능(kp_yaw) 점검과 yaw 실측 로그 채널 확보(command_fidelity §7용) 요청
 - 07-19 — **작업 API §8 구현 완료** (★자기소비: "다음 구현자" 항목) — 동사 6종 CLI (splice 신설: current_state 무정지 전환 + STATE_STALE 거부, check: 부작용 0), 종료 코드 0/1/2, stdout 기계용 JSON. 테스트 82개 통과. 감독자(비상 세션)가 이 CLI로 파이프라인 호출하면 됨 + command_fidelity 구현 확정사항 3건 §7 반영 (572fee4)
 - 07-19 — **EXTERNAL_INTERFACE.md 신설 (팀원 공개용)** — 외부 파트가 알 것만 추림: 미션 5규칙/회신 코드표/yaw 4모드/비상 명령/조율점 4건(길남 스캔속도·윤호 토픽 매핑·태민 VIO 출처·창문 좌표 연동). 내부 기계장치는 블랙박스 처리. README 문서표 갱신
 - 07-19 — **yaw 명령 인터페이스 설계 확정(§1, 구현 대기)** — 사용자 구상 "요잉하며 진행": heading/hold/look_at 3모드, 상위는 "어디 볼지"만·회전 시간표는 파이프라인. yaw 권한 최약(토크 클램프 평형 실측) 근거로 잠정 한계 rate 1.0/acc 2.0 + 게이트 확장, look_at 특이점 동결, 주시 오차는 margins 벌점. ZVD 비적용(스윙 비결합)
@@ -47,6 +49,7 @@
 - (이하 이 세션이 직접 기록)
 
 ## 비상(emergency) 세션
+- 07-19 — **감독자 골격 v0.1 완료** (`flight_supervisor.py` + 테스트 24개, 전체 스위트 106개 통과) — flight_state.json 단일 소유·하트비트, 미션 게이트(REJECTED_RECOVERING), 우선순위 중재(B>C>A-1>A-2, 하위는 유예), A-1/A-2 소비, B hash 무효 선언(원장), `heartbeat_stale()` 철칙 3 기준 구현. B/C 트리거 임계 후보(측정지연 0.05s 보정 포함)는 EMERGENCY_STATUS.md에 정리. 다음: A-1 emergency 동사(MATLAB 불필요분) → 검증 ①은 MATLAB 큐 대기
 - 07-19 — **세션 착수** — 필독 5종(HANDOFF_EMERGENCY/§9/§8 실측/PIPELINE_STATUS/HANDOFF_CPP_GAZEBO) 정독, ★소비 2건. 임무: 감독자 + 비상 A-1/A-2/B/C + MATLAB 검증 4편. 1단계(감독자 골격, 파이썬 프로토타입) 착수 — MATLAB 불필요(튜닝 세션 점유 확인, 검증 비행은 큐 대기 예정)
 
 ## Gazebo/C++ 검증 세션

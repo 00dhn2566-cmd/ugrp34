@@ -556,6 +556,116 @@ class TestCurrentState:
         assert res["gate_report"]["vxyPk"] <= tp.PHYS_VMAX * 1.001
 
 
+class TestYaw:
+    LIM = {"v_max": 1.0, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0}
+
+    def _cfg(self, yaw=None, wp=None):
+        cfg = {"waypoints": wp or [[0.0, 0.0, 1.0], [4.0, 0.0, 1.0]],
+               "limits": dict(self.LIM)}
+        if yaw is not None:
+            cfg["yaw"] = yaw
+        return cfg
+
+    def _build(self, cfg):
+        cfg["yaw"] = tp.normalize_yaw_cfg(cfg.get("yaw"))
+        wp = np.asarray(cfg["waypoints"], float)
+        return tp.build_trajectory(cfg, wp, 1.8)
+
+    def test_invalid_mode_rejected(self):
+        with pytest.raises(ValueError, match="yaw.mode"):
+            tp.normalize_yaw_cfg({"mode": "spin"})
+
+    def test_scan_rate_required_no_default(self):
+        """스캔 속도의 정답은 비전 - 기본값 금지, 누락 즉사 (사용자 확정)."""
+        with pytest.raises(KeyError, match="rate_rad_s"):
+            tp.normalize_yaw_cfg({"mode": "scan",
+                                  "scan": {"from_rad": 0.0, "to_rad": 1.0}})
+
+    def test_scan_rate_over_phys_clamped(self):
+        y = tp.normalize_yaw_cfg({"mode": "scan",
+                                  "scan": {"from_rad": 0.0, "to_rad": 3.0,
+                                           "rate_rad_s": 5.0}})
+        assert y["scan"]["rate_rad_s"] == pytest.approx(tp.YAW_RATE_MAX)
+        assert y["scan"]["_rate_clamped"]["requested"] == 5.0
+
+    def test_hold_constant_yaw(self):
+        res = self._build(self._cfg({"mode": "hold", "angle_rad": 0.7}))
+        np.testing.assert_allclose(res["yaw"], 0.7, atol=1e-9)
+        assert res["yaw_meta"]["mode"] == "hold"
+
+    def test_lookat_points_at_target(self):
+        """이동 중 실제로 목표점을 바라보는지 (중간 샘플 각도 검증)."""
+        res = self._build(self._cfg({"mode": "look_at",
+                                     "target": [2.0, 3.0, 1.0]}))
+        t, pos, yaw = res["t"], res["shaped"], res["yaw"]
+        k = len(t) // 3                     # 이동 중반, 성형 과도 지난 지점
+        expect = np.arctan2(3.0 - pos[k, 1], 2.0 - pos[k, 0])
+        assert abs(yaw[k] - expect) < 0.15  # 성형 지연 허용
+
+    def test_lookat_freeze_no_spike_through_target(self):
+        """목표점 바로 옆을 관통해도 특이점 스파이크 없음 (동결 반경)."""
+        res = self._build(self._cfg({"mode": "look_at",
+                                     "target": [2.0, 0.05, 1.0]}))
+        dyaw = np.abs(np.diff(res["yaw"])) / res["dt"]
+        assert dyaw.max() <= tp.YAW_RATE_MAX * 1.02
+
+    def test_scan_once_sweeps_and_holds(self):
+        res = self._build(self._cfg(
+            {"mode": "scan", "scan": {"from_rad": -0.5, "to_rad": 0.5,
+                                      "rate_rad_s": 0.5}}))
+        yaw = res["yaw"]
+        assert yaw[0] == pytest.approx(-0.5, abs=0.05)
+        assert yaw[-1] == pytest.approx(0.5, abs=0.02)   # 도달 후 유지
+        dyaw = np.abs(np.diff(yaw)) / res["dt"]
+        assert dyaw.max() <= 0.5 * 1.05                  # 요청 rate 준수
+
+    def test_scan_coupled_dilates_move(self):
+        """스캔 12.57s > 이동 8.75s -> 이동 균일 팽창 (한 동작)."""
+        res = self._build(self._cfg(
+            {"mode": "scan", "scan": {"from_rad": 0.0, "to_rad": 6.283,
+                                      "rate_rad_s": 0.5}}))
+        sm = res["yaw_meta"]["scan"]
+        assert sm["T_scan_s"] == pytest.approx(12.57, abs=0.02)
+        assert res["t"][-1] >= sm["T_scan_s"] - 0.1
+        assert sm["time_dilation"] is not None and sm["time_dilation"] > 1.0
+        assert res["gate_ok"]
+
+    def test_scan_move_priority_arrives_fast_reports_coverage(self):
+        res = self._build(self._cfg(
+            {"mode": "scan", "scan": {"from_rad": 0.0, "to_rad": 6.283,
+                                      "rate_rad_s": 0.5,
+                                      "priority": "move"}}))
+        sm = res["yaw_meta"]["scan"]
+        assert sm["time_dilation"] is None               # 이동 시간표 불변
+        assert 0.0 < sm["coverage_at_arrival"] < 1.0     # 도착 시점 미완
+        # 종점 hold가 스캔 완료까지 연장됨
+        assert res["t"][-1] >= sm["T_scan_s"] - 0.1
+        np.testing.assert_allclose(res["shaped"][-1], [4.0, 0.0, 1.0],
+                                   atol=0.02)
+
+    def test_scan_priority_slow_then_fast(self):
+        """3상: 스캔 중 저속 -> 완료 후 원속. 총시간 > coupled."""
+        y = {"mode": "scan", "scan": {"from_rad": 0.0, "to_rad": 6.283,
+                                      "rate_rad_s": 0.5, "priority": "scan"}}
+        res = self._build(self._cfg(y))
+        sm = res["yaw_meta"]["scan"]
+        T_scan = sm["T_scan_s"]
+        assert res["t"][-1] > T_scan + 0.5               # 순차성: 스캔 후 이동
+        # 1상(스캔 중) 이동량이 전체의 절반 미만 (저속 실증)
+        t, pos = res["t"], res["shaped"]
+        k = int(np.searchsorted(t, T_scan))
+        d1 = np.linalg.norm(pos[k] - pos[0])
+        assert d1 < 0.5 * np.linalg.norm(pos[-1] - pos[0])
+        assert res["gate_ok"]
+
+    def test_default_heading_unchanged(self, mission, tmp_path, fb_env):
+        """yaw 미지정 = heading — 기존 미션 산출물 회귀 없음."""
+        path, _ = mission
+        res = tp.run(path, str(tmp_path / "out"))
+        assert res["yaw_meta"]["mode"] == "heading"
+        assert res["gate_ok"]
+
+
 class TestFeedbackHandshake:
     def test_used_false_consumed_marked_and_ledgered(self, mission, tmp_path, fb_env):
         path, _ = mission

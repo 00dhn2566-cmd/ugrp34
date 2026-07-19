@@ -54,6 +54,7 @@ from path_time import (                         # noqa: E402
 from traj_shaping import (                      # noqa: E402
     smooth_with_axis_sharing,
     traj_gate,
+    traj_smoother,
     traj_zv,
 )
 
@@ -84,6 +85,17 @@ SHAPER_DEFAULT = "zvd"          # 주파수 오차 강건 (핸드오프 권장 �
 # 컨트롤러 게인 프로파일 (튜닝 세션 계약 v1, 2026-07-17): 값의 진실은
 # parameters.m ctrl_profile switch / C++ qc_apply_profile — 여기선 검증·동봉만.
 CONTROLLER_PROFILES = ("precision", "balanced", "agile")
+# yaw 명령 (INTERFACE_SPEC §1 yaw 절, 2026-07-19): 상위는 "어디 볼지"만,
+# 회전 시간표는 여기서. yaw는 드래그 토크 차동이라 4축 중 권한 최약 + 모터가
+# 호버에서 이미 토크 클램프 평형(HANDOFF_EMERGENCY §8 실측) — 잠정 한계 보수.
+YAW_MODES = ("heading", "hold", "look_at", "scan")
+YAW_RATE_MAX = 1.0      # [rad/s] 잠정 (토크 포화 근거 — 실측 후 조정)
+YAW_ACC_MAX = 2.0       # [rad/s^2] 잠정
+YAW_JERK_MAX = 10.0     # [rad/s^3] 성형용 (위치 j 한계와 동급 관용치)
+LOOKAT_FREEZE_R = 0.3   # [m] look_at 특이점 동결 반경 (창문 통과 순간)
+SCAN_PRIORITIES = ("move", "coupled", "scan")
+SCAN_SLOW_RATIO = 0.3   # priority='scan' 1상(스캔 중)의 이동 진행률 (잠정 —
+                        # 저속 스캔 = 패럴랙스/블러 감소, 비전 품질 몫)
 # 원시 궤적 완화 정책 (계약 v0.2): 성형 편차가 TOL을 넘으면 거부 대신
 # "경로 보존 재시간화" — 공간 경로만 추출(RDP ε)해 시간을 새로 배분.
 # 경로 이탈 ~ε로 의도 보존, 소요시간 팽창률(dilation)을 벌점 신호로 회신.
@@ -195,6 +207,8 @@ def load_mission(path):
             f"{sorted(CONTROLLER_PROFILES)} 중 하나여야 함: {path}")
     cfg["controller_profile"] = profile
 
+    cfg["yaw"] = normalize_yaw_cfg(cfg.get("yaw"), src=path)
+
     # 한계 예산: 계획 한계 <= (1-JITTER_MARGIN)·물리 한계 (snap 포함).
     # 완화 정책 (사용자 확정, 계약 v0.2): 초과분은 거부 대신 상한으로 클램프
     # 하고 통지 — 공간 의도는 살리고 시간만 양보. "strict": true면 기존 거부.
@@ -221,6 +235,71 @@ def load_mission(path):
                           for k, v in clamped.items()))
 
     return cfg, wp
+
+
+def normalize_yaw_cfg(ycfg, src=""):
+    """yaw 블록 검증·정규화 (INTERFACE_SPEC §1 yaw 절). 미지정 = heading.
+
+    scan.rate_rad_s는 필수 (기본값 없음 — 스캔 속도의 정답은 비전만 안다,
+    사용자 확정 2026-07-19). 물리 상한 초과만 클램프 + _rate_clamped 기록.
+    """
+    if ycfg is None:
+        return {"mode": "heading"}
+    if not isinstance(ycfg, dict):
+        raise ValueError(f"yaw 블록은 객체여야 함: {src}")
+    mode = ycfg.get("mode", "heading")
+    if mode not in YAW_MODES:
+        raise ValueError(
+            f"yaw.mode='{mode}' 미지원 - {sorted(YAW_MODES)} 중 하나: {src}")
+    out = {"mode": mode}
+    if mode == "hold":
+        if "angle_rad" not in ycfg:
+            raise KeyError(f"yaw.mode=hold에는 angle_rad 필수: {src}")
+        out["angle_rad"] = float(ycfg["angle_rad"])
+    elif mode == "look_at":
+        tgt = np.asarray(ycfg.get("target", []), float)
+        if tgt.shape != (3,):
+            raise ValueError(f"yaw.mode=look_at에는 target [x,y,z] 필수: {src}")
+        out["target"] = tgt.tolist()
+    elif mode == "scan":
+        sc = ycfg.get("scan")
+        if not isinstance(sc, dict):
+            raise KeyError(f"yaw.mode=scan에는 scan 블록 필수: {src}")
+        for key in ("from_rad", "to_rad", "rate_rad_s"):
+            if key not in sc:
+                raise KeyError(
+                    f"scan에 필수 키 '{key}' 없음 (rate_rad_s의 정답은 "
+                    f"비전 - 기본값 없음): {src}")
+        rate_req = float(sc["rate_rad_s"])
+        if rate_req <= 0:
+            raise ValueError(f"scan.rate_rad_s는 양수여야 함: {src}")
+        sweep = sc.get("sweep", "once")
+        if sweep not in ("once", "back_and_forth"):
+            raise ValueError(f"scan.sweep='{sweep}' 미지원: {src}")
+        prio = sc.get("priority", "coupled")
+        if prio not in SCAN_PRIORITIES:
+            raise ValueError(
+                f"scan.priority='{prio}' 미지원 - {sorted(SCAN_PRIORITIES)}: {src}")
+        rate = min(rate_req, YAW_RATE_MAX)
+        out["scan"] = {"from_rad": float(sc["from_rad"]),
+                       "to_rad": float(sc["to_rad"]),
+                       "sweep": sweep, "rate_rad_s": rate, "priority": prio}
+        if rate < rate_req:
+            out["scan"]["_rate_clamped"] = {"requested": rate_req,
+                                            "applied": rate}
+            print(f"[완화] scan rate {rate_req} > 물리 상한 {YAW_RATE_MAX}"
+                  f" -> 클램프 (adjustments 통지)")
+    rmax = ycfg.get("rate_max")
+    if rmax is not None:
+        out["rate_max"] = min(float(rmax), YAW_RATE_MAX)
+    return out
+
+
+def _scan_duration_s(sc):
+    """스캔 소요시간 = 구간각/rate (back_and_forth는 왕복 1회 = 2배)."""
+    sweep_angle = abs(sc["to_rad"] - sc["from_rad"])
+    mult = 2.0 if sc["sweep"] == "back_and_forth" else 1.0
+    return mult * sweep_angle / sc["rate_rad_s"]
 
 
 def current_jitter_margin():
@@ -577,6 +656,131 @@ def _heading_yaw(t, pos, speed_eps=1e-4):
     return np.unwrap(yaw)
 
 
+def _apply_scan_time_coupling(t, base, dt, ycfg):
+    """스캔↔이동 시간 배분 (INTERFACE_SPEC §1, scan.priority 3정책).
+
+    미션 시간 = max(이동, 스캔)이 기본 골격. 반환 (t, base, scan_meta).
+      move    : 이동 시간표 불변(최속 도착) + 종점 hold로 스캔 마저 —
+                도착 시점 완료율 coverage_at_arrival 보고
+      coupled : 이동 균일 팽창(한 동작) — TIME_DILATED 계열 통지
+      scan    : 3상 — 스캔 중 이동 진행률 SCAN_SLOW_RATIO(저속 = 패럴랙스·블러
+                감소), 스캔 완료 후 잔여 구간 원래 속도
+    """
+    if ycfg.get("mode") != "scan":
+        return t, base, None
+    sc = ycfg["scan"]
+    T_scan = _scan_duration_s(sc)
+    T_move = float(t[-1])
+    meta = {"policy": sc["priority"], "T_scan_s": round(T_scan, 3),
+            "T_move_s": round(T_move, 3), "coverage_at_arrival": 1.0,
+            "time_dilation": None}
+    if sc.get("_rate_clamped"):
+        meta["rate_clamped"] = sc["_rate_clamped"]
+    if T_scan <= T_move:                     # 이동 우세: 정책 무관 결합 불필요
+        return t, base, meta
+
+    if sc["priority"] == "move":
+        # 최속 도착 유지, 스캔 잔여분은 도착 후 hold에서 완료
+        # (패딩 간격은 실제 그리드 간격 - dt 인자와 미세 불일치 시 ZV 거부)
+        dtg = float(t[1] - t[0])
+        n_pad = int(np.ceil((T_scan - T_move) / dtg))
+        t2 = np.concatenate([t, t[-1] + dtg * np.arange(1, n_pad + 1)])
+        base2 = np.vstack([base, np.tile(base[-1], (n_pad, 1))])
+        meta["coverage_at_arrival"] = round(T_move / T_scan, 4)
+        return t2, base2, meta
+
+    # 시간 왜곡(재보간)을 거친 궤적은 "다항식 snap 보장" 범주 이탈 —
+    # §7 snap 정책대로 백스톱과 같은 측정-only로 강등 (v/a/j는 그대로 강제).
+    meta["snap_guaranteed"] = False
+    warp = CubicSpline(t, base, axis=0)      # C2 보간 (선형은 저크 노이즈)
+
+    if sc["priority"] == "scan":
+        # 3상: [0,T_scan] 동안 원 타임라인을 SCAN_SLOW_RATIO 속도로 소비,
+        # 스캔 완료 후 잔여를 원속으로. 이음새 킥은 후단 스무더가 처리.
+        tau1 = SCAN_SLOW_RATIO * T_scan
+        if tau1 < T_move:
+            total = T_scan + (T_move - tau1)
+            n = int(np.round(total / dt))
+            t2 = dt * np.arange(n + 1)
+            tau = np.where(t2 <= T_scan, t2 * (tau1 / T_scan),
+                           tau1 + (t2 - T_scan))
+            base2 = warp(np.clip(tau, 0.0, T_move))
+            meta["time_dilation"] = round(total / T_move, 4)
+            return t2, base2, meta
+        # 이동이 너무 짧아 1상 안에 다 소화 -> coupled와 동일 처리로 강등
+
+    # coupled (기본): 균일 팽창 - 이동 중 스캔 완료, 한 동작
+    k = T_scan / T_move
+    n = int(np.round(T_scan / dt))
+    t2 = dt * np.arange(n + 1)
+    base2 = warp(np.clip(t2 / k, 0, T_move))
+    meta["time_dilation"] = round(k, 4)
+    meta["policy_effective"] = "coupled"
+    return t2, base2, meta
+
+
+def _make_yaw(ycfg, t, pos):
+    """yaw 기준 생성 (4모드) + yaw 전용 성형(rate/acc/jerk 한계) [rad].
+
+    반환 (yaw, yaw_meta). ZVD는 yaw 비적용 — 요잉은 추력을 기울이지 않아
+    짐 스윙과 사실상 비결합 (§1).
+    """
+    mode = ycfg.get("mode", "heading")
+    if mode == "heading":
+        raw = _heading_yaw(t, pos)
+    elif mode == "hold":
+        raw = np.full(len(t), ycfg["angle_rad"])
+    elif mode == "look_at":
+        tgt = np.asarray(ycfg["target"], float)
+        dx = tgt[0] - pos[:, 0]
+        dy = tgt[1] - pos[:, 1]
+        raw = np.arctan2(dy, dx)
+        frozen = np.hypot(dx, dy) < LOOKAT_FREEZE_R
+        raw = np.unwrap(raw)
+        # 특이점 동결: 목표 수평 근접 구간은 마지막 유효 각 유지 (§1 —
+        # 창문 통과 순간). 시작부터 동결이면 첫 유효 각으로 backfill.
+        if frozen.any():
+            idx = np.where(~frozen, np.arange(len(t)), -1)
+            idx = np.maximum.accumulate(idx)
+            first_ok = int(np.argmax(~frozen)) if (~frozen).any() else 0
+            idx[idx < 0] = first_ok
+            raw = raw[idx]
+    elif mode == "scan":
+        sc = ycfg["scan"]
+        a0, a1, rate = sc["from_rad"], sc["to_rad"], sc["rate_rad_s"]
+        sweep = abs(a1 - a0)
+        sgn = np.sign(a1 - a0) if sweep > 0 else 1.0
+        prog = rate * t
+        if sc["sweep"] == "once":
+            raw = a0 + sgn * np.minimum(prog, sweep)
+        else:                                # back_and_forth: 왕복 1회 후 유지
+            prog2 = np.minimum(prog, 2 * sweep)
+            raw = a0 + sgn * np.where(prog2 <= sweep, prog2,
+                                      2 * sweep - prog2)
+    else:                                    # 방어 (normalize가 걸렀어야 함)
+        raise ValueError(f"yaw.mode='{mode}' 미지원")
+
+    # scan은 성형 상한 = 요청 rate (불가침 — 비전의 제약. 물리 상한 1.0으로
+    # 두면 따라잡기 과도에서 요청 rate 초과 = 블러/겹침 계약 위반)
+    if mode == "scan":
+        rate_lim = ycfg["scan"]["rate_rad_s"]
+    else:
+        rate_lim = ycfg.get("rate_max", YAW_RATE_MAX)
+    shaped, info = traj_smoother(t, raw.reshape(-1, 1),
+                                 rate_lim, YAW_ACC_MAX, YAW_JERK_MAX)
+    yaw = shaped[:, 0]
+    meta = {"mode": mode,
+            "rate_peak": round(float(info["vPk"][0]), 4),
+            "acc_peak": round(float(info["aPk"][0]), 4),
+            "shaping_dev_rad": round(float(info["maxDev"][0]), 4)}
+    # yaw 게이트: 성형 후에도 한계 초과면 버그 (성형기가 보장해야 정상)
+    if meta["rate_peak"] > rate_lim * 1.02 or meta["acc_peak"] > YAW_ACC_MAX * 1.02:
+        raise ValueError(
+            f"yaw 게이트 위반: rate {meta['rate_peak']} / acc {meta['acc_peak']}"
+            f" (한계 {rate_lim}/{YAW_ACC_MAX}) - 성형기 버그 의심")
+    return yaw, meta
+
+
 def _traj_hash(t, pos):
     """성형 궤적 식별자 (attitude_feedback trajectory_hash 대조용)."""
     h = hashlib.sha256()
@@ -662,6 +866,17 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         base = np.column_stack(
             [np.interp(t + t_in[0], t_in, p_in[:, i]) for i in range(3)])
 
+    # 2b) 스캔↔이동 시간 배분 (scan.priority 3정책 — §1). yaw 블록은
+    #     load_mission이 정규화하지만 직접 호출(테스트)도 허용.
+    ycfg = cfg.get("yaw")
+    if ycfg is None or "mode" not in (ycfg or {}):
+        ycfg = normalize_yaw_cfg(ycfg)
+    t, base, scan_meta = _apply_scan_time_coupling(t, base, dt, ycfg)
+    if scan_meta and scan_meta.get("time_dilation"):
+        print(f"[스캔 결합] {scan_meta['policy']}: 이동 {scan_meta['T_move_s']}s"
+              f" / 스캔 {scan_meta['T_scan_s']}s -> 팽창"
+              f" x{scan_meta['time_dilation']}")
+
     # 2c) 셰이퍼 지연 hold 패딩: ZV/ZVD는 궤적을 반주기~1주기 지연시키므로
     #     계획 끝에 그만큼 hold를 붙여야 성형 궤적이 종점에 완전 수렴
     #     (미패딩 시 고속 미션 종점 1.1cm 미달 실측)
@@ -735,11 +950,14 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
     #    결합 타임라인이라 snap까지 강제됨).
     ic_rest = ((v0 is None or not np.any(v0))
                and (a0 is None or not np.any(a0)))
-    smax = PHYS_SNAP if (waypoints is not None and ic_rest) else None
+    snap_ok = scan_meta is None or scan_meta.get("snap_guaranteed", True)
+    smax = PHYS_SNAP if (waypoints is not None and ic_rest and snap_ok) else None
     ok, gate_rep = traj_gate(t, shaped, PHYS_VMAX, PHYS_AMAX,
                              do_error=gate_error, jmax=PHYS_JMAX, smax=smax)
 
-    yaw = _heading_yaw(t, shaped)
+    yaw, yaw_meta = _make_yaw(ycfg, t, shaped)
+    if scan_meta:
+        yaw_meta["scan"] = scan_meta
     return {
         "t": t, "base": base, "smoothed": smoothed, "shaped": shaped,
         "delta": delta, "yaw": yaw, "dt": dt,
@@ -749,6 +967,7 @@ def build_trajectory(cfg, waypoints, f_mode, v0=None, a0=None, gate_error=True):
         "jitter_margin": margin_dyn, "margin_basis": margin_basis,
         "limits_effective": lim, "retimed": retimed,
         "limits_clamped": cfg.get("_limits_clamped"),
+        "yaw_meta": yaw_meta,
     }
 
 
@@ -791,6 +1010,7 @@ def save_outputs(res, waypoints, out_dir=OUTPUT_DIR):
                         "j_max": PHYS_JMAX},
         "jitter_margin": JITTER_MARGIN,
         "controller_profile": profile,
+        "yaw": res.get("yaw_meta"),
         "shaper": {"mode": res["shaper_mode"], "f_mode_hz": res["f_mode"]},
         "smoother": {
             "max_dev_m": float(np.max(info_sm["maxDev"])),
