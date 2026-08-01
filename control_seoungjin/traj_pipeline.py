@@ -48,6 +48,8 @@ from scipy.io import savemat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from path_time import (                         # noqa: E402
+    _find_min_time_bc,
+    _poly7_coeffs_bc,
     plan_waypoints,
     plan_waypoints_flythrough,
 )
@@ -360,14 +362,92 @@ def normalize_yaw_cfg(ycfg, src=""):
     rmax = ycfg.get("rate_max")
     if rmax is not None:
         out["rate_max"] = min(float(rmax), YAW_RATE_MAX)
+    # 시작 방위 (기본 0 = 시뮬 부팅 방위). 스플라이스/실기에서는 current_state
+    # 방위를 넣을 것 — 기준 yaw[0]가 이 값에서 시작 (시작 정렬 원칙).
+    out["yaw0_rad"] = float(ycfg.get("yaw0_rad", 0.0))
     return out
 
 
-def _scan_duration_s(sc):
-    """스캔 소요시간 = 구간각/rate (back_and_forth는 왕복 1회 = 2배)."""
-    sweep_angle = abs(sc["to_rad"] - sc["from_rad"])
-    mult = 2.0 if sc["sweep"] == "back_and_forth" else 1.0
-    return mult * sweep_angle / sc["rate_rad_s"]
+def _yaw_strap(a, b, rate):
+    """1-D yaw 점대점 S-사다리꼴 (rest→rest): 스무스스텝 속도 램프 + 등속 순항.
+
+    단일 7차 다항식은 순항 불가(속도가 혹 모양 — 피크=rate로 d를 가는 데
+    2.19·d/rate 소요, 실측)라 긴 스윕에 2배 낭비. 램프 시간 T_r는 가속 한계
+    에서: 피크 가속 = 1.875·rate/T_r ≤ YAW_ACC. 저크 피크 5.78·rate/T_r²도
+    한계 이내 확인식. 짧은 이동(순항 구간 없음)은 대칭 삼각(스케일 램프).
+
+    Returns (T_seg, fn(tau)->angle) — |Δ|<1e-6이면 (0.0, None).
+    """
+    d = abs(b - a)
+    if d < 1e-6:
+        return 0.0, None
+    s = 1.0 if b >= a else -1.0
+    # 0.8x 마진: 기준 피크 가속이 성형기 한계에 정확히 앉으면 이산
+    # 후방차분이 살짝 초과 측정 -> 개입 -> 헌팅 (hold 실측 3차 사건)
+    T_r = 1.875 * rate / (0.8 * YAW_ACC_MAX)
+
+    def ramp_pos(u):
+        """스무스스텝 속도 램프의 변위 적분 (0..1) — 끝값 0.5."""
+        return 2.5 * u**4 - 3.0 * u**5 + u**6
+
+    d_ramp = rate * T_r                      # 램프 2개 합산 변위 (= 2 × 절반)
+    if d >= d_ramp:                          # 순항 있음
+        T_c = (d - d_ramp) / rate
+        T_seg = 2 * T_r + T_c
+
+        def fn(tau):
+            tau = np.asarray(tau, float)
+            x = np.empty_like(tau)
+            u1 = np.clip(tau / T_r, 0, 1)
+            x = rate * T_r * ramp_pos(u1)                      # 가속 램프
+            mid = tau > T_r
+            x[mid] = 0.5 * rate * T_r + rate * np.minimum(
+                tau[mid] - T_r, T_c)                           # 순항
+            u3 = np.clip((tau - T_r - T_c) / T_r, 0, 1)
+            dec = tau > T_r + T_c
+            x[dec] += rate * T_r * (ramp_pos(1.0)
+                                    - ramp_pos(1.0 - u3[dec])) # 감속 램프
+            return a + s * x
+        return T_seg, fn
+
+    # 순항 없는 짧은 이동: 대칭 이중 램프 (가속 한계에서 피크 속도 산정)
+    v_p = min(float(np.sqrt(d * 0.8 * YAW_ACC_MAX / 1.875)), rate)
+    T_h = d / v_p                            # 램프 1개 길이 (변위 v_p·T_h/2 × 2)
+
+    def fn_s(tau):
+        tau = np.asarray(tau, float)
+        u1 = np.clip(tau / T_h, 0, 1)
+        x = v_p * T_h * ramp_pos(u1)
+        u2 = np.clip((tau - T_h) / T_h, 0, 1)
+        dec = tau > T_h
+        x[dec] = 0.5 * v_p * T_h + v_p * T_h * (
+            ramp_pos(1.0) - ramp_pos(1.0 - u2[dec]))
+        return a + s * x
+    return 2 * T_h, fn_s
+
+
+def _plan_scan_yaw(sc, yaw0):
+    """스캔 yaw = S-사다리꼴 세그먼트 체인: 정렬(yaw0→from) → 스윕(from→to[→from]).
+
+    사전 정렬 (08-01 실비행 적발): 기준이 t=0에 from_rad로 점프하면 위치에서
+    금지한 '날것 스텝 참조'의 yaw판 — 실측 ±180° 요청이 -84°~211°로 유실.
+    이음새는 전부 v=0 (rest-to-rest 체인)이라 스무더 무개입·헌팅 없음.
+    rate는 비전의 '상한'이라 램프 테이퍼는 계약 무해.
+
+    Returns (knots, fns, T_total).
+    """
+    rate = sc["rate_rad_s"]
+    pts = [yaw0, sc["from_rad"], sc["to_rad"]]
+    if sc["sweep"] == "back_and_forth":
+        pts.append(sc["from_rad"])
+    knots, fns = [0.0], []
+    for a, b in zip(pts[:-1], pts[1:]):
+        T, fn = _yaw_strap(a, b, rate)
+        if fn is None:
+            continue
+        fns.append(fn)
+        knots.append(knots[-1] + T)
+    return knots, fns, knots[-1]
 
 
 def current_jitter_margin():
@@ -740,7 +820,9 @@ def _apply_scan_time_coupling(t, base, dt, ycfg):
     if ycfg.get("mode") != "scan":
         return t, base, None
     sc = ycfg["scan"]
-    T_scan = _scan_duration_s(sc)
+    plan = _plan_scan_yaw(sc, ycfg.get("yaw0_rad", 0.0))
+    ycfg["_scan_plan"] = plan               # _make_yaw 재계획 방지 캐시
+    T_scan = plan[2]
     T_move = float(t[-1])
     meta = {"policy": sc["priority"], "T_scan_s": round(T_scan, 3),
             "T_move_s": round(T_move, 3), "coverage_at_arrival": 1.0,
@@ -797,10 +879,51 @@ def _make_yaw(ycfg, t, pos):
     짐 스윙과 사실상 비결합 (§1).
     """
     mode = ycfg.get("mode", "heading")
+    # 시작 정렬 (08-01 실비행 적발): 기준 yaw[0]는 드론 초기 방위(yaw0)와
+    # 일치해야 한다 — 아니면 위치에서 금지한 '날것 스텝 참조'의 yaw판
+    # (실측: scan ±180° 요청이 -84°~211°로 유실, look_at 주시 RMS 27°).
+    # 정렬은 **명시적 rate 램프**로 기준에 넣는다 — raw[0]만 바꿔 스무더
+    # 백스톱에 맡기면 종점 헌팅 리밋사이클(±0.03rad 배회 실측)이 yaw에서
+    # 재현됨 (스무더의 알려진 스텝 특성).
+    yaw0 = float(ycfg.get("yaw0_rad", 0.0))
+    rate_al = (ycfg["scan"]["rate_rad_s"] if mode == "scan"
+               else ycfg.get("rate_max", YAW_RATE_MAX))
+
+    def _prepend_align(raw_target):
+        """yaw0에서 S 테이퍼(poly7)로 목표 프로파일에 합류하는 정렬 구간.
+
+        상수-rate 캐치업은 합류 순간 속도 불연속(1.0→목표 기울기) →
+        스무더 종점 헌팅(±0.03rad 배회 실측). 합류점의 값·기울기를 경계조건
+        으로 하는 poly7이면 C¹ 합류라 무개입.
+        """
+        d0 = raw_target[0] - yaw0
+        if abs(d0) < 1e-6:
+            return raw_target
+        dt_g = max(float(t[1] - t[0]), 1e-9)
+        # 가속 하한 필수: poly7 rest-rest 피크 가속 ~7.5·d/T² — 빠뜨리면
+        # 한계 2.0을 스치고 스무더 개입 → 비행 내내 헌팅 (hold 실측 사건)
+        T1 = max(2.2 * abs(d0) / rate_al,
+                 float(np.sqrt(7.6 * abs(d0) / (0.8 * YAW_ACC_MAX))),
+                 2.0 * rate_al / YAW_ACC_MAX, 0.3)
+        k1 = min(max(int(np.round(T1 / dt_g)), 1), len(t) - 1)
+        T1 = float(t[k1])
+        slope = float(np.gradient(raw_target, t)[k1])
+        c = _poly7_coeffs_bc(yaw0, 0.0, 0.0, 0.0,
+                             float(raw_target[k1]), slope, 0.0, 0.0, T1)
+        out = raw_target.copy()
+        out[:k1] = np.poly1d(c[::-1])(t[:k1])
+        return out
+
     if mode == "heading":
-        raw = _heading_yaw(t, pos)
+        raw = _prepend_align(_heading_yaw(t, pos))
     elif mode == "hold":
-        raw = np.full(len(t), ycfg["angle_rad"])
+        # 고정 목표는 S-사다리꼴이 정답 (가속 한계 구조 보장 — poly7 정렬은
+        # 피크 가속이 한계를 스쳐 스무더 헌팅 유발 실측)
+        T_h, fn_h = _yaw_strap(yaw0, float(ycfg["angle_rad"]), rate_al)
+        raw = np.full(len(t), float(ycfg["angle_rad"]))
+        if fn_h is not None:
+            m = t < T_h
+            raw[m] = fn_h(t[m])
     elif mode == "look_at":
         tgt = np.asarray(ycfg["target"], float)
         dx = tgt[0] - pos[:, 0]
@@ -816,18 +939,19 @@ def _make_yaw(ycfg, t, pos):
             first_ok = int(np.argmax(~frozen)) if (~frozen).any() else 0
             idx[idx < 0] = first_ok
             raw = raw[idx]
+        raw = _prepend_align(raw)
     elif mode == "scan":
         sc = ycfg["scan"]
-        a0, a1, rate = sc["from_rad"], sc["to_rad"], sc["rate_rad_s"]
-        sweep = abs(a1 - a0)
-        sgn = np.sign(a1 - a0) if sweep > 0 else 1.0
-        prog = rate * t
-        if sc["sweep"] == "once":
-            raw = a0 + sgn * np.minimum(prog, sweep)
-        else:                                # back_and_forth: 왕복 1회 후 유지
-            prog2 = np.minimum(prog, 2 * sweep)
-            raw = a0 + sgn * np.where(prog2 <= sweep, prog2,
-                                      2 * sweep - prog2)
+        knots, fns, T_tot = (ycfg.get("_scan_plan")
+                             or _plan_scan_yaw(sc, yaw0))
+        if not fns:                          # 전 세그먼트 생략 (제자리)
+            raw = np.full(len(t), yaw0)
+        else:
+            end_val = float(fns[-1](np.array([knots[-1] - knots[-2]]))[0])
+            raw = np.full(len(t), end_val)
+            for i, fn in enumerate(fns):
+                m = (t >= knots[i]) & (t < knots[i + 1])
+                raw[m] = fn(t[m] - knots[i])
     else:                                    # 방어 (normalize가 걸렀어야 함)
         raise ValueError(f"yaw.mode='{mode}' 미지원")
 

@@ -588,10 +588,31 @@ class TestYaw:
         assert y["scan"]["rate_rad_s"] == pytest.approx(tp.YAW_RATE_MAX)
         assert y["scan"]["_rate_clamped"]["requested"] == 5.0
 
-    def test_hold_constant_yaw(self):
+    def test_hold_ramps_from_yaw0_then_constant(self):
+        """시작 정렬: yaw[0]=yaw0(기본 0)에서 rate 한계 램프로 hold각 도달."""
         res = self._build(self._cfg({"mode": "hold", "angle_rad": 0.7}))
-        np.testing.assert_allclose(res["yaw"], 0.7, atol=1e-9)
+        yaw = res["yaw"]
+        assert abs(yaw[0]) < 0.02, "기준 시작은 드론 초기 방위(0)여야 함"
+        assert yaw[-1] == pytest.approx(0.7, abs=5e-3)   # 수렴
+        n_tail = len(yaw) // 10
+        np.testing.assert_allclose(yaw[-n_tail:], 0.7, atol=0.02)
+        dyaw = np.abs(np.diff(yaw)) / res["dt"]
+        assert dyaw.max() <= tp.YAW_RATE_MAX * 1.02
         assert res["yaw_meta"]["mode"] == "hold"
+
+    def test_scan_prealign_full_coverage(self):
+        """08-01 실비행 결함 재발 방지: ±180° 스캔 기준이 0에서 시작해
+        정렬 후 스윕 - 시작 스텝(-84~211° 유실) 없이 전 구간 커버."""
+        res = self._build(self._cfg(
+            {"mode": "scan", "scan": {"from_rad": -3.14, "to_rad": 3.14,
+                                      "rate_rad_s": 1.0}}))
+        yaw = res["yaw"]
+        assert abs(yaw[0]) < 0.02, "기준 시작 = yaw0 (스텝 금지)"
+        assert yaw.min() <= -3.14 + 0.05, "정렬 후 from_rad 도달"
+        assert yaw.max() >= 3.14 - 0.05, "to_rad까지 전 구간 스윕"
+        sm = res["yaw_meta"]["scan"]
+        # T_scan >= 운동학 하한(정렬 3.14 + 스윕 6.28), S 테이퍼 여유 이내
+        assert 9.42 <= sm["T_scan_s"] <= 13.0
 
     def test_lookat_points_at_target(self):
         """이동 중 실제로 목표점을 바라보는지 (중간 샘플 각도 검증)."""
@@ -614,7 +635,8 @@ class TestYaw:
             {"mode": "scan", "scan": {"from_rad": -0.5, "to_rad": 0.5,
                                       "rate_rad_s": 0.5}}))
         yaw = res["yaw"]
-        assert yaw[0] == pytest.approx(-0.5, abs=0.05)
+        assert abs(yaw[0]) < 0.02                        # 시작 = yaw0 (정렬)
+        assert yaw.min() == pytest.approx(-0.5, abs=0.05)  # from까지 정렬 도달
         assert yaw[-1] == pytest.approx(0.5, abs=0.02)   # 도달 후 유지
         dyaw = np.abs(np.diff(yaw)) / res["dt"]
         assert dyaw.max() <= 0.5 * 1.05                  # 요청 rate 준수
@@ -625,7 +647,8 @@ class TestYaw:
             {"mode": "scan", "scan": {"from_rad": 0.0, "to_rad": 6.283,
                                       "rate_rad_s": 0.5}}))
         sm = res["yaw_meta"]["scan"]
-        assert sm["T_scan_s"] == pytest.approx(12.57, abs=0.02)
+        # 운동학 하한 12.57(=2pi/0.5) 이상, S 테이퍼 여유 이내
+        assert 12.57 <= sm["T_scan_s"] <= 16.0
         assert res["t"][-1] >= sm["T_scan_s"] - 0.1
         assert sm["time_dilation"] is not None and sm["time_dilation"] > 1.0
         assert res["gate_ok"]
