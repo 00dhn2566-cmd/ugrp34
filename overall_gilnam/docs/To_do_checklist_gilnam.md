@@ -9,7 +9,7 @@
 ## 0. 최우선 (2026-08-01 갱신 — 윤호 학습 반환물 `best.pt` 수령 반영)
 
 - [ ] **추론 래퍼 구축 (즉시 착수 가능)** — 수령한 `window_yolo11s_best.pt` → `color_judge` → `vision_msg` 연결 (1번의 "추론 래퍼" 항목이 언블록됨). det_conf 연결·unknown 색 드롭 정책 포함. 완성 시 비전 파트 첫 실동작 버전
-- [ ] **`scan.rate_rad_s` 산정 → 성진 회신** — yaw `scan` 모드의 회전 속도는 비전이 산정하는 필수 입력 (누락 시 미션 거부). 카메라 FOV·탐지 주기·모션 블러 기준으로 최대 스캔 속도 계산. 참고치: FOV 90°·탐지 10Hz면 1.0 rad/s에서 프레임당 ~6°. 제어는 물리 상한(잠정 1.0 rad/s)만 집행 (`control_seoungjin/EXTERNAL_INTERFACE.md` 3·6절). 실측 추론 fps는 래퍼 완성 후 측정 가능
+- [x] **`scan.rate_rad_s` 산정** — 완료 (2026-08-01, `docs/scan_rate_estimate.md`): 시뮬 1.0 rad/s(물리 상한 그대로 — 렌더에 블러 없음), 실기 대비 보수값 0.6 rad/s(블러 제약 지배). 성진에게 회신만 남음. intrinsics 확정·실기 노출시간 실측 시 재계산
 - [ ] **윤호에게 확인 묶음 (메시지 1통)**
   - `eval_corners` 출력 표 또는 데이터셋 경로 (Job 1 반환물 중 누락분 — 거리 구간별 720p 픽셀 오차가 스펙 합격 기준)
   - 데이터셋 렌더러 확인: Isaac(드라이버 해소?) vs CPU 폴백 → HSV 실렌더 검증 유효성·Isaac 재학습 필요 여부 갈림
