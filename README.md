@@ -6,6 +6,9 @@
 **국문 과제명**: 결함 허용 및 장애물 회피 기능을 갖춘 현수하물 탑재 드론의 강건 통합 비행 제어 시스템 연구
 **영문 과제명**: A Study on Robust Integrated Flight Control System for Slung-load Drones with Fault Tolerance and Obstacle Avoidance Capabilities
 
+> **저장소를 처음 받았다면 → [GETTING_STARTED.md](GETTING_STARTED.md)** 부터.
+> (⚠ 서브모듈 init 주의사항 포함 — 읽기 전에 `git submodule update --init` 하지 말 것)
+
 ---
 
 ## 1. 주제 (Topic)
