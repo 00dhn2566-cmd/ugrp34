@@ -34,24 +34,41 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
 
 | # | 파일 | 방향 | 갱신 주기 | 용도 |
 |---|---|---|---|---|
-| 1 | `input/<mission>.json` | 상위 → path_time | 임무 단위 | 경로점 + 계획 스펙 |
+| 1 | `input/<mission>.json` | 상위 → path_time | 임무 단위 | 경로점 + 계획 스펙 (**코어** — RL seam) |
+| 1b | `input/<mission>.options.json` | 상위 → path_time | 임무 단위 | 성진 확장 (선택 — 없으면 전부 기본값) |
 | 2 | `output/trajectory.mat` / `trajectory.json` | path_time → 컨트롤러 | 임무 단위 | 성형 완료 궤적 (게이트 통과분만) |
 | 3 | `output/attitude_feedback.json` | 컨트롤러 → path_time | 비행 후 1회 | 잔류 지터 실측 → 경로 보정 학습 |
 | 4 | `output/feedback_ledger.jsonl` | path_time 전용 (append) | 소비 시마다 | 보정 이력 원장 (처리 여부·경과 시간 조회) |
 | 5 | `output/current_state.json` | 컨트롤러 → 모두 | 상시 20~50Hz | 실시간 상태 (재계획 이어붙이기) |
 
-## 1. 경로 JSON (`input/<mission>.json`)
+## 1. 경로 JSON (`input/<mission>.json` + `input/<mission>.options.json`)
 
-`sample/INPUT_FORMAT.md`의 확장. 필수 키 누락 시 파이프라인이 error로 즉사.
+**코어/옵션 분리 (형식 정합 2026-08-01).** 상위(RL)가 실제로 채우는 계획 스펙은
+`sample/INPUT_FORMAT.md`의 3키뿐이고, 그 파일은 윤호
+`reinforcement_yunho/interface/waypoints_config.schema.json`과 **바이트 호환**이다.
+그 스키마는 `additionalProperties: false`라 **확장 키를 한 개라도 섞으면 RL 측
+`validate()`가 거부**하므로, 성진 확장(v0.2)은 전부 사이드카
+`<mission>.options.json`으로 분리한다.
 
 ```json
+// input/<mission>.json — 코어 (윤호 waypoints_config 스키마 100% 준수)
 {
   "waypoints": [[x, y, z], ...],          // 필수, N>=2, 첫 점 = 출발점
   "limits": {                              // 필수 — "계획 스펙"
     "v_max": 1.0, "a_max": 0.8,            //   숫자 또는 [x,y,z]
     "j_max": 2.0, "snap_max": 10.0
   },
-  "dt": 0.01,                              // 선택 (기본 0.01) [s]
+  "dt": 0.01                               // 선택 (기본 0.01) [s]
+}
+```
+
+검증: `python3 interface/schemas.py validate input/<mission>.json --kind waypoints`
+(윤호 폴더에서 실행. `input/` 예시 6종은 전부 VALID.)
+
+```json
+// input/<mission>.options.json — 성진 확장 (파일 자체가 선택. 전 키 선택)
+{
+  "_comment": "자유 메모 — 코어가 아니라 여기에 둔다",
   "waypoint_mode": "stop",                 // 선택: "stop"(기본, 점마다 정지) |
                                            //   "fly_through"(무정지 통과 — 스플라인
                                            //   연속 경로 + 곡률 감속. 급코너는 자동 감속)
@@ -86,9 +103,24 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
              "priority": "coupled"},       //   "move" | "coupled"(기본) | "scan" —
                                            //   이동↔스캔 시간 배분 정책 (아래)
     "rate_max": 1.0                        //   [rad/s] 선택 — 아래 yaw 물리 잠정치로 클램프
-  }
+  },
+  "strict": false,                         // 선택: true = 클램프 대신 즉시 거부 (검증용, §7)
+  "trajectory": {"t": [...],               // 선택: waypoints 대신 쓰는 원시 궤적 입구
+                 "pos": [[x,y,z], ...]}    //   (이미 시간 붙음 — 스무더가 재성형 후 게이트).
+                                           //   RL seam이 아니므로 코어 스키마 대상 외 —
+                                           //   이 입구만 쓰는 미션은 코어 파일에 둬도 된다.
 }
 ```
+
+**병합 규칙 (`traj_pipeline.load_mission`)**
+
+- 옵션 파일은 코어와 **같은 이름 + `.options.json`**. 없으면 전부 기본값.
+- 코어 키(`waypoints`/`limits`/`dt`)를 옵션 파일에 두면 **즉사** — 계획 스펙이 두
+  파일로 흩어지면 어느 쪽이 진실인지 알 수 없다.
+- 같은 키가 양쪽에 있으면 **즉사** (조용한 병합 금지, §공통규칙).
+- **하위 호환**: 확장 키가 코어 파일에 인라인으로 있어도 그대로 동작한다.
+  `_legacy_inline_options`로 표시하고 `[호환]` 한 줄을 통지 — 그 파일은 RL 측
+  `validate()`를 통과하지 못하므로 새 미션은 분리해서 쓸 것.
 
 ### yaw 명령 인터페이스 원칙 (설계 확정 2026-07-19, 구현 대기)
 

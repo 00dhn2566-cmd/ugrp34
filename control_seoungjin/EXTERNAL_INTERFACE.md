@@ -15,20 +15,37 @@
 
 ---
 
-## 1. 미션 주기 — `mission.json` (§1)
+## 1. 미션 주기 — `mission.json` + `mission.options.json` (§1)
+
+**파일 2개로 분리돼 있다** (형식 정합 2026-08-01). 코어는 윤호
+`reinforcement_yunho/interface/waypoints_config.schema.json`과 **바이트 호환**이라
+RL 쪽에서 `validate(cfg, kind="waypoints")`로 그대로 검사할 수 있다. 그 스키마가
+`additionalProperties: false`라 확장 키를 섞으면 거부되므로, 제어 확장은 사이드카로 뺐다.
 
 ```json
+// mission.json — 코어 (이것만 보내도 비행 가능)
 {
   "waypoints": [[x,y,z], ...],            // 필수. 월드좌표 [m], 첫 점 = 출발점
   "limits": {                              // 필수. 이 미션의 속도 스펙
     "v_max": 1.0, "a_max": 0.8, "j_max": 2.0, "snap_max": 10.0
   },
+  "dt": 0.01                               // 선택 (기본 0.01)
+}
+```
+
+```json
+// mission.options.json — 확장 (파일째 생략 가능. 전 키 선택)
+{
   "waypoint_mode": "stop" | "fly_through", // 선택. fly_through = 중간점 무정지 통과
   "controller_profile": "precision" | "balanced" | "agile",   // 선택. 게인 프로파일
   "yaw": { ... },                          // 선택. 아래 3절
   "strict": false                          // 선택. true = 완화 대신 거부 원할 때
 }
 ```
+
+- 이름 규칙: 코어가 `foo.json`이면 옵션은 `foo.options.json`.
+- 같은 키를 양쪽에 쓰면 **즉시 거부** (조용한 병합 없음).
+- 예전처럼 한 파일에 다 넣어도 동작은 하지만, 그 파일은 RL 측 검증을 통과하지 못한다.
 
 **알아둘 정책 4가지:**
 - **waypoint는 촘촘히 줘도 된다** — 병합·시간 부여는 제어가 알아서. 시간은 절대 붙이지 말 것.

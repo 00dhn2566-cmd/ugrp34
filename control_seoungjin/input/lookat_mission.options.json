@@ -1,0 +1,5 @@
+{
+  "_comment": "look_at yaw 검증 미션: 창문 접근처럼 한 점을 계속 주시하며 무정지 통과.",
+  "waypoint_mode": "fly_through",
+  "yaw": {"mode": "look_at", "target": [2.0, 3.0, 1.5]}
+}

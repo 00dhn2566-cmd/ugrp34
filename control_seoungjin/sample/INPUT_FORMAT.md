@@ -3,6 +3,18 @@
 다른 사람이 waypoint를 만들어서 이 파이프라인(`run_and_log.py`)에 넣을 때 쓰는 입력 파일 스펙이다.
 파일 이름은 자유(`input.yaml`, `input.json`, `config.yaml` 등 무엇이든 상관없음) — 확장자(`.yaml`/`.yml`/`.json`)로 포맷만 자동 판별한다.
 
+> **RL seam 코어 스키마.** 아래 3키(`waypoints`/`limits`/`dt`)는 윤호
+> `reinforcement_yunho/interface/waypoints_config.schema.json`과 **바이트 호환**이다
+> (JSON으로 쓸 때). 그 스키마는 `additionalProperties: false`라 **키를 하나라도
+> 더 넣으면 RL 측 `validate()`가 거부**한다 — 제어 확장(`waypoint_mode`, `yaw`,
+> `shaper`, `controller_profile`, `strict` 등)은 여기가 아니라 사이드카
+> `<mission>.options.json`에 넣는다 (INTERFACE_SPEC.md §1).
+>
+> ```bash
+> # 윤호 폴더에서 코어 파일 검증
+> python3 interface/schemas.py validate <입력파일>.json --kind waypoints
+> ```
+
 ## 스키마
 
 ```yaml

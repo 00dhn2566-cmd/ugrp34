@@ -153,22 +153,89 @@ def _atomic_write_json(path, obj):
     os.replace(tmp, path)
 
 
+# --- 코어/옵션 분리 (RL→control seam 형식 정합, 2026-08-01) -----------------
+# 코어 파일은 윤호 reinforcement_yunho/interface/waypoints_config.schema.json과
+# **바이트 호환**이어야 한다. 그 스키마는 additionalProperties:false라 확장 키를
+# 한 개라도 섞으면 RL 측 validate()에서 거부된다 → 성진 확장은 전부 사이드카
+# 파일 <mission>.options.json으로 분리한다.
+MISSION_CORE_KEYS = ("waypoints", "limits", "dt")
+MISSION_OPTION_KEYS = ("trajectory", "waypoint_mode", "waypoint_prep", "shaper",
+                       "controller_profile", "yaw", "strict", "_comment")
+
+
+def mission_options_path(path):
+    """<mission>.json → <mission>.options.json (성진 확장 사이드카 경로)."""
+    stem = path[:-5] if path.endswith(".json") else path
+    return stem + ".options.json"
+
+
+def load_mission_options(path):
+    """확장 사이드카 로드. 파일 없으면 {} (옵션은 전부 선택 항목).
+
+    코어 키(waypoints/limits/dt)가 사이드카에 있으면 즉사 — 계획 스펙이 두
+    파일에 흩어지면 어느 쪽이 진실인지 알 수 없다 (저장소 규칙: 조용한 병합 금지).
+    """
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        opts = json.load(f)
+    if not isinstance(opts, dict):
+        raise ValueError(f"옵션 JSON은 object여야 함: {path}")
+    stray = sorted(k for k in opts if k in MISSION_CORE_KEYS)
+    if stray:
+        raise KeyError(
+            f"코어 키 {stray}는 옵션 파일에 두면 안 됨: {path} "
+            "(waypoints/limits/dt는 코어 미션 JSON에만)")
+    return opts
+
+
 def load_mission(path):
     """input/ 경로 JSON 로드 + 스키마 검증 (누락 시 즉사 — 저장소 규칙).
 
-    스키마 (sample/INPUT_FORMAT.md 확장) — 두 입구 중 하나 필수:
+    **코어** (`<mission>.json`, sample/INPUT_FORMAT.md == 윤호 waypoints_config
+    스키마) — 두 입구 중 하나 필수:
         waypoints  : [[x,y,z], ...]  (N>=2) — plan_waypoints가 최소시간 부여
-        trajectory : {"t": [...], "pos": [[x,y,z], ...]} — 이미 시간 붙은
-                     원시 궤적 (스텝/거친 프로파일 허용 — 스무더가 물리
-                     추종 가능한 S-커브로 재성형 후 게이트 검증)
         limits     : {v_max, a_max, j_max, snap_max}  (필수, 숫자 또는 [x,y,z])
         dt         : 샘플 간격 [s] (선택, 기본 0.01)
-        shaper     : {mode: 'zv'|'zvd'|'none', f_mode_hz} (선택)
+
+    **옵션** (`<mission>.options.json`, 성진 확장 v0.2 — 전부 선택):
+        waypoint_mode      : 'stop'(기본) | 'fly_through'
+        waypoint_prep      : {merge_dist, collinear_tol, max_seg_len}
+        shaper             : {mode: 'zv'|'zvd'|'none', f_mode_hz}
+        controller_profile : 'precision'(기본) | 'balanced' | 'agile'
+        yaw                : {mode, ...} (INTERFACE_SPEC §1 yaw 절)
+        strict             : true면 클램프 대신 거부
+        trajectory         : {"t": [...], "pos": [[x,y,z], ...]} — 이미 시간
+                             붙은 원시 궤적 입구 (waypoints 대신). RL seam이
+                             아니므로 코어 스키마 적용 대상 외 — 이 입구를 쓰는
+                             미션은 코어 파일에 그대로 둬도 된다.
+
+    하위 호환: 확장 키가 코어 파일에 인라인으로 있어도 그대로 동작한다
+    (`_legacy_inline_options`로 표시 + 통지). 새 미션은 분리해서 쓸 것.
     """
     if not os.path.isfile(path):
         raise FileNotFoundError(f"경로 JSON 없음: {path}")
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
+
+    opt_path = mission_options_path(path)
+    opts = load_mission_options(opt_path)
+    if opts:
+        dup = sorted(set(opts) & set(cfg))
+        if dup:
+            raise KeyError(
+                f"코어/옵션 양쪽에 중복 정의된 키 {dup}: {path} vs {opt_path} "
+                "(조용한 병합 금지 — 한쪽에서 지울 것)")
+        cfg.update(opts)
+        cfg["_options_src"] = opt_path
+
+    inline = sorted(k for k in cfg
+                    if k in MISSION_OPTION_KEYS and k not in opts
+                    and k != "trajectory")
+    if inline:
+        cfg["_legacy_inline_options"] = inline
+        print(f"[호환] 코어 미션에 확장 키 인라인: {inline} — "
+              f"{os.path.basename(opt_path)}로 분리하면 RL(윤호) 스키마 통과")
 
     if "limits" not in cfg:
         raise KeyError(f"경로 JSON에 필수 키 'limits' 없음: {path}")

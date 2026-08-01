@@ -1,0 +1,8 @@
+{
+  "_comment": "fly_through 모드 검증 미션: 중간점 무정지 통과 (곡률 감속 자동).",
+  "waypoint_mode": "fly_through",
+  "shaper": {
+    "mode": "zvd",
+    "f_mode_hz": 1.8
+  }
+}
