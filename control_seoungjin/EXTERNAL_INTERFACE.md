@@ -115,7 +115,7 @@ RL 쪽에서 `validate(cfg, kind="waypoints")`로 그대로 검사할 수 있다
 
 | 상대 | 조율 내용 | 상태 |
 |---|---|---|
-| 길남 (비전) | `scan.rate_rad_s` 산정 기준 (카메라 FOV·탐지 주기 → 최대 스캔 속도) | 대기. 참고: FOV 90°·10Hz면 1.0 rad/s에서 프레임당 ~6° |
+| 길남 (비전) | `scan.rate_rad_s` 산정 | **회신 완료 (2026-08-01)**: 시뮬 1.0(블러 없음) / 실기 0.6 rad/s. 근거·일반식 `overall_gilnam/docs/scan_rate_estimate.md`. 재검토: intrinsics 확정·노출시간·탐지주기 실측 시 |
 | 윤호 (RL) | Isaac Sim/ROS2 전환 시 파일→토픽 매핑 (스키마는 그대로, 운반만 변경) | 윤호 환경 구축 후 |
 | 태민 (VIO) | 실기에서 드론 상태(위치·자세) 출처를 VIO 추정치로 교체하는 규약 | 실기 단계 |
 | 윤호 (RL) | `look_at.target`에 넣을 창문 좌표의 출처 (VIO 재구성 `/window_positions` 연동) | 파이프라인 통합 시 |

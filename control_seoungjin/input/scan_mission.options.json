@@ -1,8 +1,8 @@
 {
-  "_comment": "scan yaw 검증 미션: 이동하며 ±180° 1회 스윕. scan.rate_rad_s는 필수 (기본값 없음 — 스캔 속도의 정답은 비전만 안다).",
+  "_comment": "scan yaw 검증 미션: 이동하며 ±180° 1회 스윕. rate_rad_s는 비전 회신값 (시뮬 1.0 — Isaac 블러 없음, 실기는 0.6: overall_gilnam/docs/scan_rate_estimate.md).",
   "yaw": {
     "mode": "scan",
     "scan": {"from_rad": -3.14, "to_rad": 3.14, "sweep": "once",
-             "rate_rad_s": 0.5, "priority": "coupled"}
+             "rate_rad_s": 1.0, "priority": "coupled"}
   }
 }
