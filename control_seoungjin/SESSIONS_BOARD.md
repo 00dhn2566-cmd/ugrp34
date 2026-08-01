@@ -61,7 +61,7 @@
 - (이하 이 세션이 직접 기록)
 
 ## 비상(emergency) 세션
-- 07-19 밤 — (마감 후 추가) 루트 **GETTING_STARTED.md 신설** (87c155d, 사용자 요청) — 팀원이 pull 직후 읽는 온보딩: 서브모듈 init 금지 경고/폴더 지도/파트별 현황·읽을 순서/즉시 실행 가능 목록. README 상단 진입 링크
+- 07-19 밤 — (마감 후 추가) **SETUP.md 신설** (사용자 요청 재정정: 전체 온보딩 말고 "제어 작업물 받는 데 필요한 것"만) — 용도별 준비물 A(파이썬만)/B(MATLAB+모델 zip, 서브모듈 init 금지)/C(C++ 빌드). 루트 GETTING_STARTED.md는 요청 취지와 달라 철회(87c155d 역제거)
 - 07-19 밤 — **세션 마감** (31431df) — 산출물 전부 커밋 (감독자 v0.2 / A-1 emergency 동사 / A-2 게이트·회피 / 러너 / C 감시 / verify_emergency.py, 테스트 169 통과). 잔여 = ①② 실행(MATLAB 큐: path_time 다음 순서) → ③B Simulink 반사 → ④C. 튜닝 ★(qc_zsplit_apply)은 verify_emergency가 run_traj_baked 경유라 해당 없음 확인. 다음 세션: EMERGENCY_STATUS.md "다음 일"부터
 - 07-19 — ★튜닝/C++ 세션: 비상 협의 의제 3건 — ① 컨트롤러 측 하트비트 감시(철칙 3: flight_state.json written_at 나이>1.0s → 현행 궤적 완주 후 래치 호버. 기준 구현 `flight_supervisor.heartbeat_stale()`, C++ 미션 러너/qc_io에 이식 요청) ② B RECOVER 상태기계 C++ 이식(골든 확장 후 — 트리거 후보 EMERGENCY_STATUS 참조) ③ C-반사 믹서 자세 우선 배분(qc_controller.hpp 수정이라 골든 재대조 필수, 믹서 부호표 §8 기반. w_sat 임계 실측은 qc_trace Ct 0.8 열화로 비상 세션이 수행 예정)
 - 07-19 — **A-2 금지 구역 + 감독자 v0.2 완료 (사용자 부재 자율 모드)** — keep_out 이격 검사(box/sphere, 전 샘플)·게이트 연동(plan/splice/emergency, KEEP_OUT_VIOLATION)·회피 재계획(재조밀화 push-out — 정관통 퇴화 2건 실측 해결)·감독자 러너(action→§8 CLI subprocess 실전 왕복)·C-모드 트리거 감시(옵트인, w_sat 실측 대기)·검증 ①② 오케스트레이터 `verify_emergency.py` 작성(미실행, MATLAB 슬롯 대기). §8 표에 emergency 동사 등재 + §9 A-2 구현 확정 추기. **테스트 169개 전체 통과** (신규 40, 회귀 0). 상세 EMERGENCY_STATUS.md
