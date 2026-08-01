@@ -81,14 +81,18 @@ def report(result, mean_target=3.0, far_target=5.0):
 
 
 def _load_meta(dataset_dir):
-    """meta.jsonl → {이미지 stem: {order_index: distance_m}}"""
+    """meta.jsonl → {이미지 stem: [라벨 줄 순서대로의 distance_m]}.
+
+    meta의 windows 행은 라벨 파일 줄과 1:1 순서 정렬이 생산자 계약
+    (make_toy_dataset·윤호 export_dataset 공통). order_index를 키로 쓰면
+    같은 색 창문 2개인 프레임에서 거리값이 덮어써지므로 줄 순서로 짝짓는다
+    (2026-08-01 확정: 중복 색 프레임도 평가 범위에 포함).
+    """
     meta = {}
     with open(dataset_dir / "meta.jsonl", encoding="utf-8") as f:
         for line in f:
             rec = json.loads(line)
-            meta[Path(rec["image"]).stem] = {
-                w["order_index"]: w["distance_m"] for w in rec["windows"]
-            }
+            meta[Path(rec["image"]).stem] = [w["distance_m"] for w in rec["windows"]]
     return meta
 
 
@@ -103,13 +107,18 @@ def _collect_records(model, dataset_dir, split="val"):
     for img_path in sorted((dataset_dir / "images" / split).glob("*.png")):
         label_path = dataset_dir / "labels" / split / (img_path.stem + ".txt")
         gts = [parse_label_line(l) for l in label_path.read_text().splitlines() if l.strip()]
+        distances = meta[img_path.stem]
+        if len(distances) != len(gts):
+            raise ValueError(
+                f"{img_path.stem}: meta rows({len(distances)}) != label lines({len(gts)}) — 생산자 1:1 계약 위반"
+            )
         r = model(str(img_path), verbose=False)[0]
         preds = []  # [(center(2,), corners(4,2))]
         if r.keypoints is not None and len(r.keypoints) > 0:
             for kp in r.keypoints.xy.cpu().numpy():
                 preds.append((kp.mean(axis=0), kp))
         used = set()
-        for gt in gts:
+        for line_i, gt in enumerate(gts):
             gt_c = np.asarray(gt["corners"], float)
             center = gt_c.mean(axis=0)
             best_i, best_d = None, MATCH_MAX_PX
@@ -125,7 +134,7 @@ def _collect_records(model, dataset_dir, split="val"):
                 {
                     "gt_corners": gt_c,
                     "pred_corners": pred_corners,
-                    "distance_m": meta[img_path.stem][gt["order_index"]],
+                    "distance_m": distances[line_i],
                 }
             )
     return records
