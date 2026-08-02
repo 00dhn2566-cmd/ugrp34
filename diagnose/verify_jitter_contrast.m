@@ -59,9 +59,7 @@ set_param(mdl, 'StopTime', num2str(T));
 % 구성: {라벨, 프로파일, 스텝 크기 A[m]}
 cfgs = { ...
     'prec 0.1m ', 'precision', 0.1; ...
-    'prec 1.0m ', 'precision', 1.0; ...
     'agile 0.1m', 'agile',     0.1; ...
-    'agile 1.0m', 'agile',     1.0; ...
 };
 
 nC = size(cfgs,1);
@@ -77,7 +75,7 @@ for c = 1:nC
 
     % 스텝 명령(0.1s 램프 근사) -> 성형기. 소신호는 게이트 통과 수준이라 무개입에 가깝고
     % 대신호는 jerk-limited S-커브로 성형됨 (실사용 파이프라인과 동일 경로).
-    tau = min(max((tt-tStep)/0.1,0),1);
+    tau = min(max((tt-tStep)/3.0,0),1);   % 3s 최소저크 - 성형기 무개입 확정 영역(깨끗한 꼬리)
     xk = A * (10*tau.^3 - 15*tau.^4 + 6*tau.^5);
     sm = traj_smoother(tt, [xk, zeros(N,1), ones(N,1)], VMAX, AMAX, JMAX);
     sm = traj_zv(tt, sm, 1.80, 'zvd');   % 실사용 사슬 완성: 짐 진자(1.80Hz) 잔류진동 소거
@@ -130,7 +128,7 @@ for c = 1:nC
     xr_ref = interp1(tt, sm(:,1), tu);
     Ts = table(tu, xr_ref, xg, pg, 'VariableNames', {'t','x_ref','x_meas','pitch_deg'});
     writetable(Ts, fullfile(modelDir, 'diagnose', 'results', ...
-        sprintf('step_ts_%s_%gm.csv', prof, A)));
+        sprintf('jitctr_ts_%s_%gm.csv', prof, A)));
 end
 fprintf('(성형도달 = 성형기 몫(기준 궤적 99%% 도달), rise/정착은 실측 위치 기준 - 파이프라인 끝단 지표)\n');
 
@@ -138,8 +136,8 @@ csvDir = fullfile(modelDir, 'diagnose', 'results');
 if ~exist(csvDir, 'dir'); mkdir(csvDir); end
 Tb = array2table(rows, 'VariableNames', ...
     {'step_m','is_agile','t_ref99_s','rise_s','settle2pct_s','overshoot_pct','sse_mm','z_peak_cm','settle2cm_s'});
-writetable(Tb, fullfile(csvDir, 'verify_step_pipeline.csv'));
-fprintf('CSV 저장: %s\n', fullfile(csvDir, 'verify_step_pipeline.csv'));
+writetable(Tb, fullfile(csvDir, 'verify_jitter_contrast.csv'));
+fprintf('CSV 저장: %s\n', fullfile(csvDir, 'verify_jitter_contrast.csv'));
 
 function s = local_settle(tu, xg, A, tol, iS, tStep)
     okm = abs(xg - A) <= tol;
