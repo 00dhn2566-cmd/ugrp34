@@ -113,3 +113,65 @@ def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
                             round((h_est - gt["size_wh"][1]) * 1000.0, 3)],
         })
     return results
+
+
+def summarize(label, results):
+    """창문별 결과 → 스트림 1개 집계 행."""
+    valid = [r for r in results if r["n_pairs"] > 0]
+    n_windows_failed = len(results) - len(valid)
+
+    if not valid:
+        return {
+            "label": label,
+            "corner_err_mean_mm": None,
+            "corner_err_max_mm": None,
+            "center_err_mean_mm": None,
+            "size_err_mean_abs_mm": None,
+            "n_windows_failed": n_windows_failed,
+        }
+
+    return {
+        "label": label,
+        "corner_err_mean_mm": round(float(np.mean([r["corner_err_mean_mm"] for r in valid])), 3),
+        "corner_err_max_mm": round(max(r["corner_err_max_mm"] for r in valid), 3),
+        "center_err_mean_mm": round(float(np.mean([r["center_err_mm"] for r in valid])), 3),
+        "size_err_mean_abs_mm": round(
+            float(np.mean([abs(e) for r in valid for e in r["size_err_mm"]])), 3),
+        "n_windows_failed": n_windows_failed,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description="스트림(들) → 삼각측량 3D 복원 오차표 (markdown)")
+    ap.add_argument("--scene-gt", required=True)
+    ap.add_argument("--streams", required=True, nargs="+")
+    ap.add_argument("--json", help="기계 판독 결과 저장 경로 (선택)")
+    args = ap.parse_args()
+
+    scene_gt = json.loads(Path(args.scene_gt).read_text(encoding="utf-8"))
+    all_out = []
+    print("| 스트림 | 창문 | n_pairs | corner 평균/최대 (mm) | 중심 (mm) | 크기 w/h (mm) |")
+    print("|---|---|---|---|---|---|")
+    for path in args.streams:
+        label = Path(path).stem
+        results = evaluate_records(load_records(path), scene_gt)
+        for r in results:
+            if r["n_pairs"] == 0:
+                # 스텁 행 — 복원 불가
+                print(f"| {label} | {r['order_index']} ({r['color']}) | 0 | 복원 불가 | — | — |")
+            else:
+                print(f"| {label} | {r['order_index']} ({r['color']}) | {r['n_pairs']} "
+                      f"| {r['corner_err_mean_mm']} / {r['corner_err_max_mm']} "
+                      f"| {r['center_err_mm']} | {r['size_err_mm'][0]} / {r['size_err_mm'][1]} |")
+        summary = summarize(label, results)
+        all_out.append({"summary": summary, "windows": results})
+        print(f"| **{label} 집계** | 창문 {len(results)}개 | — "
+              f"| **{summary['corner_err_mean_mm']} / {summary['corner_err_max_mm']}** "
+              f"| **{summary['center_err_mean_mm']}** | 평균절대 {summary['size_err_mean_abs_mm']} |")
+    if args.json:
+        Path(args.json).write_text(json.dumps(all_out, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

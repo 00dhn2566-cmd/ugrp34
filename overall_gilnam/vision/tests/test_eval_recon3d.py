@@ -4,8 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
-from eval_recon3d import evaluate_records, _finite_median
-from noisy_stream import load_records
+from eval_recon3d import evaluate_records, _finite_median, summarize
+from noisy_stream import load_records, P_TAIL, make_noisy_records
 
 VISION_DIR = Path(__file__).resolve().parents[1]
 
@@ -101,3 +101,13 @@ def test_nonfinite_estimates_are_excluded():
     result, n_finite = _finite_median([])
     assert result is None
     assert n_finite == 0
+
+
+def test_error_grows_with_noise_scale():
+    records, scene_gt = _load_sample()
+    err = {}
+    for scale in (0.0, 0.5, 2.0):
+        noisy = make_noisy_records(records, scale, 1234, 8.87, 36.6, P_TAIL, drop_prob=0.0)
+        s = summarize(f"x{scale}", evaluate_records(noisy, scene_gt))
+        err[scale] = s["center_err_mean_mm"]
+    assert err[0.0] < err[0.5] < err[2.0]
