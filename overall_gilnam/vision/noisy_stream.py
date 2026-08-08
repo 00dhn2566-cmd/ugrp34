@@ -53,3 +53,85 @@ def calibrate_mixture(mean_px, p95_px, p_tail=P_TAIL):
     sigma_tail = (lo + hi) / 2.0
     sigma_core = (mean_px / RADIAL_MEAN_COEF - p_tail * sigma_tail) / (1.0 - p_tail)
     return sigma_core, sigma_tail
+
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+
+from vision_msg import build_frame_message, build_window, to_json
+
+PX_DECIMALS = 2  # make_stream.py와 동일한 기록 자릿수
+
+
+def _noisy_windows(windows, rng, sigma_core, sigma_tail, p_tail, drop_prob):
+    """§5 windows[] → 노이즈 주입본. 기하(corners·center)만 변경, 드롭은 창문 단위."""
+    out = []
+    for w in windows:
+        if rng.random() < drop_prob:
+            continue
+        corners = np.asarray(w["corners"], dtype=float)
+        sigmas = np.where(rng.random(len(corners)) < p_tail, sigma_tail, sigma_core)
+        corners = corners + rng.normal(0.0, 1.0, corners.shape) * sigmas[:, None]
+        nw = build_window(
+            w["order_index"], w["color"],
+            [[round(float(u), PX_DECIMALS), round(float(v), PX_DECIMALS)] for u, v in corners],
+            w["corner_vis"], w["det_conf"], w["color_conf"],
+        )
+        nw["center"] = [round(c, PX_DECIMALS) for c in nw["center"]]
+        out.append(nw)
+    return out
+
+
+def make_noisy_records(records, scale, seed, mean_px, p95_px, p_tail, drop_prob):
+    """스트림 레코드 리스트 → 배율 scale 노이즈 주입본 (pose 불변, 결정적)."""
+    sigma_core, sigma_tail = calibrate_mixture(mean_px, p95_px, p_tail)
+    rng = np.random.default_rng([seed, int(round(scale * 100))])  # 배율별 독립 시드
+    out = []
+    for rec in records:
+        msg = rec["vision"]
+        windows = _noisy_windows(msg["windows"], rng,
+                                 sigma_core * scale, sigma_tail * scale, p_tail, drop_prob)
+        out.append({"vision": build_frame_message(msg["timestamp"], msg["frame_id"], windows),
+                    "pose": rec["pose"]})
+    return out
+
+
+def load_records(path):
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def write_records(records, path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="GT 스트림 → 실측 프로파일 노이즈 주입 jsonl (배율별)")
+    ap.add_argument("--stream", required=True, help="입력 §5+pose jsonl (make_stream.py 산출물)")
+    ap.add_argument("--out", required=True, help="출력 디렉터리")
+    ap.add_argument("--scales", default="0.25,0.5,1,1.5,2,3")
+    ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--mean", type=float, default=DEFAULT_MEAN_PX)
+    ap.add_argument("--p95", type=float, default=DEFAULT_P95_PX)
+    ap.add_argument("--drop", type=float, default=DEFAULT_DROP)
+    args = ap.parse_args()
+
+    records = load_records(args.stream)
+    sc, st = calibrate_mixture(args.mean, args.p95)
+    print(f"calibrated: sigma_core={sc:.3f}px sigma_tail={st:.3f}px (p_tail={P_TAIL})")
+    for scale in [float(s) for s in args.scales.split(",")]:
+        noisy = make_noisy_records(records, scale, args.seed, args.mean, args.p95, P_TAIL, args.drop)
+        path = Path(args.out) / f"noisy_x{scale:g}.jsonl"
+        write_records(noisy, path)
+        n_win = sum(len(r["vision"]["windows"]) for r in noisy)
+        print(f"x{scale:g}: {len(noisy)} frames, {n_win} windows → {path}")
+
+
+if __name__ == "__main__":
+    main()
