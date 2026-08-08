@@ -111,3 +111,43 @@ def test_error_grows_with_noise_scale():
         s = summarize(f"x{scale}", evaluate_records(noisy, scene_gt))
         err[scale] = s["center_err_mean_mm"]
     assert err[0.0] < err[0.5] < err[2.0]
+
+
+def test_summarize_filters_stub_windows():
+    """summarize — 유효한 창문만 집계, 스텁(n_pairs=0) 제외, n_windows_failed 기록."""
+    # 케이스 1: 유효·스텁 혼합 → 유효한 것만 집계
+    valid_row = {
+        "order_index": 0,
+        "color": "red",
+        "n_pairs": 100,
+        "corner_err_mean_mm": 0.5,
+        "corner_err_max_mm": 1.5,
+        "center_err_mm": 0.3,
+        "size_err_mm": [0.1, -0.2],
+    }
+    stub_row = {
+        "order_index": 1,
+        "color": "green",
+        "n_pairs": 0,
+    }
+    results = [valid_row, stub_row]
+    s = summarize("test", results)
+
+    # 유효한 행의 값만 반영돼야 함
+    assert s["corner_err_mean_mm"] == 0.5
+    assert s["corner_err_max_mm"] == 1.5
+    assert s["center_err_mean_mm"] == 0.3
+    assert s["size_err_mean_abs_mm"] == round((abs(0.1) + abs(-0.2)) / 2.0, 3)
+    assert s["n_windows_failed"] == 1
+
+    # 케이스 2: 모두 스텁 → 모든 집계값 None
+    stub_results = [
+        {"order_index": 0, "color": "red", "n_pairs": 0},
+        {"order_index": 1, "color": "green", "n_pairs": 0},
+    ]
+    s_all_stub = summarize("test_all_stub", stub_results)
+    assert s_all_stub["corner_err_mean_mm"] is None
+    assert s_all_stub["corner_err_max_mm"] is None
+    assert s_all_stub["center_err_mean_mm"] is None
+    assert s_all_stub["size_err_mean_abs_mm"] is None
+    assert s_all_stub["n_windows_failed"] == 2
