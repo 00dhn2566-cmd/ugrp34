@@ -61,7 +61,7 @@ from pathlib import Path
 
 import numpy as np
 
-from vision_msg import build_frame_message, build_window, to_json
+from vision_msg import build_frame_message, build_window
 
 PX_DECIMALS = 2  # make_stream.py와 동일한 기록 자릿수
 
