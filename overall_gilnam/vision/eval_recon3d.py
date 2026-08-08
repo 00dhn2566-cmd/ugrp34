@@ -49,8 +49,20 @@ def _observations(records, K, order_index):
     return obs
 
 
+def _finite_median(estimates):
+    """유효 쌍 추정값 → 비유한값 제외·중앙값 집계. 반환: (중앙값(4,3) or None, 유효 개수)."""
+    if not estimates:
+        return None, 0
+    stacked = np.stack(estimates)  # (n_pairs, 4, 3)
+    finite_mask = np.isfinite(stacked).all(axis=(1, 2))  # (n_pairs,) bool
+    finite_estimates = stacked[finite_mask]  # (n_finite, 4, 3)
+    if len(finite_estimates) == 0:
+        return None, 0
+    return np.median(finite_estimates, axis=0), len(finite_estimates)
+
+
 def _triangulate(obs, min_baseline_m, max_pairs):
-    """모든 유효 쌍 삼각측량 → corner별 성분 중앙값 (4,3). 반환: (estimate, n_pairs)."""
+    """모든 유효 쌍 삼각측량 → corner별 성분 중앙값 (4,3). 비유한값 제외. 반환: (estimate, n_pairs)."""
     pairs = [
         (i, j)
         for i in range(len(obs))
@@ -66,7 +78,7 @@ def _triangulate(obs, min_baseline_m, max_pairs):
     for i, j in pairs:
         X = cv2.triangulatePoints(obs[i][1], obs[j][1], obs[i][2].T, obs[j][2].T)
         estimates.append((X[:3] / X[3]).T)  # (4,3)
-    return np.median(np.stack(estimates), axis=0), len(pairs)
+    return _finite_median(estimates)
 
 
 def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
@@ -76,6 +88,12 @@ def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
         est, n_pairs = _triangulate(_observations(records, K, gt["order_index"]),
                                     min_baseline_m, max_pairs)
         if est is None:
+            # 유효 쌍 없음 → 스텁 항목 (다운스트림에서 n_pairs > 0으로 필터링)
+            results.append({
+                "order_index": gt["order_index"],
+                "color": gt["color"],
+                "n_pairs": 0,
+            })
             continue
         gt_corners = np.asarray(gt["corners_3d"], dtype=float)
         corner_err = np.linalg.norm(est - gt_corners, axis=1) * 1000.0  # mm
