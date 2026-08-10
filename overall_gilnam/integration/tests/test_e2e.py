@@ -1,8 +1,7 @@
 """E2E 리허설 테스트 — scale 0 전 구간 게이트(≤1mm)가 핵심."""
 import numpy as np
-import pytest
 
-from e2e_rehearsal import SAMPLE, assemble_window_map, load_inputs, run_scale
+from e2e_rehearsal import assemble_window_map, load_inputs, run_scale
 
 
 def test_scale0_full_pipeline_gate():

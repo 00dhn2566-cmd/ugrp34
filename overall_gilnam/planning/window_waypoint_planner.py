@@ -6,8 +6,8 @@
 입력 스키마는 state_window_interface_spec_v0_1 §6.1/§6.2 **미확정 후보안** 기준:
 - 드론 상태에서 position만 사용.
 - 창문 맵에서 order_index/center/normal/size_wh/passed 사용.
-- normal은 접근측을 향하는 단위벡터(§3.1 관례). 부재 시 에러 — corner 유도
-  법선은 ± 방향 관례 미확정이라 접근측 판정 불가 (rl/README.md 동일 지적).
+- normal은 접근측을 향하는 단위벡터(§3.1 관례).
+- normal 부재 시 corners_3d에서 유도한다 (§3.1 잠정 확정 공식 — normal_from_corners). 둘 다 없으면 에러.
 - passed 부재 시 false 취급 (소유권 미결, spec §7).
 """
 
