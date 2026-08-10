@@ -113,3 +113,37 @@ def run_scale(records, scene_gt, cfg, scale, seed=1234):
         })
     return {"scale": scale, "windows": rows, "failed": failed, "n_warnings": len(warnings),
             "warnings": warnings}
+
+
+def main():
+    ap = argparse.ArgumentParser(description="E2E 리허설: 스케일별 복원→계획 품질 표 (markdown)")
+    ap.add_argument("--scales", default=",".join(str(s) for s in SCALES))
+    ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--json", help="기계 판독 결과 저장 경로 (선택)")
+    args = ap.parse_args()
+
+    records, scene_gt, cfg = load_inputs()
+    results = []
+    print("| scale | 창문 | n_pairs | 게이트 오차 접근/이탈 (mm) | 통과점 u/v (mm) | 잔여 여유 (mm) |")
+    print("|---|---|---|---|---|---|")
+    for scale in [float(s) for s in args.scales.split(",")]:
+        res = run_scale(records, scene_gt, cfg, scale, args.seed)
+        results.append(res)
+        for w in res["windows"]:
+            print(f"| x{scale:g} | {w['order_index']} ({w['color']}) | {w['n_pairs']} "
+                  f"| {w['approach_err_mm']:.1f} / {w['exit_err_mm']:.1f} "
+                  f"| {w['pass_u_mm']:.1f} / {w['pass_v_mm']:.1f} | {w['margin_left_mm']:.1f} |")
+        worst = min((w["margin_left_mm"] for w in res["windows"]), default=float("nan"))
+        note = f"경고 {res['n_warnings']}건" + (f", 복원 불가 {res['failed']}" if res["failed"] else "")
+        print(f"| **x{scale:g} 요약** | 창문 {len(res['windows'])}개 | — | — | — "
+              f"| **최소 {worst:.1f}** ({note}) |")
+    for res in results:
+        for msg in res["warnings"]:
+            print(f"  ! x{res['scale']:g}: {msg}", file=sys.stderr)
+    if args.json:
+        Path(args.json).write_text(json.dumps(results, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()
