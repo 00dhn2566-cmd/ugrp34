@@ -81,12 +81,27 @@ def _triangulate(obs, min_baseline_m, max_pairs):
     return _finite_median(estimates)
 
 
-def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
+def reconstruct_windows(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
+    """창문별 삼각측량 복원 원본 (E2E 리허설 등 소비용).
+
+    반환: {order_index: {"color", "corners_3d_est"(4,3) | None(복원 불가), "n_pairs"}}.
+    evaluate_records는 이 결과에서 오차만 계산한다 — 수치 경로는 동일.
+    """
     K = _intrinsics_K(scene_gt)
+    out = {}
+    for gt in scene_gt["windows"]:
+        est, n_pairs = _triangulate(
+            _observations(records, K, gt["order_index"]), min_baseline_m, max_pairs)
+        out[gt["order_index"]] = {"color": gt["color"], "corners_3d_est": est, "n_pairs": n_pairs}
+    return out
+
+
+def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
+    recon = reconstruct_windows(records, scene_gt, min_baseline_m, max_pairs)
     results = []
     for gt in scene_gt["windows"]:
-        est, n_pairs = _triangulate(_observations(records, K, gt["order_index"]),
-                                    min_baseline_m, max_pairs)
+        r = recon[gt["order_index"]]
+        est, n_pairs = r["corners_3d_est"], r["n_pairs"]
         if est is None:
             # 유효 쌍 없음 → 스텁 항목 (다운스트림에서 n_pairs > 0으로 필터링)
             results.append({

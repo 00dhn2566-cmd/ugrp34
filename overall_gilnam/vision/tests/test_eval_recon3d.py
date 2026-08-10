@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval_recon3d import evaluate_records, _finite_median, summarize
+from eval_recon3d import evaluate_records, _finite_median, summarize, reconstruct_windows
 from noisy_stream import load_records, P_TAIL, make_noisy_records
 
 VISION_DIR = Path(__file__).resolve().parents[1]
@@ -151,3 +151,16 @@ def test_summarize_filters_stub_windows():
     assert s_all_stub["center_err_mean_mm"] is None
     assert s_all_stub["size_err_mean_abs_mm"] is None
     assert s_all_stub["n_windows_failed"] == 2
+
+
+def test_reconstruct_windows_matches_gt_corners():
+    # 무노이즈 복원 원본이 GT corner와 mm 수준 일치 + evaluate_records와 정합
+    records, scene_gt = _load_sample()
+    recon = reconstruct_windows(records, scene_gt)
+    assert sorted(recon.keys()) == [0, 1, 2]
+    for gt in scene_gt["windows"]:
+        r = recon[gt["order_index"]]
+        assert r["n_pairs"] > 0 and r["color"] == gt["color"]
+        err_mm = np.linalg.norm(
+            np.asarray(r["corners_3d_est"]) - np.asarray(gt["corners_3d"]), axis=1) * 1000.0
+        assert float(err_mm.max()) < 1.0
