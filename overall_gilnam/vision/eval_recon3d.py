@@ -1,6 +1,8 @@
 """§5+pose 스트림 → 삼각측량 3D 복원 → scene_gt 대조 오차표.
 
-README_stream.md 계약 레시피의 재현 구현 (태민 원본 코드는 리포에 없음):
+README_stream.md 계약 레시피의 재현 구현 (태민 원본은 `visual_imaging_taemin/window_recon_node.py`
+(LS 시선 교점) — `reconstruct_windows_rays`가 그 수치 경로의 오프라인 재현, 기본
+`reconstruct_windows`는 쌍별+중앙값(비교용 강건 집계)):
 - P = K·[R_wcᵀ | −R_wcᵀ·t_wc], cv2.triangulatePoints (2-프레임).
 - 프레임쌍: 창문 4 corner 모두 vis=1 & 카메라 위치 차 ≥ 0.5m인 모든 쌍
   (max_pairs 초과 시 균등 서브샘플 — 결과에 n_pairs 기록).
