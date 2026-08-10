@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from window_waypoint_planner import PLANNING_DIR, gate_points, load_planner_config, ordered_open_windows, plan_waypoints
+from window_waypoint_planner import PLANNING_DIR, crossing_warnings, gate_points, load_planner_config, ordered_open_windows, plan_waypoints
 
 # 접근측 normal = -X (synth_scene 관례와 동일한 예시 창문)
 WIN = {
@@ -94,3 +94,19 @@ def test_cli_roundtrip(tmp_path):
     assert r.returncode == 0, r.stderr
     saved = json.loads(out_p.read_text(encoding="utf-8"))
     assert len(saved["waypoints"]) == 7 and "limits" in saved
+
+
+def test_crossing_warning_outside_opening():
+    # 구간이 창문 평면을 개구부 밖(y=2.0, 반폭 0.5-마진 바깥)에서 교차 → 경고 1건
+    win = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 1.5],
+           "normal": [-1.0, 0.0, 0.0], "size_wh": [1.0, 1.0]}
+    seg = [[0.0, 2.0, 1.5], [10.0, 2.0, 1.5]]      # x=5 평면을 y=2.0에서 관통
+    warns = crossing_warnings(seg, [win], clearance_margin=0.35)
+    assert len(warns) == 1 and "order_index=0" in warns[0]
+
+
+def test_no_warning_through_opening():
+    win = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 1.5],
+           "normal": [-1.0, 0.0, 0.0], "size_wh": [1.0, 1.0]}
+    seg = [[0.0, 0.0, 1.5], [10.0, 0.0, 1.5]]      # 정중앙 통과
+    assert crossing_warnings(seg, [win], 0.35) == []

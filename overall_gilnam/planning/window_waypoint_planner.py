@@ -49,6 +49,38 @@ def gate_points(window, d_app, d_exit, clearance_margin):
     return center + d_app * n, center - d_exit * n
 
 
+def crossing_warnings(waypoints, windows, clearance_margin):
+    """연속 웨이포인트 구간이 창문 벽 평면을 개구부 밖에서 교차하면 경고 문자열 리스트.
+
+    벽의 실제 범위는 스펙에 없어 거부 판단이 불가 — v1은 경고만 (설계 §알고리즘 5).
+    개구부 내부 판정: 평면 교차점을 창문 폭축(cross(UP, n̂))·높이축(UP)에 투영,
+    |u| ≤ w/2−margin ∧ |v| ≤ h/2−margin.
+    """
+    warns = []
+    for w in windows:
+        center = np.asarray(w["center"], dtype=float)
+        n = np.asarray(w["normal"], dtype=float)
+        n = n / np.linalg.norm(n)
+        width_axis = np.cross(UP, n)
+        width_axis = width_axis / np.linalg.norm(width_axis)
+        half_w = w["size_wh"][0] / 2.0 - clearance_margin
+        half_h = w["size_wh"][1] / 2.0 - clearance_margin
+        for a, b in zip(waypoints, waypoints[1:]):
+            a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+            da, db = np.dot(a - center, n), np.dot(b - center, n)
+            if da * db >= 0:  # 평면을 안 가로지름 (한 점이 평면 위인 경우 포함)
+                continue
+            p = a + (b - a) * (da / (da - db))  # 평면 교차점
+            u, v = np.dot(p - center, width_axis), np.dot(p - center, UP)
+            if abs(u) > half_w or abs(v) > half_h:
+                warns.append(
+                    f"경고: 구간 {np.round(a, 2).tolist()}→{np.round(b, 2).tolist()}가 "
+                    f"창문 order_index={w['order_index']}({w.get('color', '?')}) 평면을 "
+                    f"개구부 밖(u={u:.2f}, v={v:.2f})에서 교차"
+                )
+    return warns
+
+
 def ordered_open_windows(window_map):
     """passed=false 창문만 order_index 오름차순으로."""
     return sorted(
@@ -63,7 +95,7 @@ def load_planner_config(path):
         return yaml.safe_load(f)
 
 
-def plan_waypoints(drone_state, window_map, cfg):
+def plan_waypoints(drone_state, window_map, cfg, warn=print):
     """(드론 상태, 창문 맵) → WaypointsConfig. 웨이포인트 = [현 위치] + [접근ᵢ, 이탈ᵢ]…"""
     windows = ordered_open_windows(window_map)
     if not windows:
@@ -73,6 +105,8 @@ def plan_waypoints(drone_state, window_map, cfg):
         approach, exit_ = gate_points(w, cfg["d_app"], cfg["d_exit"], cfg["clearance_margin"])
         points.append([float(c) for c in approach])
         points.append([float(c) for c in exit_])
+    for msg in crossing_warnings(points, windows, cfg["clearance_margin"]):
+        warn(msg)
     wc = WaypointsConfig(waypoints=points, limits=dict(cfg["limits"]), dt=float(cfg["dt"]))
     wc.validate()  # 성진 스키마 검증 — 실패 시 여기서 즉시 드러남
     return wc
@@ -90,7 +124,7 @@ def main():
         drone_state = json.load(f)
     with open(args.window_map, encoding="utf-8") as f:
         window_map = json.load(f)
-    wc = plan_waypoints(drone_state, window_map, load_planner_config(args.config))
+    wc = plan_waypoints(drone_state, window_map, load_planner_config(args.config), warn=lambda m: print(m, file=sys.stderr))
     save_json(wc, args.out)
     print(f"waypoints={len(wc.waypoints)} -> {args.out}")
 
