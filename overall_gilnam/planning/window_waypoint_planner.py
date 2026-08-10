@@ -11,7 +11,20 @@
 - passed 부재 시 false 취급 (소유권 미결, spec §7).
 """
 
+import argparse
+import json
+import sys
+from pathlib import Path
+
 import numpy as np
+import yaml
+
+PLANNING_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = PLANNING_DIR.parents[1]
+# 윤호 interface 모듈 import 경로 (수정 없음 — WaypointsConfig 조립·검증 경유용)
+sys.path.insert(0, str(_REPO_ROOT / "reinforcement_yunho"))
+
+from interface.schemas import WaypointsConfig, save_json  # noqa: E402
 
 UP = np.array([0.0, 0.0, 1.0])
 
@@ -42,3 +55,45 @@ def ordered_open_windows(window_map):
         (w for w in window_map["windows"] if not w.get("passed", False)),
         key=lambda w: w["order_index"],
     )
+
+
+def load_planner_config(path):
+    """planner_limits.yaml → dict (d_app/d_exit/clearance_margin/limits/dt)."""
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def plan_waypoints(drone_state, window_map, cfg):
+    """(드론 상태, 창문 맵) → WaypointsConfig. 웨이포인트 = [현 위치] + [접근ᵢ, 이탈ᵢ]…"""
+    windows = ordered_open_windows(window_map)
+    if not windows:
+        raise ValueError("열린 창문이 없음 — 계획할 대상 없음")
+    points = [[float(c) for c in drone_state["position"]]]
+    for w in windows:
+        approach, exit_ = gate_points(w, cfg["d_app"], cfg["d_exit"], cfg["clearance_margin"])
+        points.append([float(c) for c in approach])
+        points.append([float(c) for c in exit_])
+    wc = WaypointsConfig(waypoints=points, limits=dict(cfg["limits"]), dt=float(cfg["dt"]))
+    wc.validate()  # 성진 스키마 검증 — 실패 시 여기서 즉시 드러남
+    return wc
+
+
+def main():
+    ap = argparse.ArgumentParser(description="(드론 상태, 창문 맵) JSON → 성진 waypoints_config JSON")
+    ap.add_argument("--state", required=True, help="§6.1 드론 상태 JSON (position 사용)")
+    ap.add_argument("--window-map", required=True, help="§6.2 창문 맵 JSON")
+    ap.add_argument("--out", required=True, help="출력 waypoints_config JSON 경로")
+    ap.add_argument("--config", default=str(PLANNING_DIR / "planner_limits.yaml"))
+    args = ap.parse_args()
+
+    with open(args.state, encoding="utf-8") as f:
+        drone_state = json.load(f)
+    with open(args.window_map, encoding="utf-8") as f:
+        window_map = json.load(f)
+    wc = plan_waypoints(drone_state, window_map, load_planner_config(args.config))
+    save_json(wc, args.out)
+    print(f"waypoints={len(wc.waypoints)} -> {args.out}")
+
+
+if __name__ == "__main__":
+    main()

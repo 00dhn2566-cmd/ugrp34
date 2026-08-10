@@ -1,8 +1,11 @@
 """window_waypoint_planner 테스트 — 기하(접근측)·순서·여유 검사가 핵심."""
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from window_waypoint_planner import gate_points, ordered_open_windows
+from window_waypoint_planner import PLANNING_DIR, gate_points, load_planner_config, ordered_open_windows, plan_waypoints
 
 # 접근측 normal = -X (synth_scene 관례와 동일한 예시 창문)
 WIN = {
@@ -42,3 +45,52 @@ def test_ordered_open_windows_filters_and_sorts():
     ]}
     out = ordered_open_windows(wmap)
     assert [w["order_index"] for w in out] == [1, 2]
+
+
+STATE = {"position": [0.0, 0.0, 1.5]}
+WMAP3 = {"windows": [
+    {"order_index": i, "color": c,
+     "center": [4.0 + 5.0 * i, 0.3 * i, 1.5], "normal": [-1.0, 0.0, 0.0],
+     "size_wh": [1.0, 1.0]}
+    for i, c in enumerate(["red", "green", "blue"])
+]}
+
+
+def _cfg():
+    return load_planner_config(PLANNING_DIR / "planner_limits.yaml")
+
+
+def test_plan_waypoints_sequence_and_schema():
+    wc = plan_waypoints(STATE, WMAP3, _cfg())
+    wc.validate()                                   # 성진 스키마 통과 (윤호 validate 경유)
+    assert len(wc.waypoints) == 1 + 2 * 3           # 시작 + 창문 3개 × (접근·이탈)
+    assert wc.waypoints[0] == [0.0, 0.0, 1.5]       # 첫 점 = 드론 현재 위치
+    # 접근(-X쪽) < center < 이탈: 창문 0의 x 좌표로 확인
+    assert wc.waypoints[1][0] == pytest.approx(4.0 - 1.5)
+    assert wc.waypoints[2][0] == pytest.approx(4.0 + 1.0)
+
+
+def test_plan_waypoints_requires_at_least_one_window():
+    with pytest.raises(ValueError, match="열린 창문"):
+        plan_waypoints(STATE, {"windows": []}, _cfg())
+
+
+def test_config_defaults_loaded():
+    cfg = _cfg()
+    assert cfg["d_app"] == 1.5 and cfg["d_exit"] == 1.0
+    assert cfg["clearance_margin"] == 0.35
+    assert cfg["limits"]["v_max"] == 2.0 and cfg["dt"] == 0.01
+
+
+def test_cli_roundtrip(tmp_path):
+    import subprocess, sys
+    state_p, wmap_p, out_p = tmp_path / "s.json", tmp_path / "m.json", tmp_path / "wp.json"
+    state_p.write_text(json.dumps(STATE), encoding="utf-8")
+    wmap_p.write_text(json.dumps(WMAP3), encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, str(PLANNING_DIR / "window_waypoint_planner.py"),
+         "--state", str(state_p), "--window-map", str(wmap_p), "--out", str(out_p)],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    saved = json.loads(out_p.read_text(encoding="utf-8"))
+    assert len(saved["waypoints"]) == 7 and "limits" in saved
