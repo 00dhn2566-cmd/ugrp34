@@ -4,7 +4,7 @@
 실행: planning/에서  python demo_from_scene_gt.py  (출력: waypoints_config JSON을 stdout)
 """
 import json
-from pathlib import Path
+import sys
 
 from window_waypoint_planner import PLANNING_DIR, load_planner_config, plan_waypoints
 
@@ -16,7 +16,7 @@ def main():
     first = json.loads((VISION_STREAM / "sample_stream.jsonl").read_text(encoding="utf-8").splitlines()[0])
     drone_state = {"position": first["pose"]["position"]}      # §6.1 중 position만 사용
     window_map = {"windows": scene_gt["windows"]}              # §6.2 부분집합 (passed 부재 → 미통과)
-    wc = plan_waypoints(drone_state, window_map, load_planner_config(PLANNING_DIR / "planner_limits.yaml"))
+    wc = plan_waypoints(drone_state, window_map, load_planner_config(PLANNING_DIR / "planner_limits.yaml"), warn=lambda m: print(m, file=sys.stderr))
     print(json.dumps(wc.to_dict(), ensure_ascii=False, indent=2))
     print(f"# waypoints={len(wc.waypoints)} (시작 1 + 창문 {len(window_map['windows'])} x 2)")
 

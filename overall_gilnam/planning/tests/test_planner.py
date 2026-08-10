@@ -37,6 +37,13 @@ def test_gate_points_rejects_missing_normal():
         gate_points(no_normal, 1.5, 1.0, 0.35)
 
 
+def test_gate_points_rejects_zero_normal():
+    # 영벡터 normal → NaN 전파 대신 즉시 거부 (최종 리뷰 반영)
+    zero_n = dict(WIN, normal=[0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="영벡터"):
+        gate_points(zero_n, 1.5, 1.0, 0.35)
+
+
 def test_ordered_open_windows_filters_and_sorts():
     wmap = {"windows": [
         dict(WIN, order_index=2),

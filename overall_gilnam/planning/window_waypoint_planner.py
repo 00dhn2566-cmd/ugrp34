@@ -39,13 +39,16 @@ def gate_points(window, d_app, d_exit, clearance_margin):
     if "normal" not in window:
         raise ValueError(f"창문 {ident}: normal 부재 — 접근측 판정 불가 (spec §3.1 관례 미확정)")
     w, h = window["size_wh"]
-    if min(w, h) / 2.0 - clearance_margin < 0:
+    if min(w, h) / 2.0 - clearance_margin <= 0:
         raise ValueError(
             f"창문 {ident}: 통과 여유 부족 — min(w,h)/2={min(w, h) / 2.0:.3f}m < margin={clearance_margin}m"
         )
     center = np.asarray(window["center"], dtype=float)
     n = np.asarray(window["normal"], dtype=float)
-    n = n / np.linalg.norm(n)
+    n_len = float(np.linalg.norm(n))
+    if n_len < 1e-9:
+        raise ValueError(f"창문 {ident}: normal이 영벡터 — 접근측 판정 불가")
+    n = n / n_len
     return center + d_app * n, center - d_exit * n
 
 
@@ -55,6 +58,7 @@ def crossing_warnings(waypoints, windows, clearance_margin):
     벽의 실제 범위는 스펙에 없어 거부 판단이 불가 — v1은 경고만 (설계 §알고리즘 5).
     개구부 내부 판정: 평면 교차점을 창문 폭축(cross(UP, n̂))·높이축(UP)에 투영,
     |u| ≤ w/2−margin ∧ |v| ≤ h/2−margin.
+    높이축은 world UP 사용 — 수직 창문(pitch 0) 가정, 기울어진 창문에선 세로 오프셋을 과소평가.
     """
     warns = []
     for w in windows:
@@ -62,7 +66,10 @@ def crossing_warnings(waypoints, windows, clearance_margin):
         n = np.asarray(w["normal"], dtype=float)
         n = n / np.linalg.norm(n)
         width_axis = np.cross(UP, n)
-        width_axis = width_axis / np.linalg.norm(width_axis)
+        wa_len = float(np.linalg.norm(width_axis))
+        if wa_len < 1e-9:  # normal ∥ UP — 수직 창문 가정 밖, 판정 불가 → 건너뜀
+            continue
+        width_axis = width_axis / wa_len
         half_w = w["size_wh"][0] / 2.0 - clearance_margin
         half_h = w["size_wh"][1] / 2.0 - clearance_margin
         for a, b in zip(waypoints, waypoints[1:]):
