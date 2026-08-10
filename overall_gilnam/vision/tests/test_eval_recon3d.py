@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval_recon3d import evaluate_records, _finite_median, summarize, reconstruct_windows
+from eval_recon3d import evaluate_records, _finite_median, summarize, reconstruct_windows, reconstruct_windows_rays
 from noisy_stream import load_records, P_TAIL, make_noisy_records
 
 VISION_DIR = Path(__file__).resolve().parents[1]
@@ -164,3 +164,19 @@ def test_reconstruct_windows_matches_gt_corners():
         err_mm = np.linalg.norm(
             np.asarray(r["corners_3d_est"]) - np.asarray(gt["corners_3d"]), axis=1) * 1000.0
         assert float(err_mm.max()) < 1.0
+
+
+def test_rays_reconstruction_matches_taemin_table():
+    # 태민 방식(LS 시선 교점) 재현 게이트 — 무노이즈에서 태민 7/4 표(0.01~0.07mm)와 자릿수 정합
+    records, scene_gt = _load_sample()
+    results = evaluate_records(records, scene_gt, method="rays_ls")
+    assert len(results) == 3
+    for r in results:
+        assert r["n_pairs"] > 0
+        assert r["corner_err_max_mm"] < 1.0
+
+
+def test_pairs_median_unchanged_by_method_param():
+    # 기존 경로 회귀 없음: method 기본값과 명시가 동일 결과
+    records, scene_gt = _load_sample()
+    assert evaluate_records(records, scene_gt) == evaluate_records(records, scene_gt, method="pairs_median")

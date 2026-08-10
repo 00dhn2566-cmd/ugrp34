@@ -96,8 +96,77 @@ def reconstruct_windows(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
     return out
 
 
-def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
-    recon = reconstruct_windows(records, scene_gt, min_baseline_m, max_pairs)
+def reconstruct_windows_rays(records, scene_gt, det_conf_min=0.7, min_parallax_deg=2.0):
+    """태민 window_recon_node.py의 수치 경로 재현 (corner별 전 관측 시선 LS 교점).
+
+    재현 범위: det_conf ≥ det_conf_min 창문의 corner_vis=1 관측만,
+    시선 d = normalize(((u−cx)/fx, (v−cy)/fy, 1)) → world 변환(body≡camera 항등 —
+    오프라인 재현이므로 태민 노드의 EuRoC T_IC는 적용하지 않음, 방식 차이 측정이 목적),
+    corner별 A += I − ddᵀ, b += (I−ddᵀ)c 누적 후 3×3 해.
+    채택 조건도 태민 코드 그대로: corner 4개 전부 해 존재 + corner별 시차각
+    (방향행렬 D의 최소 내적의 arccos)의 창문 최소가 min_parallax_deg 이상.
+    반환 형식은 reconstruct_windows와 동일 — 단 n_pairs 키에는 '관측 수 합'을 기록
+    (쌍 수가 아님, 소비측 주의). 실패 창문은 corners_3d_est=None, n_pairs=0.
+    """
+    intr = scene_gt["intrinsics"]
+    fx, fy, cx, cy = intr["fx"], intr["fy"], intr["cx"], intr["cy"]
+    colors = {w["order_index"]: w["color"] for w in scene_gt["windows"]}
+    acc = {}  # (order_index, ci) -> [A(3,3), b(3,), dirs(list)]
+    for rec in records:
+        R = quat_xyzw_to_rot(rec["pose"]["orientation"])
+        c = np.asarray(rec["pose"]["position"], dtype=float)
+        for win in rec["vision"]["windows"]:
+            if win["det_conf"] < det_conf_min:
+                continue
+            oi = win["order_index"]
+            for ci in range(4):
+                if win["corner_vis"][ci] != 1:
+                    continue
+                u, v = win["corners"][ci]
+                d = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
+                d = R @ (d / np.linalg.norm(d))
+                M = np.eye(3) - np.outer(d, d)
+                a = acc.setdefault((oi, ci), [np.zeros((3, 3)), np.zeros(3), []])
+                a[0] += M
+                a[1] += M @ c
+                a[2].append(d)
+    out = {}
+    for gt in scene_gt["windows"]:
+        oi = gt["order_index"]
+        pts, min_ang, n_obs = [], float("inf"), 0
+        for ci in range(4):
+            a = acc.get((oi, ci))
+            if a is None or len(a[2]) < 2:
+                pts = None
+                break
+            p = np.linalg.solve(a[0], a[1])
+            D = np.asarray(a[2])
+            ang = float(np.degrees(np.arccos(np.clip((D @ D.T).min(), -1.0, 1.0))))
+            pts.append(p)
+            min_ang = min(min_ang, ang)
+            n_obs += len(a[2])
+        if pts is None or min_ang < min_parallax_deg:
+            out[oi] = {"color": colors.get(oi), "corners_3d_est": None, "n_pairs": 0}
+        else:
+            out[oi] = {"color": colors.get(oi), "corners_3d_est": np.asarray(pts), "n_pairs": n_obs}
+    return out
+
+
+def _size_wh_est(est, method):
+    """복원 corner → (w, h). 방식별 관례: 태민(rays_ls)은 단일 변, 기본은 양변 평균."""
+    tl, tr, br, bl = est
+    if method == "rays_ls":  # window_recon_node.report와 동일: w=|TR−TL|, h=|BR−TR|
+        return float(np.linalg.norm(tr - tl)), float(np.linalg.norm(br - tr))
+    w = (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2.0
+    h = (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2.0
+    return float(w), float(h)
+
+
+def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000, method="pairs_median"):
+    if method == "rays_ls":
+        recon = reconstruct_windows_rays(records, scene_gt)
+    else:
+        recon = reconstruct_windows(records, scene_gt, min_baseline_m, max_pairs)
     results = []
     for gt in scene_gt["windows"]:
         r = recon[gt["order_index"]]
@@ -113,9 +182,7 @@ def evaluate_records(records, scene_gt, min_baseline_m=0.5, max_pairs=2000):
         gt_corners = np.asarray(gt["corners_3d"], dtype=float)
         corner_err = np.linalg.norm(est - gt_corners, axis=1) * 1000.0  # mm
         center_err = float(np.linalg.norm(est.mean(axis=0) - np.asarray(gt["center"]))) * 1000.0
-        tl, tr, br, bl = est
-        w_est = (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2.0
-        h_est = (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2.0
+        w_est, h_est = _size_wh_est(est, method)
         results.append({
             "order_index": gt["order_index"],
             "color": gt["color"],
