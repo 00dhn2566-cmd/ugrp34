@@ -29,6 +29,23 @@ from interface.schemas import WaypointsConfig, save_json  # noqa: E402
 UP = np.array([0.0, 0.0, 1.0])
 
 
+def normal_from_corners(corners_3d):
+    """corner 4점(접근측에서 본 TL→TR→BR→BL) → 접근측을 향하는 단위 법선.
+
+    winding 계약(v0.2 §4.3)의 따름정리 (spec §3.1 잠정 확정 2026-08-08):
+    n̂ = normalize(cross(BL−TL, TR−TL)). 인자 순서 주의 — cross(TR−TL, BL−TL)은
+    반대 방향 (reinforcement_yunho/rl/README.md의 antiparallel 지적 참조).
+    """
+    c = np.asarray(corners_3d, dtype=float)
+    if c.shape != (4, 3):
+        raise ValueError(f"corners_3d는 (4,3)이어야 함 — got {c.shape}")
+    n = np.cross(c[3] - c[0], c[1] - c[0])
+    n_len = float(np.linalg.norm(n))
+    if n_len < 1e-9:
+        raise ValueError("퇴화 corner — 법선 유도 불가")
+    return n / n_len
+
+
 def gate_points(window, d_app, d_exit, clearance_margin):
     """창문 1개 → (접근점, 이탈점). 접근점 = center + d_app·n̂, 이탈점 = center − d_exit·n̂.
 
@@ -36,19 +53,22 @@ def gate_points(window, d_app, d_exit, clearance_margin):
     (웨이포인트 최소화 → 하류 최소시간 계획이 더 부드러움).
     """
     ident = f"order_index={window.get('order_index')}({window.get('color', '?')})"
-    if "normal" not in window:
-        raise ValueError(f"창문 {ident}: normal 부재 — 접근측 판정 불가 (spec §3.1 관례 미확정)")
     w, h = window["size_wh"]
     if min(w, h) / 2.0 - clearance_margin <= 0:
         raise ValueError(
             f"창문 {ident}: 통과 여유 부족 — min(w,h)/2={min(w, h) / 2.0:.3f}m < margin={clearance_margin}m"
         )
     center = np.asarray(window["center"], dtype=float)
-    n = np.asarray(window["normal"], dtype=float)
-    n_len = float(np.linalg.norm(n))
-    if n_len < 1e-9:
-        raise ValueError(f"창문 {ident}: normal이 영벡터 — 접근측 판정 불가")
-    n = n / n_len
+    if "normal" in window:
+        n = np.asarray(window["normal"], dtype=float)
+        n_len = float(np.linalg.norm(n))
+        if n_len < 1e-9:
+            raise ValueError(f"창문 {ident}: normal이 영벡터 — 접근측 판정 불가")
+        n = n / n_len
+    elif "corners_3d" in window:
+        n = normal_from_corners(window["corners_3d"])  # 부호 확정 공식 폴백
+    else:
+        raise ValueError(f"창문 {ident}: normal·corners_3d 모두 부재 — 접근측 판정 불가")
     return center + d_app * n, center - d_exit * n
 
 
@@ -63,8 +83,19 @@ def crossing_warnings(waypoints, windows, clearance_margin):
     warns = []
     for w in windows:
         center = np.asarray(w["center"], dtype=float)
-        n = np.asarray(w["normal"], dtype=float)
-        n = n / np.linalg.norm(n)
+        if "normal" in w:
+            n = np.asarray(w["normal"], dtype=float)
+        elif "corners_3d" in w:
+            try:
+                n = normal_from_corners(w["corners_3d"])
+            except ValueError:
+                continue  # 판정 불가 — 경고 전용 기능이므로 건너뜀
+        else:
+            continue
+        n_len = float(np.linalg.norm(n))
+        if n_len < 1e-9:
+            continue
+        n = n / n_len
         width_axis = np.cross(UP, n)
         wa_len = float(np.linalg.norm(width_axis))
         if wa_len < 1e-9:  # normal ∥ UP — 수직 창문 가정 밖, 판정 불가 → 건너뜀

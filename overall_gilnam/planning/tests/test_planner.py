@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from window_waypoint_planner import PLANNING_DIR, crossing_warnings, gate_points, load_planner_config, ordered_open_windows, plan_waypoints
+from window_waypoint_planner import PLANNING_DIR, crossing_warnings, gate_points, load_planner_config, normal_from_corners, ordered_open_windows, plan_waypoints
 
 # 접근측 normal = -X (synth_scene 관례와 동일한 예시 창문)
 WIN = {
@@ -117,3 +117,51 @@ def test_no_warning_through_opening():
            "normal": [-1.0, 0.0, 0.0], "size_wh": [1.0, 1.0]}
     seg = [[0.0, 0.0, 1.5], [10.0, 0.0, 1.5]]      # 정중앙 통과
     assert crossing_warnings(seg, [win], 0.35) == []
+
+
+def _corners_for(center, n, w, h):
+    # synth 관례(README_stream): viewer_right = cross(-n, UP), TL→TR→BR→BL (접근측 기준)
+    center = np.asarray(center, dtype=float)
+    n = np.asarray(n, dtype=float)
+    up = np.array([0.0, 0.0, 1.0])
+    right = np.cross(-n, up)
+    right = right / np.linalg.norm(right)
+    return [
+        (center + h / 2 * up - w / 2 * right).tolist(),
+        (center + h / 2 * up + w / 2 * right).tolist(),
+        (center - h / 2 * up + w / 2 * right).tolist(),
+        (center - h / 2 * up - w / 2 * right).tolist(),
+    ]
+
+
+def test_normal_from_corners_points_to_approach_side():
+    # 부호 확정 공식 검증 — yaw 있는 normal 포함
+    for n in ([-1.0, 0.0, 0.0], [-0.9, -0.436, 0.0]):
+        corners = _corners_for([5.0, 0.0, 1.5], n, 1.0, 1.2)
+        derived = normal_from_corners(corners)
+        n_unit = np.asarray(n) / np.linalg.norm(n)
+        assert float(np.dot(derived, n_unit)) > 0.999
+
+
+def test_normal_from_corners_rejects_degenerate():
+    with pytest.raises(ValueError):
+        normal_from_corners([[0, 0, 0]] * 4)          # 퇴화 (모든 점 동일)
+    with pytest.raises(ValueError):
+        normal_from_corners([[0, 0, 0], [1, 1, 1]])   # (4,3) 아님
+
+
+def test_gate_points_fallback_to_corners():
+    # normal 없이 corners_3d만 있어도 명시 normal과 동일한 게이트 점
+    corners = _corners_for(WIN["center"], WIN["normal"], *WIN["size_wh"])
+    win_c = {"order_index": 0, "color": "red", "center": WIN["center"],
+             "size_wh": WIN["size_wh"], "corners_3d": corners}
+    a1, e1 = gate_points(WIN, 1.5, 1.0, 0.35)
+    a2, e2 = gate_points(win_c, 1.5, 1.0, 0.35)
+    np.testing.assert_allclose(a1, a2, atol=1e-9)
+    np.testing.assert_allclose(e1, e2, atol=1e-9)
+
+
+def test_gate_points_requires_normal_or_corners():
+    bare = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 1.5], "size_wh": [1.0, 1.2]}
+    with pytest.raises(ValueError, match="corners_3d"):
+        gate_points(bare, 1.5, 1.0, 0.35)
