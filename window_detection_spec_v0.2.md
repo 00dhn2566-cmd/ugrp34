@@ -91,7 +91,7 @@
 - class: order_index (red=0, green=1, blue=2) — §3.1 테이블
 - cx, cy, w, h: 바운딩 박스 (YOLO 관례에 따라 0~1 정규화)
 - (u_i, v_i, vis_i): corner 좌표(정규화) + visibility (0 또는 1)
-- **corner 순서 고정: 좌상 → 우상 → 우하 → 좌하** (창문 정면 기준, 시계방향)
+- **corner 순서 고정: 좌상 → 우상 → 우하 → 좌하** (**접근측에서 본 기준**, 시계방향 — 3D에서는 보는 쪽에 따라 방향이 뒤집히므로 "정면"을 접근측으로 명시. corner 유도 normal 부호 관례와의 연결은 `overall_gilnam/docs/state_window_interface_spec_v0_1.md` §3.1 잠정 확정 참조, 2026-08-08)
 - 저장 구조: `images/{train,val,test}/*.png` + `labels/{train,val,test}/*.txt`
 - 분할: train 80% / val 10% / test 10%
 - 규모: 1차 3,000장 내외 → 2차 확장
@@ -149,9 +149,11 @@
 ## 7. 잔여 확인 사항
 
 - [ ] Isaac Sim Replicator의 4-corner keypoint 추출 방법 확인 — 기본 출력이 아닐 수 있어 3D 모서리 점 투영 커스텀 처리 필요 가능성 (윤호, 공식 문서 확인)
-- [ ] §3.1 HSV 판정 구간을 실제 시뮬 렌더 색으로 검증 후 미세조정 (류길남)
+- [x] §3.1 HSV 판정 구간을 실제 시뮬 렌더 색으로 검증 후 미세조정 (류길남) — **완료 (2026-08-02)**: 재생성 val 150장 정답 94.8%, 대역 유효·조정 불필요. 오판 19건은 창문 겹침 기인 → 겹침 정책은 별도 안건
 - [ ] §6 intrinsics 기입 (윤호, 카메라 확정 시)
-- [ ] 모델 입력 해상도 확정 (류길남, 학습 시)
+- [x] 모델 입력 해상도 확정 (류길남, 학습 시) — **완료**: 640 (vision/model_decisions.md #6, 1차 학습에 적용)
+- [ ] **창문-창문 가림 라벨 정책** (2026-08-11 추가 — 미검출 진단에서 발견된 §4 공백: 가려진 창문의 라벨 포함 여부·visibility 처리. `overall_gilnam/docs/miss_tail_diagnosis.md` 참조)
+- [ ] **창문의 시각 정의** (2026-08-11 추가 — 채운 색판 vs 테두리 프레임 vs 프레임+투명 개구부. 두 합성 도메인이 서로 다른 가정 사용 중. `overall_gilnam/docs/domain_gap_quantification.md` 참조)
 
 ---
 
