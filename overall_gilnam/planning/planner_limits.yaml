@@ -1,11 +1,11 @@
 # 계획 파라미터 + 성진 waypoints_config limits 기본값
-# limits는 협의 전 임시값 (INPUT_FORMAT.md / waypoints_config.schema.json 참조) — 협의 후 이 파일만 갱신
+# limits = 물리 한계의 80% (예산 규칙 잠정 적용, 2026-08-11 — 성진이 100% 승인 시 이 파일만 복원)
 d_app: 1.5              # 접근점 거리 [m] — 합성 씬 전방 간격 4~6m 대비
 d_exit: 1.0             # 이탈점 거리 [m]
 clearance_margin: 0.35  # 기체 여유 [m] ≈ 휠베이스 450mm/2 + 프로펠러 — margin 회의 확정 시 갱신
 limits:
-  v_max: 2.0            # [m/s]
-  a_max: 2.0            # [m/s^2]
-  j_max: 10.0           # [m/s^3]
-  snap_max: 50.0        # [m/s^4]
+  v_max: 1.6            # [m/s]   (물리 2.0의 80%)
+  a_max: 1.6            # [m/s^2] (물리 2.0의 80%)
+  j_max: 8.0            # [m/s^3] (물리 10의 80%)
+  snap_max: 40.0        # [m/s^4] (물리 50의 80%)
 dt: 0.01                # [s]

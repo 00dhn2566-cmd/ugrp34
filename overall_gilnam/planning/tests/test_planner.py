@@ -86,7 +86,7 @@ def test_config_defaults_loaded():
     cfg = _cfg()
     assert cfg["d_app"] == 1.5 and cfg["d_exit"] == 1.0
     assert cfg["clearance_margin"] == 0.35
-    assert cfg["limits"]["v_max"] == 2.0 and cfg["dt"] == 0.01
+    assert cfg["limits"]["v_max"] == 1.6 and cfg["dt"] == 0.01  # 물리 한계의 80% (2026-08-11 잠정)
 
 
 def test_cli_roundtrip(tmp_path):
