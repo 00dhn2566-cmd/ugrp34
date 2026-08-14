@@ -7,6 +7,8 @@
 **영문 과제명**: A Study on Robust Integrated Flight Control System for Slung-load Drones with Fault Tolerance and Obstacle Avoidance Capabilities
 
 > 최종 갱신: 2026-08-01 (7월 진행분 반영). 이 문서는 개괄이며, 최신 상세는 각 파트 모듈 문서가 기준.
+>
+> **📢 pull 받으셨다면 [NEWS.md](NEWS.md)부터 — 최근 변동 요약·멤버별 액션이 거기 있습니다.** (최근: 2026-08-11 묶음 — 재학습 채택·잠정 확정 4건)
 
 ---
 
