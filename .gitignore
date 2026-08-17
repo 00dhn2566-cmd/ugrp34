@@ -21,3 +21,15 @@ control_seoungjin/output/
 
 # vision 학습 데이터셋 (로컬 전용, git 미포함)
 window_dataset/
+CLAUDE.md
+# prototype_demo 실행 산출물·빌드물 (재생성됨)
+prototype_demo/out/*
+!prototype_demo/out/.gitkeep
+*.so
+
+# 가중치·정책은 커밋 제외 (model/README.md 에 받는 법)
+prototype_demo/model/*.pt
+prototype_demo/model/*.zip
+
+# 안 쓰는 것 보관 (커밋 제외 — 필요하면 이 줄을 지우고 커밋)
+backup/
