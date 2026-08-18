@@ -25,7 +25,7 @@ from noisy_stream import DEFAULT_DROP, DEFAULT_MEAN_PX, DEFAULT_P95_PX, P_TAIL, 
 from eval_recon3d import reconstruct_windows  # noqa: E402
 from window_waypoint_planner import (  # noqa: E402
     PLANNING_DIR, UP, assemble_window_map, crossing_warnings, format_warning,
-    gate_points, load_planner_config, plan_waypoints,
+    gate_points, load_planner_config, plan_waypoints, plan_waypoints_v2,
 )
 
 SAMPLE = GILNAM / "vision" / "sample_stream"
@@ -57,8 +57,10 @@ def run_scale(records, scene_gt, cfg, scale, seed=1234):
     wmap, failed = assemble_window_map(recon)
 
     start = records[0]["pose"]["position"]
-    warnings = []
-    wc = plan_waypoints({"position": start}, wmap, cfg, warn=warnings.append)
+    # 라벨 기반 게이트점 조회 — align{k} 삽입(v2)이 있어도 인덱스 산수 없이 안전 (final-review Fix 1)
+    plan = plan_waypoints_v2({"position": start}, wmap, cfg)
+    wc = plan_waypoints({"position": start}, wmap, cfg, warn=lambda m: None)
+    warnings = [format_warning(x) for x in plan.warnings]
     warnings += [format_warning(x) for x in
                  crossing_warnings(wc.waypoints, scene_gt["windows"], cfg["clearance_margin"])]
 
@@ -67,8 +69,8 @@ def run_scale(records, scene_gt, cfg, scale, seed=1234):
     for i, w in enumerate(wmap["windows"]):
         gt = gt_by_order[w["order_index"]]
         approach_gt, exit_gt = gate_points(gt, cfg["d_app"], cfg["d_exit"], cfg["clearance_margin"])
-        a = np.asarray(wc.waypoints[1 + 2 * i], dtype=float)
-        b = np.asarray(wc.waypoints[2 + 2 * i], dtype=float)
+        a = np.asarray(plan.waypoints[plan.labels.index(f"approach{i}")], dtype=float)
+        b = np.asarray(plan.waypoints[plan.labels.index(f"exit{i}")], dtype=float)
         center = np.asarray(gt["center"], dtype=float)
         n = np.asarray(gt["normal"], dtype=float)
         n = n / np.linalg.norm(n)

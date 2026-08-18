@@ -249,7 +249,7 @@ def plan_waypoints_v2(drone_state, window_map, cfg):
         s = shrinks[min(i, len(shrinks) - 1)]
         pts, labels, back = _build_v2(windows, drone_state["position"], cfg["d_app"] * s, cfg["d_exit"] * s,
                                       cfg["clearance_margin"], force_h, gate_z,
-                                      cfg["align_back"], cfg["stop_ahead"])
+                                      cfg.get("align_back", 0.45), cfg.get("stop_ahead", 0.6))
         warns = crossing_warnings([p.tolist() for p in pts], windows, cfg["clearance_margin"])
         plan = Plan([[float(v) for v in p] for p in pts], labels, warns, i + 1, s, back)
         if best is None or (len(plan.warnings), plan.backtrack_m) < (len(best.warnings), best.backtrack_m):
