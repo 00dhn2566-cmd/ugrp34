@@ -274,3 +274,40 @@ def test_plan_waypoints_wraps_v2_when_keys_present():
     wc = plan_waypoints(STATE, {"windows": [_win(0, 4.0), _win(1, 9.0), _win(2, 14.0)]}, V2)
     wc.validate()
     assert len(wc.waypoints) == 8                          # + stop
+
+
+def test_v2_matches_yunho_wrapper_reference():
+    # 윤호 prototype_demo/planner.py._build를 동일 입력·동일 상수(core cfg: d_app/d_exit/
+    # clearance_margin)로 실행한 결과를 고정 (2026-08-18). 두 씬 모두 라벨·좌표 완전 일치 —
+    # 구현 수정 불필요.
+    wmap = {"windows": [_win(0, 4.0, 0.0), _win(1, 8.0, 3.0), _win(2, 13.0, 3.0)]}
+    p = plan_waypoints_v2({"position": [0.0, 0.0, 1.0]}, wmap, V2)
+    assert p.labels == ["start", "approach0", "exit0", "approach1", "exit1",
+                         "approach2", "exit2", "stop"]
+    np.testing.assert_allclose(p.waypoints, [
+        [0.0, 0.0, 1.0],
+        [2.5, 0.0, 1.5],
+        [5.0, 0.0, 1.5],
+        [6.5, 3.0, 1.5],
+        [9.0, 3.0, 1.5],
+        [11.5, 3.0, 1.5],
+        [14.0, 3.0, 1.5],
+        [14.6, 3.0, 1.5],
+    ], atol=1e-6)
+    assert p.ok and p.passes == 1 and p.shrink == 1.0
+
+    # 2번째 참조 씬 — align+backtrack 유발 간격 (창문1이 창문0 이탈점 앞쪽·옆으로 크게 비켜
+    # 있음). max_passes=4(윤호 기본 MAX_PASSES)로 재계획해도 경고 2건이 남아 정직하게 보고.
+    wmap2 = {"windows": [_win(0, 4.0, 0.0), _win(1, 4.5, 3.0)]}
+    p2 = plan_waypoints_v2({"position": [0.0, 0.0, 1.0]}, wmap2, V2)
+    assert p2.labels == ["start", "approach0", "exit0", "approach1", "exit1", "stop"]
+    np.testing.assert_allclose(p2.waypoints, [
+        [0.0, 0.0, 1.0],
+        [3.4, 0.0, 1.5],
+        [4.4, 0.0, 1.5],
+        [3.9, 3.0, 1.5],
+        [4.9, 3.0, 1.5],
+        [5.5, 3.0, 1.5],
+    ], atol=1e-6)
+    assert p2.passes == 4 and p2.shrink == pytest.approx(0.4)
+    assert not p2.ok and p2.backtrack_m == pytest.approx(0.5) and len(p2.warnings) == 2

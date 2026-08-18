@@ -9,6 +9,13 @@
 - normal은 접근측을 향하는 단위벡터(§3.1 관례).
 - normal 부재 시 corners_3d에서 유도한다 (§3.1 잠정 확정 공식 — normal_from_corners). 둘 다 없으면 에러.
 - passed 부재 시 false 취급 (소유권 미결, spec §7).
+
+v2 (2026-08-18, plan_waypoints_v2): 윤호 prototype_demo/planner.py가 얹으려던 통과 후 거동
+A~H(수평 법선 강제·게이트 z 클램프·정렬점 삽입·후진 감지·정지점·완화 재계획·구조화 경고·
+호환 위임)를 전부 cfg 키(force_horizontal_normal/gate_z/align_back/stop_ahead/max_passes/
+shrink)로 흡수했다 — 기본은 꺼짐(v1 동작 불변), stop_ahead가 cfg에 있으면 plan_waypoints가
+자동으로 v2 경로에 위임한다. 동치는 test_v2_matches_yunho_wrapper_reference로 고정 검증됨 —
+윤호 prototype_demo/planner.py는 이제 plan_waypoints_v2로 대체 가능하다.
 """
 
 import argparse
