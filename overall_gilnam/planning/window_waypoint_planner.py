@@ -14,6 +14,7 @@
 import argparse
 import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -179,18 +180,100 @@ def load_planner_config(path):
         return yaml.safe_load(f)
 
 
-def plan_waypoints(drone_state, window_map, cfg, warn=print):
-    """(드론 상태, 창문 맵) → WaypointsConfig. 웨이포인트 = [현 위치] + [접근ᵢ, 이탈ᵢ]…"""
+@dataclass
+class Plan:
+    """v2 계획 결과. ok = 경고 없음 ∧ 후진 없음."""
+    waypoints: list = field(default_factory=list)
+    labels: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)   # crossing_warnings dict
+    passes: int = 0
+    shrink: float = 1.0
+    backtrack_m: float = 0.0
+
+    @property
+    def ok(self):
+        return not self.warnings and self.backtrack_m <= 1e-6
+
+
+def _inside_opening(pt, window, n, margin):
+    center = np.asarray(window["center"], dtype=float)
+    wa = np.cross(UP, n)
+    if np.linalg.norm(wa) < 1e-9:
+        return True
+    wa = wa / np.linalg.norm(wa)
+    d = pt - center
+    return (abs(d @ wa) <= window["size_wh"][0] / 2.0 - margin
+            and abs(d @ UP) <= window["size_wh"][1] / 2.0 - margin)
+
+
+def _build_v2(windows, start, d_app, d_exit, margin, force_h, gate_z, align_back, stop_ahead):
+    pts, labels, backtrack, prev_exit = [np.asarray(start, dtype=float)], ["start"], 0.0, None
+    for k, w in enumerate(windows):
+        ap, ex = gate_points(w, d_app, d_exit, margin, force_horizontal=force_h, gate_z=gate_z)
+        n = resolve_normal(w, force_h)
+        if prev_exit is not None:
+            center = np.asarray(w["center"], dtype=float)
+            da, db = float((prev_exit - center) @ n), float((ap - center) @ n)
+            if da * db < 0:                                     # 이미 평면을 가로지름
+                hit = prev_exit + (ap - prev_exit) * (da / (da - db))
+                if not _inside_opening(hit, w, n, margin):
+                    pts.append(ap + align_back * n); labels.append(f"align{k}")
+            back = float((prev_exit - ap) @ (-n))               # 진행방향 = −n
+            if back > 0:
+                backtrack = max(backtrack, back)
+        pts.append(ap); labels.append(f"approach{k}")
+        pts.append(ex); labels.append(f"exit{k}")
+        prev_exit = ex
+    n_last = resolve_normal(windows[-1], force_h)
+    pts.append(prev_exit - stop_ahead * n_last); labels.append("stop")
+    return pts, labels, backtrack
+
+
+def plan_waypoints_v2(drone_state, window_map, cfg):
+    """v2: 후진 완화·정렬점·정지점·재계획 (윤호 프로토타입 래퍼 요구사항 흡수, 2026-08-18)."""
     windows = ordered_open_windows(window_map)
     if not windows:
         raise ValueError("열린 창문이 없음 — 계획할 대상 없음")
-    points = [[float(c) for c in drone_state["position"]]]
-    for w in windows:
-        approach, exit_ = gate_points(w, cfg["d_app"], cfg["d_exit"], cfg["clearance_margin"])
-        points.append([float(c) for c in approach])
-        points.append([float(c) for c in exit_])
-    for msg in crossing_warnings(points, windows, cfg["clearance_margin"]):
-        warn(format_warning(msg))
+    force_h = bool(cfg.get("force_horizontal_normal", False))
+    gate_z = tuple(cfg["gate_z"]) if cfg.get("gate_z") else None
+    shrinks = list(cfg.get("shrink", [1.0]))
+    best = None
+    for i in range(int(cfg.get("max_passes", 1))):
+        s = shrinks[min(i, len(shrinks) - 1)]
+        pts, labels, back = _build_v2(windows, drone_state["position"], cfg["d_app"] * s, cfg["d_exit"] * s,
+                                      cfg["clearance_margin"], force_h, gate_z,
+                                      cfg["align_back"], cfg["stop_ahead"])
+        warns = crossing_warnings([p.tolist() for p in pts], windows, cfg["clearance_margin"])
+        plan = Plan([[float(v) for v in p] for p in pts], labels, warns, i + 1, s, back)
+        if best is None or (len(plan.warnings), plan.backtrack_m) < (len(best.warnings), best.backtrack_m):
+            best = plan
+        if plan.ok:
+            break
+    return best
+
+
+def plan_waypoints(drone_state, window_map, cfg, warn=print):
+    """(드론 상태, 창문 맵) → WaypointsConfig. 웨이포인트 = [현 위치] + [접근ᵢ, 이탈ᵢ]…
+
+    cfg에 stop_ahead가 있으면 v2(plan_waypoints_v2)로 위임 — 정지점·정렬점·재계획 포함.
+    없으면 v1 경로 그대로(호환 규칙).
+    """
+    if "stop_ahead" in cfg:
+        plan = plan_waypoints_v2(drone_state, window_map, cfg)
+        points = plan.waypoints
+        for w in plan.warnings:
+            warn(format_warning(w))
+    else:
+        windows = ordered_open_windows(window_map)
+        if not windows:
+            raise ValueError("열린 창문이 없음 — 계획할 대상 없음")
+        points = [[float(c) for c in drone_state["position"]]]
+        for w in windows:
+            approach, exit_ = gate_points(w, cfg["d_app"], cfg["d_exit"], cfg["clearance_margin"])
+            points.append([float(c) for c in approach])
+            points.append([float(c) for c in exit_])
+        for msg in crossing_warnings(points, windows, cfg["clearance_margin"]):
+            warn(format_warning(msg))
     wc = WaypointsConfig(waypoints=points, limits=dict(cfg["limits"]), dt=float(cfg["dt"]))
     wc.validate()  # 성진 스키마 검증 — 실패 시 여기서 즉시 드러남
     return wc

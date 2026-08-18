@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from window_waypoint_planner import PLANNING_DIR, crossing_warnings, gate_points, load_planner_config, normal_from_corners, ordered_open_windows, plan_waypoints, resolve_normal
+from window_waypoint_planner import PLANNING_DIR, Plan, crossing_warnings, gate_points, load_planner_config, normal_from_corners, ordered_open_windows, plan_waypoints, plan_waypoints_v2, resolve_normal
 
 # 접근측 normal = -X (synth_scene 관례와 동일한 예시 창문)
 WIN = {
@@ -70,7 +70,8 @@ def _cfg():
 def test_plan_waypoints_sequence_and_schema():
     wc = plan_waypoints(STATE, WMAP3, _cfg())
     wc.validate()                                   # 성진 스키마 통과 (윤호 validate 경유)
-    assert len(wc.waypoints) == 1 + 2 * 3           # 시작 + 창문 3개 × (접근·이탈)
+    # 실 설정 파일에 v2 키(stop_ahead 등)가 있어 v2 경로 — 시작 + 창문 3개 × (접근·이탈) + 정지점
+    assert len(wc.waypoints) == 1 + 2 * 3 + 1
     assert wc.waypoints[0] == [0.0, 0.0, 1.5]       # 첫 점 = 드론 현재 위치
     # 접근(-X쪽) < center < 이탈: 창문 0의 x 좌표로 확인
     assert wc.waypoints[1][0] == pytest.approx(4.0 - 1.5)
@@ -100,7 +101,7 @@ def test_cli_roundtrip(tmp_path):
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     saved = json.loads(out_p.read_text(encoding="utf-8"))
-    assert len(saved["waypoints"]) == 7 and "limits" in saved
+    assert len(saved["waypoints"]) == 8 and "limits" in saved  # v2 경로 — +정지점
 
 
 def test_crossing_warning_outside_opening():
@@ -219,3 +220,57 @@ def test_assemble_window_map_moved_to_planning():
     wmap, failed = assemble_window_map(recon)
     assert failed == [0] and [w["order_index"] for w in wmap["windows"]] == [1]
     assert np.dot(wmap["windows"][0]["normal"], [-1.0, 0.0, 0.0]) > 0.999  # 부호 확정 공식
+
+
+V2 = {"d_app": 1.5, "d_exit": 1.0, "clearance_margin": 0.35,
+      "limits": {"v_max": 1.6, "a_max": 1.6, "j_max": 8.0, "snap_max": 40.0}, "dt": 0.01,
+      "force_horizontal_normal": True, "gate_z": [0.5, 1.9],
+      "stop_ahead": 0.6, "align_back": 0.45, "max_passes": 4, "shrink": [1.0, 0.75, 0.55, 0.4]}
+
+
+def _win(i, x, y=0.0, n=(-1.0, 0.0, 0.0), wh=(1.0, 1.0)):
+    return {"order_index": i, "color": ["red", "green", "blue"][i], "center": [x, y, 1.5],
+            "normal": list(n), "size_wh": list(wh)}
+
+
+def test_v2_labels_stop_point_and_ok():
+    wmap = {"windows": [_win(0, 4.0), _win(1, 9.0), _win(2, 14.0)]}   # 간격 5m — 후진 없음
+    p = plan_waypoints_v2(STATE, wmap, V2)
+    assert isinstance(p, Plan) and p.ok and p.passes == 1 and p.shrink == 1.0
+    assert p.labels == ["start", "approach0", "exit0", "approach1", "exit1", "approach2", "exit2", "stop"]
+    np.testing.assert_allclose(p.waypoints[-1], [14.0 + 1.0 + 0.6, 0.0, 1.5])  # exit2 − stop_ahead·n
+
+
+def test_v2_backtrack_detected_and_relaxed():
+    wmap = {"windows": [_win(0, 4.0), _win(1, 5.5)]}    # 간격 1.5m < d_app+d_exit=2.5 → 후진
+    p = plan_waypoints_v2(STATE, wmap, V2)
+    assert p.passes > 1                                  # 재계획 발생
+    assert p.shrink < 1.0
+    # 완화 후 후진 없거나, 못 없앴으면 정직 보고
+    assert p.ok or p.backtrack_m > 0
+
+
+def test_v2_align_point_inserted():
+    # 창문1이 창문0 이탈점보다 앞쪽(가까운 depth)이면서 옆으로 크게 비켜 있어
+    # exit0→approach1 직선이 이미 창문1 평면을 넘어 개구부 밖에서 뚫음.
+    # (교차 여부는 depth 겹침에만 좌우되므로 재계획 루프 영향을 배제하고자 단일 패스로 검증)
+    wmap = {"windows": [_win(0, 4.0, 0.0), _win(1, 4.5, 3.0)]}
+    p = plan_waypoints_v2(STATE, wmap, {**V2, "max_passes": 1})
+    assert "align1" in p.labels
+    i = p.labels.index("align1")
+    assert p.labels[i + 1] == "approach1"
+    # 정렬점 = approach1 + align_back·n̂
+    ap = np.asarray(p.waypoints[i + 1]); al = np.asarray(p.waypoints[i])
+    np.testing.assert_allclose(al - ap, np.array([-1.0, 0.0, 0.0]) * 0.45, atol=1e-9)
+
+
+def test_plan_waypoints_v1_path_unchanged_without_v2_keys():
+    cfg_v1 = {k: V2[k] for k in ("d_app", "d_exit", "clearance_margin", "limits", "dt")}
+    wc = plan_waypoints(STATE, WMAP3, cfg_v1)
+    assert len(wc.waypoints) == 7                          # v1과 동일: start + 2N, 정지점 없음
+
+
+def test_plan_waypoints_wraps_v2_when_keys_present():
+    wc = plan_waypoints(STATE, {"windows": [_win(0, 4.0), _win(1, 9.0), _win(2, 14.0)]}, V2)
+    wc.validate()
+    assert len(wc.waypoints) == 8                          # + stop
