@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from window_waypoint_planner import PLANNING_DIR, crossing_warnings, gate_points, load_planner_config, normal_from_corners, ordered_open_windows, plan_waypoints
+from window_waypoint_planner import PLANNING_DIR, crossing_warnings, gate_points, load_planner_config, normal_from_corners, ordered_open_windows, plan_waypoints, resolve_normal
 
 # 접근측 normal = -X (synth_scene 관례와 동일한 예시 창문)
 WIN = {
@@ -165,6 +165,31 @@ def test_gate_points_requires_normal_or_corners():
     bare = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 1.5], "size_wh": [1.0, 1.2]}
     with pytest.raises(ValueError, match="corners_3d"):
         gate_points(bare, 1.5, 1.0, 0.35)
+
+
+def test_resolve_normal_forces_horizontal():
+    tilted = {"order_index": 0, "color": "red", "center": [5, 0, 1.5], "size_wh": [1, 1],
+              "normal": [-0.8, 0.0, -0.6]}                     # 35°쯤 기울어진 복원 법선
+    n = resolve_normal(tilted, force_horizontal=True)
+    np.testing.assert_allclose(n, [-1.0, 0.0, 0.0], atol=1e-9)
+    n0 = resolve_normal(tilted, force_horizontal=False)
+    assert abs(n0[2]) > 0.5                                    # 끄면 원본 유지
+
+
+def test_resolve_normal_keeps_vertical_when_horizontal_part_vanishes():
+    vertical = {"order_index": 0, "color": "red", "center": [5, 0, 1.5], "size_wh": [1, 1],
+                "normal": [0.0, 0.0, -1.0]}
+    n = resolve_normal(vertical, force_horizontal=True)
+    np.testing.assert_allclose(n, [0.0, 0.0, -1.0])           # 판단 불가 → 원본
+
+
+def test_gate_points_z_clamp():
+    low = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 0.3], "size_wh": [1, 1],
+           "normal": [-1.0, 0.0, 0.0]}
+    a, e = gate_points(low, 1.5, 1.0, 0.35, gate_z=(0.5, 1.9))
+    assert a[2] == pytest.approx(0.5) and e[2] == pytest.approx(0.5)
+    a2, _ = gate_points(low, 1.5, 1.0, 0.35)                   # 미지정이면 클램프 없음
+    assert a2[2] == pytest.approx(0.3)
 
 
 from window_waypoint_planner import assemble_window_map, format_warning

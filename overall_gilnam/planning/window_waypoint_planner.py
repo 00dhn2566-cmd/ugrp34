@@ -46,11 +46,35 @@ def normal_from_corners(corners_3d):
     return n / n_len
 
 
-def gate_points(window, d_app, d_exit, clearance_margin):
+def resolve_normal(window, force_horizontal=False):
+    """창문 법선 결정: 명시 normal → corners_3d 유도 → 에러. force_horizontal이면 수평 성분만 남겨
+    정규화(창문 수직 씬 가정 — 복원 법선 기울어짐으로 게이트가 지면 아래로 가던 실측 사고 방지,
+    윤호 프로토타입 2026-08-18). 수평 성분이 거의 0이면 판단 불가 → 원본 유지."""
+    ident = f"order_index={window.get('order_index')}({window.get('color', '?')})"
+    if "normal" in window:
+        n = np.asarray(window["normal"], dtype=float)
+        n_len = float(np.linalg.norm(n))
+        if n_len < 1e-9:
+            raise ValueError(f"창문 {ident}: normal이 영벡터 — 접근측 판정 불가")
+        n = n / n_len
+    elif "corners_3d" in window:
+        n = normal_from_corners(window["corners_3d"])
+    else:
+        raise ValueError(f"창문 {ident}: normal·corners_3d 모두 부재 — 접근측 판정 불가")
+    if force_horizontal:
+        h = np.array([n[0], n[1], 0.0])
+        if np.linalg.norm(h) >= 1e-9:
+            n = h / np.linalg.norm(h)
+    return n
+
+
+def gate_points(window, d_app, d_exit, clearance_margin, force_horizontal=False, gate_z=None):
     """창문 1개 → (접근점, 이탈점). 접근점 = center + d_app·n̂, 이탈점 = center − d_exit·n̂.
 
     두 점을 잇는 직선이 center를 지나므로 center 웨이포인트는 별도로 두지 않는다
     (웨이포인트 최소화 → 하류 최소시간 계획이 더 부드러움).
+    force_horizontal: 법선을 수평으로 강제(윤호 실측 — 기울어진 복원 법선으로 접근점 지면 아래 → 추락).
+    gate_z: (lo, hi) 지정 시 두 게이트 점의 z를 클램프.
     """
     ident = f"order_index={window.get('order_index')}({window.get('color', '?')})"
     w, h = window["size_wh"]
@@ -59,17 +83,13 @@ def gate_points(window, d_app, d_exit, clearance_margin):
             f"창문 {ident}: 통과 여유 부족 — min(w,h)/2={min(w, h) / 2.0:.3f}m < margin={clearance_margin}m"
         )
     center = np.asarray(window["center"], dtype=float)
-    if "normal" in window:
-        n = np.asarray(window["normal"], dtype=float)
-        n_len = float(np.linalg.norm(n))
-        if n_len < 1e-9:
-            raise ValueError(f"창문 {ident}: normal이 영벡터 — 접근측 판정 불가")
-        n = n / n_len
-    elif "corners_3d" in window:
-        n = normal_from_corners(window["corners_3d"])  # 부호 확정 공식 폴백
-    else:
-        raise ValueError(f"창문 {ident}: normal·corners_3d 모두 부재 — 접근측 판정 불가")
-    return center + d_app * n, center - d_exit * n
+    n = resolve_normal(window, force_horizontal)
+    approach, exit_ = center + d_app * n, center - d_exit * n
+    if gate_z is not None:
+        lo, hi = gate_z
+        approach[2] = np.clip(approach[2], lo, hi)
+        exit_[2] = np.clip(exit_[2], lo, hi)
+    return approach, exit_
 
 
 def crossing_warnings(waypoints, windows, clearance_margin):
@@ -84,19 +104,10 @@ def crossing_warnings(waypoints, windows, clearance_margin):
     warns = []
     for w in windows:
         center = np.asarray(w["center"], dtype=float)
-        if "normal" in w:
-            n = np.asarray(w["normal"], dtype=float)
-        elif "corners_3d" in w:
-            try:
-                n = normal_from_corners(w["corners_3d"])
-            except ValueError:
-                continue  # 판정 불가 — 경고 전용 기능이므로 건너뜀
-        else:
-            continue
-        n_len = float(np.linalg.norm(n))
-        if n_len < 1e-9:
-            continue
-        n = n / n_len
+        try:
+            n = resolve_normal(w)
+        except ValueError:
+            continue  # 판정 불가 — 경고 전용 기능이므로 건너뜀
         width_axis = np.cross(UP, n)
         wa_len = float(np.linalg.norm(width_axis))
         if wa_len < 1e-9:  # normal ∥ UP — 수직 창문 가정 밖, 판정 불가 → 건너뜀
