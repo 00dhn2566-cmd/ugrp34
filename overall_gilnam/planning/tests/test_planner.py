@@ -376,13 +376,17 @@ def test_v3_yunho_10window_scene_min_leg_raised():
 
 
 def test_v3_no_warning_regression_random():
-    # 최종 리뷰 Fix 3 축소판 — 랜덤 씬 60개(2~8창문, 간격 0.3~6m, 측면 ±2m, yaw ±15도)에서
+    # 최종 리뷰 Fix 3 축소판 — 랜덤 씬 120개(2~8창문, 간격 0.3~6m, 측면 ±2m, yaw ±15도)에서
     # v3가 v2 대비 경고를 늘리지 않고, 통과선(접근 +n측·이탈 -n측) 불변식이 유지되는지 확인.
-    # d_exit_min을 {0.1, 0.3, 0.5} 순환으로 바꿔가며 병합점 이탈측 가드(재리뷰 Fix, min_leg/2
+    # d_exit_min을 {0.1, 0.3, 0.5} 순환으로 바꿔가며 병합점 이탈측 가드(재리뷰 Fix 1, min_leg/2
     # 미만 d_exit_min에서 재현되던 접근측 반전)도 이 랜덤화에 걸리도록 한다.
-    # (전체 검증은 300씬 스크래치 스윕으로 별도 수행 — final-fix-report.md 참조)
+    # d_exit_min 플로어가 저패스 축소값보다 커서 경고를 되살리는 클래스(재리뷰 Fix 2,
+    # test_v3_shrink_floor_no_warning_regression 참조)는 seed 0 기준 3000씬 스윕에서야 처음
+    # 등장(scene 683)해 이 규모의 랜덤화로는 안정적으로 못 잡는다 — 그 클래스는 위 결정론적
+    # 재현 테스트가 전담하고, 이 테스트는 폭넓은 회귀만 담당(3000씬 전수 결과는
+    # final-fix-report.md 참조).
     rng = np.random.default_rng(0)
-    for i_scene in range(60):
+    for i_scene in range(120):
         d_exit_min = [0.1, 0.3, 0.5][i_scene % 3]
         n_windows = int(rng.integers(2, 9))
         windows, x = [], 4.0
@@ -430,3 +434,23 @@ def test_v3_merge_keeps_exit_side_with_small_d_exit_min():
             if f"exit{k}" in label:
                 side = float((np.asarray(pt, dtype=float) - c) @ n)
                 assert side < 0.0                          # 이탈측(−n) 유지
+
+
+def test_v3_shrink_floor_no_warning_regression():
+    # 재리뷰 2차 재현(3000씬 스윕 seed 0, scene 683) — d_exit_min=0.5가 저패스(shrink=0.4)의
+    # 자연 축소값(0.4)보다 "더 크게" 튀어나와 이탈점을 오히려 밖으로 밀고, v2라면 그 패스에서
+    # 사라졌을 align 교차 경고를 v3가 되살렸다. exit{k}+approach{k+1} 병합(가드 A/B)이 아니라
+    # _shrink_exits_for_short_legs의 축소 자체가 원인 — 이제 축소도 국소 crossing_warnings
+    # 전/후 비교로 가드된다(경고가 늘면 그 창문은 원본 d_exit 유지).
+    windows = [
+        {"order_index": 0, "color": "red", "center": [4.0, 0.6365295963353574, 1.5],
+         "normal": [-0.9873721074779441, -0.15841818511320926, 0.0], "size_wh": [1.0, 1.0]},
+        {"order_index": 1, "color": "green", "center": [4.481802240404908, 0.995776728940382, 1.5],
+         "normal": [-0.9993555939154072, -0.03589424619606614, 0.0], "size_wh": [1.0, 1.0]},
+        {"order_index": 2, "color": "blue", "center": [6.726216239382694, -0.2497304947693224, 1.5],
+         "normal": [-0.9972026862534096, -0.07474491640897098, 0.0], "size_wh": [1.0, 1.0]},
+    ]
+    wmap = {"windows": windows}
+    v2 = plan_waypoints_v2(STATE, wmap, V2)
+    v3 = plan_waypoints_v2(STATE, wmap, dict(V2, min_leg=0.6, d_exit_min=0.5))
+    assert len(v3.warnings) <= len(v2.warnings)

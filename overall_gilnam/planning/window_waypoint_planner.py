@@ -318,13 +318,20 @@ def _shrink_exits_for_short_legs(windows, d_app, d_exit, min_leg, d_exit_min, fo
     축소량은 기존대로 진행방향 투영 S_k = |(c_{k+1}−c_k)·(−n_k)| 기준:
     d_exit_k = max(d_exit_min, S_k − d_app − min_leg·(1+1e-6)) — 부동소수 여유(Fix 1)로
     축소 후 leg가 min_leg를 살짝 넘도록 보장한다. 마지막 창문은 다음 창문이 없어 원본 유지.
+
+    가드(재리뷰, 3000씬 스윕에서 발견): d_exit_min 하한이 패스별로 이미 작아진 d_exit보다
+    "더 크게" 튀어나올 수 있다(예: 저패스 shrink로 d_exit=0.4인데 d_exit_min=0.5) — 이 경우
+    축소가 오히려 이탈점을 더 밖으로 밀어 그 패스에서는 없었을 통과 경고를 새로 만든다.
+    approach_k·exit_k(축소 전/후)·approach_{k+1} 국소 구간의 crossing_warnings 건수를
+    비교해 축소가 경고를 늘리면 그 창문은 축소하지 않고 원본 d_exit를 유지한다
+    (Fix 3의 병합 가드 A와 동일한 발상을 축소 단계에 적용).
     """
     out = []
     for k, w in enumerate(windows):
         if k == len(windows) - 1:
             out.append(d_exit)
             continue
-        _, ex_k = gate_points(w, d_app, d_exit, margin, force_horizontal=force_h)
+        ap_k, ex_k = gate_points(w, d_app, d_exit, margin, force_horizontal=force_h)
         ap_next, _ = gate_points(windows[k + 1], d_app, d_exit, margin, force_horizontal=force_h)
         leg_euclid = float(np.linalg.norm(ap_next - ex_k))
         if leg_euclid < min_leg:
@@ -332,7 +339,13 @@ def _shrink_exits_for_short_legs(windows, d_app, d_exit, min_leg, d_exit_min, fo
             c_next = np.asarray(windows[k + 1]["center"], dtype=float)
             n_k = resolve_normal(w, force_h)
             s_k = abs(float((c_next - c_k) @ (-n_k)))
-            out.append(max(d_exit_min, s_k - d_app - min_leg * (1 + 1e-6)))
+            d_exit_k = max(d_exit_min, s_k - d_app - min_leg * (1 + 1e-6))
+            _, ex_k_new = gate_points(w, d_app, d_exit_k, margin, force_horizontal=force_h)
+            old_local = [ap_k.tolist(), ex_k.tolist(), ap_next.tolist()]
+            new_local = [ap_k.tolist(), ex_k_new.tolist(), ap_next.tolist()]
+            old_w = len(crossing_warnings(old_local, windows, margin))
+            new_w = len(crossing_warnings(new_local, windows, margin))
+            out.append(d_exit_k if new_w <= old_w else d_exit)
         else:
             out.append(d_exit)
     return out
