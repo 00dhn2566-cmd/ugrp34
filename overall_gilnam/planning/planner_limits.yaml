@@ -18,5 +18,7 @@ align_back: 0.45                # 통과축 정렬점을 접근점 뒤로 [m]
 max_passes: 4                   # 후진/경고 시 재계획 최대 횟수
 shrink: [1.0, 0.75, 0.55, 0.4]  # 패스별 standoff 축소 계수
 
-# --- v3 (2026-08-18, 짧은 구간 병합 — min_leg 없으면 v2와 바이트 동일) ---
-min_leg: 0.6  # [m] 윤호 PyBullet 실측 --merge-m 0.6 권장치 (prototype_demo/window_flight.py)
+# --- v3 (2026-08-18, 짧은 구간 병합 + d_exit 국소 축소 — min_leg 없으면 v2와 바이트 동일) ---
+min_leg: 0.6      # [m] 윤호 PyBullet 실측 --merge-m 권장치 (prototype_demo/README.md "--merge-m 주의";
+                   # window_flight.py --merge-m 기본값은 0.12)
+d_exit_min: 0.3   # [m] 국소 축소 시 이탈점 거리 하한 (Task 2, 통과 여유 확보용)

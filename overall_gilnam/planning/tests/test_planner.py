@@ -322,7 +322,10 @@ def test_v3_leg_diagnostics_always_present():
 
 def test_v3_merge_short_leg_between_windows():
     # 간격 2.6m: exit0(x=5.0)→approach1(x=5.1) 구간 0.1m < min_leg 0.6 → 중점 병합
-    cfg = dict(V2, min_leg=0.6)
+    # d_exit_min=1.0(=d_exit)으로 국소 축소를 무력화 — Task 2에서 축소가 개입하면 exit0이
+    # x=4.5로 이동해 approach1과의 구간이 0.6이 되어 병합이 안 일어나므로 병합 경로 검증을
+    # 유지하려면 축소를 끈다 (plan Self-Review 명시).
+    cfg = dict(V2, min_leg=0.6, d_exit_min=1.0)
     p = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 6.6)]}, cfg)
     assert "exit0+approach1" in p.labels
     assert "exit0" not in p.labels and "approach1" not in p.labels
@@ -344,3 +347,24 @@ def test_v3_never_merges_pass_line_or_start():
 def test_v3_off_when_key_absent():
     a = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 6.6)]}, V2)
     assert a.merged == [] and "exit0" in a.labels and "approach1" in a.labels
+
+
+def test_v3_exit_shrink_recorded_and_bounded():
+    cfg = dict(V2, min_leg=0.6, d_exit_min=0.3)
+    p = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 6.6)]}, cfg)
+    # S=2.6, d_app 1.5 → leg = 2.6-1.5-1.0 = 0.1 < 0.6 → d_exit0 = max(0.3, 2.6-1.5-0.6)=0.5
+    assert p.exit_shrunk == {0: pytest.approx(0.5)}
+    assert 0.3 <= p.exit_shrunk[0] <= 1.0
+
+
+def test_v3_yunho_10window_scene_min_leg_raised():
+    # 윤호 실측 재현: 창문 10개, spacing 2.6, 개구부 1.0 → v2 최소 구간 0.1m, v3 ≥ 0.6m
+    wins = [_win(i % 3, 4.0 + 2.6 * i, wh=(1.0, 1.0)) | {"order_index": i} for i in range(10)]
+    v2 = plan_waypoints_v2(STATE, {"windows": wins}, V2)
+    v3 = plan_waypoints_v2(STATE, {"windows": wins}, dict(V2, min_leg=0.6, d_exit_min=0.3))
+    assert v2.min_leg_m < 0.2
+    assert v3.min_leg_m >= 0.6 - 1e-6
+    assert v3.ok or len(v3.warnings) <= len(v2.warnings)     # 안전성 후퇴 없음
+    # 창문마다 접근·이탈(또는 병합점)이 존재해 전부 통과 대상으로 남음
+    for k in range(10):
+        assert any(f"approach{k}" in l for l in v3.labels)

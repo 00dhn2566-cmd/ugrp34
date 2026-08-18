@@ -16,6 +16,10 @@ A~H(수평 법선 강제·게이트 z 클램프·정렬점 삽입·후진 감지
 shrink)로 흡수했다 — 기본은 꺼짐(v1 동작 불변), stop_ahead가 cfg에 있으면 plan_waypoints가
 자동으로 v2 경로에 위임한다. 동치는 test_v2_matches_yunho_wrapper_reference로 고정 검증됨 —
 윤호 prototype_demo/planner.py는 이제 plan_waypoints_v2로 대체 가능하다.
+
+v3 (2026-08-18): cfg에 min_leg가 있으면 창문 간 짧은 구간을 중점으로 병합하고(통과선·start·stop
+보호), 그래도 짧으면 창문별 d_exit를 국소 축소한다(d_exit_min 하한) — leg_lengths/min_leg_m/
+merged/exit_shrunk 진단 필드로 기록. 출처: 윤호 PyBullet --merge-m 실측(prototype_demo/README.md).
 """
 
 import argparse
@@ -218,9 +222,11 @@ def _inside_opening(pt, window, n, margin):
 
 
 def _build_v2(windows, start, d_app, d_exit, margin, force_h, gate_z, align_back, stop_ahead):
+    """d_exit: 스칼라(전체 공통) 또는 list(창문별 d_exit[k]) — v3 국소 축소용."""
     pts, labels, backtrack, prev_exit = [np.asarray(start, dtype=float)], ["start"], 0.0, None
     for k, w in enumerate(windows):
-        ap, ex = gate_points(w, d_app, d_exit, margin, force_horizontal=force_h, gate_z=gate_z)
+        d_exit_k = d_exit[k] if isinstance(d_exit, (list, tuple)) else d_exit
+        ap, ex = gate_points(w, d_app, d_exit_k, margin, force_horizontal=force_h, gate_z=gate_z)
         n = resolve_normal(w, force_h)
         if prev_exit is not None:
             center = np.asarray(w["center"], dtype=float)
@@ -270,6 +276,28 @@ def _merge_short_legs(points, labels, min_leg):
     return out_pts, out_labels, merged
 
 
+def _shrink_exits_for_short_legs(windows, d_app, d_exit, min_leg, d_exit_min, force_h):
+    """창문별 d_exit 벡터(list[float]) — 창문 k(마지막 제외)의 이탈→다음 접근 구간이
+    min_leg 미만이면 국소 축소, 아니면 원본 d_exit 유지.
+
+    S_k = |(c_{k+1}−c_k)·(−n_k)| (진행방향 투영), leg = S_k − d_app − d_exit.
+    leg < min_leg 이면 d_exit_k = max(d_exit_min, S_k − d_app − min_leg).
+    마지막 창문은 다음 창문이 없어 원본 d_exit 유지.
+    """
+    out = []
+    for k, w in enumerate(windows):
+        if k == len(windows) - 1:
+            out.append(d_exit)
+            continue
+        c_k = np.asarray(w["center"], dtype=float)
+        c_next = np.asarray(windows[k + 1]["center"], dtype=float)
+        n_k = resolve_normal(w, force_h)
+        s_k = abs(float((c_next - c_k) @ (-n_k)))
+        leg = s_k - d_app - d_exit
+        out.append(max(d_exit_min, s_k - d_app - min_leg) if leg < min_leg else d_exit)
+    return out
+
+
 def plan_waypoints_v2(drone_state, window_map, cfg):
     """v2: 후진 완화·정렬점·정지점·재계획 (윤호 프로토타입 래퍼 요구사항 흡수, 2026-08-18).
 
@@ -286,7 +314,14 @@ def plan_waypoints_v2(drone_state, window_map, cfg):
     best = None
     for i in range(int(cfg.get("max_passes", 1))):
         s = shrinks[min(i, len(shrinks) - 1)]
-        pts, labels, back = _build_v2(windows, drone_state["position"], cfg["d_app"] * s, cfg["d_exit"] * s,
+        d_app_i, d_exit_i = cfg["d_app"] * s, cfg["d_exit"] * s
+        d_exit_arg, exit_shrunk = d_exit_i, {}
+        if min_leg:
+            d_exit_min = cfg.get("d_exit_min", 0.3)
+            shrunk = _shrink_exits_for_short_legs(windows, d_app_i, d_exit_i, min_leg, d_exit_min, force_h)
+            d_exit_arg = shrunk
+            exit_shrunk = {k: v for k, v in enumerate(shrunk) if abs(v - d_exit_i) > 1e-12}
+        pts, labels, back = _build_v2(windows, drone_state["position"], d_app_i, d_exit_arg,
                                       cfg["clearance_margin"], force_h, gate_z,
                                       cfg.get("align_back", 0.45), cfg.get("stop_ahead", 0.6))
         merged = []
@@ -296,7 +331,7 @@ def plan_waypoints_v2(drone_state, window_map, cfg):
         min_leg_m = min(leg_lengths) if leg_lengths else 0.0
         warns = crossing_warnings([p.tolist() for p in pts], windows, cfg["clearance_margin"])
         plan = Plan([[float(v) for v in p] for p in pts], labels, warns, i + 1, s, back,
-                     leg_lengths=leg_lengths, min_leg_m=min_leg_m, merged=merged)
+                     leg_lengths=leg_lengths, min_leg_m=min_leg_m, merged=merged, exit_shrunk=exit_shrunk)
         if best is None or (len(plan.warnings), plan.backtrack_m) < (len(best.warnings), best.backtrack_m):
             best = plan
         if plan.ok:
