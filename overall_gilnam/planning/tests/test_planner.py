@@ -378,9 +378,12 @@ def test_v3_yunho_10window_scene_min_leg_raised():
 def test_v3_no_warning_regression_random():
     # 최종 리뷰 Fix 3 축소판 — 랜덤 씬 60개(2~8창문, 간격 0.3~6m, 측면 ±2m, yaw ±15도)에서
     # v3가 v2 대비 경고를 늘리지 않고, 통과선(접근 +n측·이탈 -n측) 불변식이 유지되는지 확인.
+    # d_exit_min을 {0.1, 0.3, 0.5} 순환으로 바꿔가며 병합점 이탈측 가드(재리뷰 Fix, min_leg/2
+    # 미만 d_exit_min에서 재현되던 접근측 반전)도 이 랜덤화에 걸리도록 한다.
     # (전체 검증은 300씬 스크래치 스윕으로 별도 수행 — final-fix-report.md 참조)
     rng = np.random.default_rng(0)
-    for _ in range(60):
+    for i_scene in range(60):
+        d_exit_min = [0.1, 0.3, 0.5][i_scene % 3]
         n_windows = int(rng.integers(2, 9))
         windows, x = [], 4.0
         for i in range(n_windows):
@@ -393,7 +396,7 @@ def test_v3_no_warning_regression_random():
                 x += rng.uniform(0.3, 6.0)
         wmap = {"windows": windows}
         v2 = plan_waypoints_v2(STATE, wmap, V2)
-        v3 = plan_waypoints_v2(STATE, wmap, dict(V2, min_leg=0.6, d_exit_min=0.3))
+        v3 = plan_waypoints_v2(STATE, wmap, dict(V2, min_leg=0.6, d_exit_min=d_exit_min))
         assert len(v3.warnings) <= len(v2.warnings)
         for label, pt in zip(v3.labels, v3.waypoints):
             pt = np.asarray(pt, dtype=float)
@@ -405,3 +408,25 @@ def test_v3_no_warning_regression_random():
                         wn = resolve_normal(w, force_horizontal=True)
                         side = float((pt - c) @ wn)
                         assert side > -1e-6 if want_positive else side < 1e-6
+
+
+def test_v3_merge_keeps_exit_side_with_small_d_exit_min():
+    # 재리뷰 재현 씬(d_exit_min=0.1 < min_leg/2=0.3): 축소된 exit0이 짧아져 approach1과의
+    # 중점을 창문0 통과축에 투영하면 +n(접근)측으로 넘어감 — 경고는 0건이라 가드 A로는
+    # 못 잡음. 가드 B(투영 후 부호 재검사)로 이 병합 자체를 건너뛰어야 한다.
+    yaw = np.radians(-9.382422908397057)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    n1 = [-cy, -sy, 0.0]
+    windows = [_win(0, 4.0), _win(1, 4.0 + 1.3573870493160707, y=-0.6161573377130676, n=n1)]
+    cfg = dict(V2, min_leg=0.6, d_exit_min=0.1)
+    p = plan_waypoints_v2(STATE, {"windows": windows}, cfg)
+    assert p.merged == []                                 # 가드 B가 병합을 거부
+    assert "exit0" in p.labels and "approach1" in p.labels
+    for k in range(2):
+        w = windows[k]
+        c = np.asarray(w["center"], dtype=float)
+        n = resolve_normal(w, force_horizontal=True)
+        for label, pt in zip(p.labels, p.waypoints):
+            if f"exit{k}" in label:
+                side = float((np.asarray(pt, dtype=float) - c) @ n)
+                assert side < 0.0                          # 이탈측(−n) 유지

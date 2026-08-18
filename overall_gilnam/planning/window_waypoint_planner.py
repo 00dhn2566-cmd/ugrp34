@@ -255,9 +255,12 @@ def _merge_short_legs(points, labels, min_leg, windows, force_h, margin):
     잡혀 있어 정확히 min_leg인 구간이 부동소수 오차로 들쭉날쭉 병합되는 것을 막는다.
     왼쪽이 exit{k}인 병합은 중점을 창문 k의 통과축(법선 직선) 위로 투영해 이탈 방향이
     옆으로 꺾여 경고를 유발하지 않도록 한다(Fix 3) — 그 외(정렬점+접근점) 병합은 그대로 중점.
-    가드(Fix 3, 랜덤 스윕에서 300건 중 11건 발견): 투영해도 국소적으로 새 통과 경고가
+    가드 A(Fix 3, 랜덤 스윕에서 300건 중 11건 발견): 투영해도 국소적으로 새 통과 경고가
     생기면 그 병합만 건너뛴다 — 직전점-a, a-b, b-직후점 구간의 crossing_warnings 건수를
     병합 전/후로 비교.
+    가드 B(재리뷰, d_exit_min < min_leg/2일 때 재현): 투영점이 창문 k의 −n(이탈)측이 아니라
+    +n(접근)측으로 넘어가면 경고 0건이라도 병합을 건너뛴다 — 통과선이 "이탈 후"가 아니라
+    "접근 전"으로 뒤집혀 창문을 아직 안 지난 상태를 지난 것처럼 보고하는 것을 막는다.
     """
     n = len(points)
     out_pts, out_labels, merged = [], [], []
@@ -275,15 +278,19 @@ def _merge_short_legs(points, labels, min_leg, windows, force_h, margin):
                 w_k = windows[int(a[len("exit"):])]
                 c_k = np.asarray(w_k["center"], dtype=float)
                 n_k = resolve_normal(w_k, force_h)
-                m = c_k + float((m - c_k) @ n_k) * n_k
-            prev_pt = out_pts[-1] if out_pts else None
-            next_pt = points[i + 2] if i + 2 < n else None
-            old_local = [p for p in (prev_pt, points[i], points[i + 1], next_pt) if p is not None]
-            new_local = [p for p in (prev_pt, m, next_pt) if p is not None]
-            old_w = len(crossing_warnings([p.tolist() for p in old_local], windows, margin))
-            new_w = len(crossing_warnings([p.tolist() for p in new_local], windows, margin))
-            if new_w > old_w:
-                do_merge = False
+                s = float((m - c_k) @ n_k)
+                m = c_k + s * n_k
+                if s >= -1e-9:                       # 이탈측(−n)이 아니게 됨 — 가드 B
+                    do_merge = False
+            if do_merge:
+                prev_pt = out_pts[-1] if out_pts else None
+                next_pt = points[i + 2] if i + 2 < n else None
+                old_local = [p for p in (prev_pt, points[i], points[i + 1], next_pt) if p is not None]
+                new_local = [p for p in (prev_pt, m, next_pt) if p is not None]
+                old_w = len(crossing_warnings([p.tolist() for p in old_local], windows, margin))
+                new_w = len(crossing_warnings([p.tolist() for p in new_local], windows, margin))
+                if new_w > old_w:                    # 가드 A
+                    do_merge = False
         if do_merge:
             label = f"{a}+{b}"
             out_pts.append(m)
