@@ -332,7 +332,8 @@ def test_v3_merge_short_leg_between_windows():
     i = p.labels.index("exit0+approach1")
     assert p.waypoints[i][0] == pytest.approx(5.05)          # 중점
     assert p.merged == ["exit0+approach1"]
-    assert min(p.leg_lengths) >= 0.6 - 1e-9 or p.min_leg_m == pytest.approx(min(p.leg_lengths))
+    # 병합 후 남은 최단 구간은 exit1→stop(=stop_ahead=0.6) — min_leg 이상 유지
+    assert p.min_leg_m >= 0.6 - 1e-9
 
 
 def test_v3_never_merges_pass_line_or_start():
@@ -352,8 +353,9 @@ def test_v3_off_when_key_absent():
 def test_v3_exit_shrink_recorded_and_bounded():
     cfg = dict(V2, min_leg=0.6, d_exit_min=0.3)
     p = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 6.6)]}, cfg)
-    # S=2.6, d_app 1.5 → leg = 2.6-1.5-1.0 = 0.1 < 0.6 → d_exit0 = max(0.3, 2.6-1.5-0.6)=0.5
-    assert p.exit_shrunk == {0: pytest.approx(0.5)}
+    # S=2.6, d_app 1.5 → leg = 2.6-1.5-1.0 = 0.1 < 0.6 → d_exit0 = max(0.3, 2.6-1.5-0.6*(1+1e-6))
+    # ≈0.5 (부동소수 여유 1e-6·min_leg만큼 살짝 낮음 — Fix 1, 기본 approx 상대오차보다 커서 abs 지정)
+    assert p.exit_shrunk == {0: pytest.approx(0.5, abs=1e-5)}
     assert 0.3 <= p.exit_shrunk[0] <= 1.0
 
 
@@ -365,6 +367,41 @@ def test_v3_yunho_10window_scene_min_leg_raised():
     assert v2.min_leg_m < 0.2
     assert v3.min_leg_m >= 0.6 - 1e-6
     assert v3.ok or len(v3.warnings) <= len(v2.warnings)     # 안전성 후퇴 없음
+    # 부동소수 여유(Fix 1)로 축소 후 leg가 min_leg를 살짝 넘어 병합은 트리거되지 않음
+    assert v3.merged == []
+    assert len(v3.exit_shrunk) == 9                          # 창문 0~8 축소, 마지막(9)은 대상 밖
     # 창문마다 접근·이탈(또는 병합점)이 존재해 전부 통과 대상으로 남음
     for k in range(10):
         assert any(f"approach{k}" in l for l in v3.labels)
+
+
+def test_v3_no_warning_regression_random():
+    # 최종 리뷰 Fix 3 축소판 — 랜덤 씬 60개(2~8창문, 간격 0.3~6m, 측면 ±2m, yaw ±15도)에서
+    # v3가 v2 대비 경고를 늘리지 않고, 통과선(접근 +n측·이탈 -n측) 불변식이 유지되는지 확인.
+    # (전체 검증은 300씬 스크래치 스윕으로 별도 수행 — final-fix-report.md 참조)
+    rng = np.random.default_rng(0)
+    for _ in range(60):
+        n_windows = int(rng.integers(2, 9))
+        windows, x = [], 4.0
+        for i in range(n_windows):
+            yaw = np.radians(rng.uniform(-15, 15))
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            n = [-cy, -sy, 0.0]                          # R_z(yaw)·(-1,0,0)
+            y = rng.uniform(-2.0, 2.0)
+            windows.append(_win(i % 3, x, y=y, n=n) | {"order_index": i})
+            if i < n_windows - 1:
+                x += rng.uniform(0.3, 6.0)
+        wmap = {"windows": windows}
+        v2 = plan_waypoints_v2(STATE, wmap, V2)
+        v3 = plan_waypoints_v2(STATE, wmap, dict(V2, min_leg=0.6, d_exit_min=0.3))
+        assert len(v3.warnings) <= len(v2.warnings)
+        for label, pt in zip(v3.labels, v3.waypoints):
+            pt = np.asarray(pt, dtype=float)
+            for token in label.split("+"):
+                for prefix, want_positive in (("approach", True), ("exit", False)):
+                    if token.startswith(prefix):
+                        w = windows[int(token[len(prefix):])]
+                        c = np.asarray(w["center"], dtype=float)
+                        wn = resolve_normal(w, force_horizontal=True)
+                        side = float((pt - c) @ wn)
+                        assert side > -1e-6 if want_positive else side < 1e-6

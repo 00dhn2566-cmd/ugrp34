@@ -246,11 +246,18 @@ def _build_v2(windows, start, d_app, d_exit, margin, force_h, gate_z, align_back
     return pts, labels, backtrack
 
 
-def _merge_short_legs(points, labels, min_leg):
+def _merge_short_legs(points, labels, min_leg, windows, force_h, margin):
     """왼쪽부터 1패스: (p_i, p_{i+1}) 거리 < min_leg 이고 금지 쌍이 아니면 중점으로 병합.
 
     금지 쌍(병합 안 함): approach{k}↔exit{k}(같은 창문 통과선), start가 왼쪽(시작점은 드론
     실제 위치라 이동 불가), stop이 오른쪽(종점 고정). 병합 후 재검사는 하지 않는다(과병합 방지).
+    임계값은 min_leg − 1e-9(부동소수 여유 — Fix 1): shrink 목표가 min_leg를 살짝 넘도록
+    잡혀 있어 정확히 min_leg인 구간이 부동소수 오차로 들쭉날쭉 병합되는 것을 막는다.
+    왼쪽이 exit{k}인 병합은 중점을 창문 k의 통과축(법선 직선) 위로 투영해 이탈 방향이
+    옆으로 꺾여 경고를 유발하지 않도록 한다(Fix 3) — 그 외(정렬점+접근점) 병합은 그대로 중점.
+    가드(Fix 3, 랜덤 스윕에서 300건 중 11건 발견): 투영해도 국소적으로 새 통과 경고가
+    생기면 그 병합만 건너뛴다 — 직전점-a, a-b, b-직후점 구간의 crossing_warnings 건수를
+    병합 전/후로 비교.
     """
     n = len(points)
     out_pts, out_labels, merged = [], [], []
@@ -260,9 +267,26 @@ def _merge_short_legs(points, labels, min_leg):
         protected = (a == "start" or b == "stop"
                      or (a.startswith("approach") and b.startswith("exit") and a[len("approach"):] == b[len("exit"):]))
         dist = float(np.linalg.norm(points[i + 1] - points[i]))
-        if dist < min_leg and not protected:
+        do_merge = dist < min_leg - 1e-9 and not protected
+        m = None
+        if do_merge:
+            m = (points[i] + points[i + 1]) / 2.0
+            if a.startswith("exit"):
+                w_k = windows[int(a[len("exit"):])]
+                c_k = np.asarray(w_k["center"], dtype=float)
+                n_k = resolve_normal(w_k, force_h)
+                m = c_k + float((m - c_k) @ n_k) * n_k
+            prev_pt = out_pts[-1] if out_pts else None
+            next_pt = points[i + 2] if i + 2 < n else None
+            old_local = [p for p in (prev_pt, points[i], points[i + 1], next_pt) if p is not None]
+            new_local = [p for p in (prev_pt, m, next_pt) if p is not None]
+            old_w = len(crossing_warnings([p.tolist() for p in old_local], windows, margin))
+            new_w = len(crossing_warnings([p.tolist() for p in new_local], windows, margin))
+            if new_w > old_w:
+                do_merge = False
+        if do_merge:
             label = f"{a}+{b}"
-            out_pts.append((points[i] + points[i + 1]) / 2.0)
+            out_pts.append(m)
             out_labels.append(label)
             merged.append(label)
             i += 2
@@ -276,25 +300,34 @@ def _merge_short_legs(points, labels, min_leg):
     return out_pts, out_labels, merged
 
 
-def _shrink_exits_for_short_legs(windows, d_app, d_exit, min_leg, d_exit_min, force_h):
+def _shrink_exits_for_short_legs(windows, d_app, d_exit, min_leg, d_exit_min, force_h, margin):
     """창문별 d_exit 벡터(list[float]) — 창문 k(마지막 제외)의 이탈→다음 접근 구간이
     min_leg 미만이면 국소 축소, 아니면 원본 d_exit 유지.
 
-    S_k = |(c_{k+1}−c_k)·(−n_k)| (진행방향 투영), leg = S_k − d_app − d_exit.
-    leg < min_leg 이면 d_exit_k = max(d_exit_min, S_k − d_app − min_leg).
-    마지막 창문은 다음 창문이 없어 원본 d_exit 유지.
+    트리거(Fix 2): 실제 게이트 점의 유클리드 거리 |exit_k − approach_{k+1}|
+    (현재 패스의 d_app/d_exit·각 창문의 resolve_normal 반영) < min_leg 일 때만 축소한다
+    — 옆으로 벌어진 창문(측면 오프셋)에서 진행방향 투영만으로 트리거하면 이미 충분히
+    떨어진 구간까지 과잉 축소하는 문제가 있었다.
+    축소량은 기존대로 진행방향 투영 S_k = |(c_{k+1}−c_k)·(−n_k)| 기준:
+    d_exit_k = max(d_exit_min, S_k − d_app − min_leg·(1+1e-6)) — 부동소수 여유(Fix 1)로
+    축소 후 leg가 min_leg를 살짝 넘도록 보장한다. 마지막 창문은 다음 창문이 없어 원본 유지.
     """
     out = []
     for k, w in enumerate(windows):
         if k == len(windows) - 1:
             out.append(d_exit)
             continue
-        c_k = np.asarray(w["center"], dtype=float)
-        c_next = np.asarray(windows[k + 1]["center"], dtype=float)
-        n_k = resolve_normal(w, force_h)
-        s_k = abs(float((c_next - c_k) @ (-n_k)))
-        leg = s_k - d_app - d_exit
-        out.append(max(d_exit_min, s_k - d_app - min_leg) if leg < min_leg else d_exit)
+        _, ex_k = gate_points(w, d_app, d_exit, margin, force_horizontal=force_h)
+        ap_next, _ = gate_points(windows[k + 1], d_app, d_exit, margin, force_horizontal=force_h)
+        leg_euclid = float(np.linalg.norm(ap_next - ex_k))
+        if leg_euclid < min_leg:
+            c_k = np.asarray(w["center"], dtype=float)
+            c_next = np.asarray(windows[k + 1]["center"], dtype=float)
+            n_k = resolve_normal(w, force_h)
+            s_k = abs(float((c_next - c_k) @ (-n_k)))
+            out.append(max(d_exit_min, s_k - d_app - min_leg * (1 + 1e-6)))
+        else:
+            out.append(d_exit)
     return out
 
 
@@ -318,7 +351,8 @@ def plan_waypoints_v2(drone_state, window_map, cfg):
         d_exit_arg, exit_shrunk = d_exit_i, {}
         if min_leg:
             d_exit_min = cfg.get("d_exit_min", 0.3)
-            shrunk = _shrink_exits_for_short_legs(windows, d_app_i, d_exit_i, min_leg, d_exit_min, force_h)
+            shrunk = _shrink_exits_for_short_legs(windows, d_app_i, d_exit_i, min_leg, d_exit_min, force_h,
+                                                   cfg["clearance_margin"])
             d_exit_arg = shrunk
             exit_shrunk = {k: v for k, v in enumerate(shrunk) if abs(v - d_exit_i) > 1e-12}
         pts, labels, back = _build_v2(windows, drone_state["position"], d_app_i, d_exit_arg,
@@ -326,7 +360,8 @@ def plan_waypoints_v2(drone_state, window_map, cfg):
                                       cfg.get("align_back", 0.45), cfg.get("stop_ahead", 0.6))
         merged = []
         if min_leg:
-            pts, labels, merged = _merge_short_legs(pts, labels, min_leg)
+            pts, labels, merged = _merge_short_legs(pts, labels, min_leg, windows, force_h,
+                                                     cfg["clearance_margin"])
         leg_lengths = [float(np.linalg.norm(pts[j + 1] - pts[j])) for j in range(len(pts) - 1)]
         min_leg_m = min(leg_lengths) if leg_lengths else 0.0
         warns = crossing_warnings([p.tolist() for p in pts], windows, cfg["clearance_margin"])

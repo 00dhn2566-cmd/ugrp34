@@ -14,7 +14,7 @@ dt: 0.01                # [s]
 force_horizontal_normal: true   # 복원 법선 기울어짐 → 접근점 지면 아래 추락 실측. 창문 수직 씬 가정
 gate_z: [0.5, 1.9]              # 게이트 z 안전대역 [m]
 stop_ahead: 0.6                 # 마지막 이탈점 후 정지점까지 [m]
-align_back: 0.45                # 통과축 정렬점을 접근점 뒤로 [m]
+align_back: 0.45                # 통과축 정렬점을 접근점 뒤로 [m] (v3 min_leg 활성 시 align점은 접근점과 병합됨 — 0.45 < 0.6)
 max_passes: 4                   # 후진/경고 시 재계획 최대 횟수
 shrink: [1.0, 0.75, 0.55, 0.4]  # 패스별 standoff 축소 계수
 
@@ -22,3 +22,4 @@ shrink: [1.0, 0.75, 0.55, 0.4]  # 패스별 standoff 축소 계수
 min_leg: 0.6      # [m] 윤호 PyBullet 실측 --merge-m 권장치 (prototype_demo/README.md "--merge-m 주의";
                    # window_flight.py --merge-m 기본값은 0.12)
 d_exit_min: 0.3   # [m] 국소 축소 시 이탈점 거리 하한 (Task 2, 통과 여유 확보용)
+# 알려진 한계: d_exit 축소는 진행방향 투영 S_k 기준 양·유클리드 구간 기준 트리거
