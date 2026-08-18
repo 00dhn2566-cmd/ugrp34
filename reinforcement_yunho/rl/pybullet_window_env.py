@@ -17,13 +17,18 @@ Train example (stable-baselines3): see rl/train_pybullet.py.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 try:
     import pybullet as p
     from gymnasium import spaces
     from gym_pybullet_drones.envs.BaseRLAviary import BaseRLAviary
     from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType
+    from rl import domain
     _HAS_GPD = True
 except Exception as _e:  # pragma: no cover
     _HAS_GPD = False
@@ -42,13 +47,38 @@ class WindowTraversalAviary(BaseRLAviary):
 
     def __init__(self, n_windows: int = 3, gui: bool = False, record: bool = False,
                  ctrl_freq: int = 30, pyb_freq: int = 240, seed: int | None = None,
-                 opening: float = 0.35, step: float = 0.6):
+                 opening: float = 0.35, step: float = 0.6, pane: bool = True,
+                 domain_match: bool = True, tex_dir: str | None = None,
+                 clutter: int = 0, walls: bool = False,
+                 spacing: float = 1.2, spacing_jitter: float = 0.15,
+                 min_gap: bool = False):
         if not _HAS_GPD:
             raise ImportError(f"gym-pybullet-drones not available: {_IMPORT_ERR}")
+        # Appearance switches (see rl/domain.py). None touches physics — every body
+        # they add is visual-only — so a policy trained before them is unaffected.
+        # Set all three off to get the original flat-shaded outline scene back.
+        self.PANE = bool(pane)                    # fill the opening (training look)
+        self.DOMAIN_MATCH = bool(domain_match)    # textured room instead of sky+checkerboard
+        self.CLUTTER = int(clutter)               # n visual-only props (0 = none)
+        # walls=True puts each window in a wall instead of hanging it in mid-air.
+        # This DOES change physics (the slabs collide), which is the point: the
+        # drone must fly through the hole, and each image shows one opening.
+        self.WALLS = bool(walls)
+        self.TEX_DIR = tex_dir or os.path.join(_HERE, "_textures")
         self.N_WINDOWS = int(n_windows)
         self.STEP = float(step)       # max waypoint nudge per env step (m)
         self.OPENING = (float(opening), float(opening))   # (w,h) opening; cf2x is ~0.09 m
-        self.SPACING = 1.2        # nominal x-gap between windows
+        # Nominal x-gap between windows. 1.2 is the value the shipped PPO policy was
+        # trained on — do not change the default or that policy's scene shifts under it.
+        # The planner demo passes spacing>=2.0: with d_exit=1.0 and d_app=1.5 a gap
+        # below 2.5 m makes consecutive gates overlap, i.e. the drone has to fly
+        # backwards between windows.
+        self.SPACING = float(spacing)
+        self.SPACING_JITTER = float(spacing_jitter)
+        # min_gap=False (기본, legacy): x_i = (i+1)*SPACING + U(-J, J) → 실제 간격이
+        #   SPACING - 2J 까지 좁아진다. 학습된 정책이 본 분포라 기본값은 유지한다.
+        # min_gap=True: 간격을 누적으로 뽑아 **최소 간격 = SPACING** 을 보장한다.
+        self.MIN_GAP = bool(min_gap)
         self.EPISODE_LEN_SEC = 12
         self.WS = np.array([[-0.6, self.N_WINDOWS * self.SPACING + 1.2],  # x
                             [-1.2, 1.2],                                   # y
@@ -70,8 +100,14 @@ class WindowTraversalAviary(BaseRLAviary):
         rng = self._rng
         wins = []
         colours = ["red", "green", "blue"]
+        prev_x = 0.0
         for i in range(self.N_WINDOWS):
-            wx = (i + 1) * self.SPACING + rng.uniform(-0.15, 0.15)
+            if self.MIN_GAP:
+                wx = prev_x + self.SPACING + rng.uniform(0.0, 2 * self.SPACING_JITTER)
+                prev_x = wx
+            else:
+                wx = (i + 1) * self.SPACING + rng.uniform(-self.SPACING_JITTER,
+                                                          self.SPACING_JITTER)
             wy = rng.uniform(-0.6, 0.6)
             wz = rng.uniform(0.8, 1.6)
             ow = self.OPENING[0] + rng.uniform(-0.05, 0.1)
@@ -84,24 +120,42 @@ class WindowTraversalAviary(BaseRLAviary):
         return {"red": [1, .1, .1, 1], "green": [.1, .8, .15, 1], "blue": [.1, .2, 1, 1]}[color]
 
     def _addObstacles(self):
-        """Build each window as 4 thin collision bars around an opening (real crash geometry)."""
+        """Build the scene.
+
+        Geometry (the 4 collision bars per window) is unchanged; appearance is
+        delegated to :mod:`rl.domain`, which mirrors the renderer the detector was
+        trained on. Only the bars are registered in ``_window_bodies`` — every
+        appearance body is visual-only, so physics and any policy trained before
+        this change behave identically.
+        """
         self._window_bodies = []
-        t, d = 0.03, 0.05  # bar thickness, depth(x)
+        rng = np.random.default_rng(0xD07A1 ^ int(self.N_WINDOWS))
+
+        if self.DOMAIN_MATCH:
+            domain.hide_default_plane(p, self.CLIENT, self.PLANE_ID)
+            xs = [w["center"][0] for w in self.window_layout]
+            bounds = ((min(xs) - 4.0, max(xs) + 4.0), (-4.0, 4.0), (-0.05, 5.0))
+            domain.build_room(p, self.CLIENT, bounds=bounds,
+                              tex_dir=self.TEX_DIR, seed=0)
+            if self.CLUTTER:
+                # Visual-only props: VIO parallax (박태민 07/03) + closer to the
+                # training renderer's cluttered background. Windows and the flight
+                # corridor are kept clear.
+                keep = [w["center"] for w in self.window_layout] + \
+                       [[x, 0.0, 1.0] for x in np.linspace(bounds[0][0], bounds[0][1], 8)]
+                domain.build_clutter(p, self.CLIENT, bounds=bounds, tex_dir=self.TEX_DIR,
+                                     n=self.CLUTTER, seed=7, keep_clear=keep)
+
         for w in self.window_layout:
-            cx, cy, cz = w["center"]; ow, oh = w["ow"], w["oh"]; rgba = self._rgba(w["color"])
-            bars = [  # (center, halfextents)
-                ([cx, cy, cz + oh / 2 + t / 2], [d / 2, ow / 2 + t, t / 2]),   # top
-                ([cx, cy, cz - oh / 2 - t / 2], [d / 2, ow / 2 + t, t / 2]),   # bottom
-                ([cx, cy - ow / 2 - t / 2, cz], [d / 2, t / 2, oh / 2]),        # left
-                ([cx, cy + ow / 2 + t / 2, cz], [d / 2, t / 2, oh / 2]),        # right
-            ]
-            ids = []
-            for pos, he in bars:
-                col = p.createCollisionShape(p.GEOM_BOX, halfExtents=he, physicsClientId=self.CLIENT)
-                vis = p.createVisualShape(p.GEOM_BOX, halfExtents=he, rgbaColor=rgba, physicsClientId=self.CLIENT)
-                bid = p.createMultiBody(0, col, vis, pos, physicsClientId=self.CLIENT)  # mass 0 = static
-                ids.append(bid)
-            self._window_bodies.append(ids)
+            bars, _visual = domain.build_window(
+                p, self.CLIENT, w["center"], w["ow"], w["oh"], w["color"],
+                rng=rng, pane=self.PANE)
+            if self.WALLS:
+                slabs, _ = domain.build_wall(
+                    p, self.CLIENT, w["center"], w["ow"], w["oh"],
+                    tex_dir=self.TEX_DIR, seed=int(w["order_index"]))
+                bars = bars + slabs        # hitting the wall is a crash too
+            self._window_bodies.append(bars)
 
     # ---- gym API ------------------------------------------------------------
     def reset(self, seed=None, options=None):

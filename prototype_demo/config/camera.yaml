@@ -1,0 +1,99 @@
+# 시뮬레이션 카메라 규격 (spec §2 / §6)
+#
+# 목적: 시뮬을 돌릴 때 이 파일 하나만 읽어서 카메라를 세팅한다.
+#       남의 파일(overall_gilnam/vision/synth_intrinsics.yaml, 태민 노드 상수)은
+#       건드리지 않고, 확정되면 그때 이 값을 그대로 옮겨 적는다.
+#
+# 상태: **잠정** (윤호 결정, 2026-08-17). spec §7 "§6 intrinsics 기입" 항목의 후보값.
+#       회의 확정 전까지 팀 파일에 반영하지 않는다.
+
+meta:
+  status: provisional          # provisional | confirmed
+  decided_by: 윤호
+  decided_on: 2026-08-17
+  spec_ref: window_detection_spec_v0.2.md §2, §6
+  note: >
+    현재 팀 전체가 쓰는 fx=fy=600 (HFOV 93.7°) 은 길남 synth_intrinsics.yaml 의
+    placeholder 이며 근거가 없다. 아래 값은 근거를 갖고 고른 후보.
+
+# ---------------------------------------------------------------------------
+# 확정 대상 — 시뮬 카메라
+# ---------------------------------------------------------------------------
+camera:
+  resolution:
+    width: 1280              # spec §2 — 모든 corner/center 픽셀 좌표의 기준 해상도
+    height: 720
+
+  # 핀홀 intrinsics. fx = (width/2) / tan(hfov/2)
+  intrinsics:
+    fx: 763.0
+    fy: 763.0
+    cx: 640.0
+    cy: 360.0
+    distortion: []           # 무왜곡 (시뮬 카메라 관례)
+
+  fov:
+    horizontal_deg: 80.0
+    vertical_deg: 50.5
+
+  framerate_hz: 30           # §5 스트림 타임스탬프 기준
+  color_format: RGB
+
+# ---------------------------------------------------------------------------
+# 왜 80° 인가 — 트레이드오프 실측 (2026-08-17)
+# ---------------------------------------------------------------------------
+# corner 픽셀 오차는 화각과 무관하게 대략 일정하므로(검출기 성질), fx 가 클수록
+# 같은 픽셀 오차의 *각오차*가 작아지고 삼각측량 3D 오차가 줄어든다.
+# 반대로 화각이 좁으면 통과 직전 창문이 프레임을 벗어나고 VIO 특징점이 준다.
+#
+#  HFOV   fx    VFOV   10m의 1m창문   8.87px 각오차 → 5m 횡오차   1m창문 프레임유지 최소거리
+#   60°  1109  36.0°      111 px         8.00 mrad     40 mm            0.87 m
+#   70°   914  43.0°       91 px         9.70 mrad     49 mm            0.71 m
+#   80°   763  50.5°       76 px        11.63 mrad     58 mm            0.60 m   <-- 채택
+#   90°   640  58.7°       64 px        13.86 mrad     69 mm            0.50 m
+#   94°   597  62.2°       60 px        14.86 mrad     74 mm            0.47 m   (현 placeholder)
+#  120°   370  88.5°       37 px        24.01 mrad    120 mm            0.29 m
+#
+# 채택 근거:
+#   1. margin 이 현재 FAIL 이고 씬 최악 창문의 기하 여유가 68.9 mm 뿐이다
+#      (overall_gilnam/docs/eval_target_derivation.md v2). 삼각측량 오차를 줄이는 것이
+#      최우선이고, 94° -> 80° 로 5m 횡오차가 74 -> 58 mm (22% 개선).
+#   2. 원거리 검출은 10m 에서 76 px 로 충분 (학습 far bin 6~10m).
+#   3. "통과 직전 corner 프레임 이탈"은 화각이 아니라 정책 C(visibility=0)로 처리하기로
+#      2026-08-11 잠정 확정됨 — 화각으로 풀 문제가 아니다.
+#   4. VIO 는 80° 면 동작한다 (RealSense D435i RGB 69°, D455 90° 가 실제 사용례).
+#
+# 대안 (실기 센서를 먼저 정하는 경우 — 2학기 sim-to-real 갭이 더 작아짐):
+#   RealSense D435i  HFOV 69°  -> fx = fy = 931.0   (IMU 내장, 태민 카메라-IMU 외부파라미터도 해소)
+#   RealSense D455   HFOV 90°  -> fx = fy = 640.0
+#   OAK-D            HFOV 81°  -> fx = fy = 752.0
+# 실기 기종이 확정되면 위 intrinsics 를 그 값으로 교체하고 status: confirmed 로 바꿀 것.
+
+# ---------------------------------------------------------------------------
+# 이 값을 받아가야 하는 곳 (확정 시 반영 — 지금은 반영하지 않음)
+# ---------------------------------------------------------------------------
+consumers:
+  - path: overall_gilnam/vision/synth_intrinsics.yaml
+    what: width/height/fx/fy/cx/cy/distortion 숫자만 교체 (길남 소유, 스키마 동일)
+  - path: visual_imaging_taemin/window_recon_node.py
+    what: FX/FY/CX/CY 하드코딩 상수 (현재 600/600/640/360)
+  - path: visual_imaging_taemin/window_sim_node.py
+    what: 동일
+  - path: reinforcement_yunho/calib/kalibr_imucam_chain.yaml
+    what: cam0.intrinsics [fx, fy, cx, cy] + resolution — scripts/gen_intrinsics.py 로 생성
+  - path: window_detection_spec_v0.2.md
+    what: §6 intrinsics 표 기입 (spec §7 잔여 항목 체크)
+
+# 재생성 명령 (길남 스키마 파일 형태로):
+#   cd reinforcement_yunho
+#   python3 scripts/gen_intrinsics.py --width 1280 --height 720 --hfov 80
+
+# ---------------------------------------------------------------------------
+# 영향 범위 — 이 값을 바꾸면 다시 계산해야 하는 것
+# ---------------------------------------------------------------------------
+# 학습 가중치는 영향 없음 (YOLO 는 픽셀만 보고 intrinsics 를 쓰지 않는다).
+# 다만 아래는 전부 재계산 대상:
+#   - 삼각측량 3D 복원 오차 (eval_recon3d, e2e_rehearsal)
+#   - margin 역산 (eval_target_derivation.md)
+#   - scan.rate_rad_s (scan_rate_estimate.md)
+#   - GT 라벨 (코너 3D -> 픽셀 투영) => 데이터셋 재생성 권장
