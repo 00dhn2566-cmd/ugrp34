@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-18 — 윤호 PyBullet 프로토타입 + 안건 격상 (길남 정리)
+
+**TL;DR**: 윤호가 `feat/pybullet-prototype-pipeline`(미병합)에서 **진짜 이미지 → 실추론 → 복원 → 계획 E2E를 최초 달성**. 그 과정에서 "창문을 채우면 앞 창문이 뒤를 가려 색 판정·삼각측량이 깨진다"를 실증 → 회의 안건 A2(창문 시각 정의)를 **테두리 기준 확정 제안**으로 격상, intrinsics 후보(fx=763, HFOV 80°) 확정 안건 A2-b 추가. [meeting_brief](overall_gilnam/docs/meeting_brief_2026-08-11.md) 갱신됨.
+
+- **윤호**: 병합 요청 2건 (`feat/pybullet-prototype-pipeline`, `feat/rl-seam-format-alignment`) / PyBullet 파인튜닝은 2차 학습 선행 실험으로, 본 학습은 외관 랜덤화 스펙과 합치기
+- **태민**: 복원 LS의 conf 미가중·아웃라이어 제거 부재 (윤호 발견, `prototype_demo/overrides/`에 대안 — 반영 여부는 태민 판단)
+- **전원**: 8/11 절의 액션은 그대로 유효
+
+---
+
 ## 2026-08-11 — 8월 둘째 주 묶음 (길남)
 
 **TL;DR**: margin 역산이 v2로 정정되어 **현 검출 모델은 사실상 전 margin FAIL → 재학습 공식 채택**. 웨이포인트 계획기·E2E 리허설 신설, 전 코드 감사에서 이음새 이슈 다수 발견, 잠정 확정 4건. **회의 전이라도 [meeting_brief_2026-08-11](overall_gilnam/docs/meeting_brief_2026-08-11.md) 한 장만 읽으면 됩니다.**
