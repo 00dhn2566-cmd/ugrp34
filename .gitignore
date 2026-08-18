@@ -21,3 +21,6 @@ control_seoungjin/output/
 
 # vision 학습 데이터셋 (로컬 전용, git 미포함)
 window_dataset/
+
+# 랩미팅 발표 자료 (로컬 전용 — 팀 공유 결정 전까지 커밋 제외)
+labmeeting/
