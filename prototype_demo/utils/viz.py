@@ -70,3 +70,37 @@ def legend_once(ax, seen: set, key: str, label: str) -> str | None:
         return None
     seen.add(key)
     return label
+
+
+# --------------------------------------------------------------------------- #
+# GIF/도형 오버레이용 소도구
+#
+# 원래 make_gif.project / scan_gif.cam_axes 에 있었다. window_flight 가 그 둘만
+# 쓰려고 모듈을 import 했는데, scan_gif 가 최상위에서 traj_manager(44 KB 상태머신)
+# 를 끌고 오는 바람에 GIF 좌표 계산 하나 때문에 상태머신 전체가 로드됐다.
+# 여기로 옮겨서 그 사슬을 끊는다.
+# --------------------------------------------------------------------------- #
+
+def cam_axes(yaw: float):
+    """수평 카메라의 (forward, right, up). 이 리포 규약: image-right = world −y."""
+    import numpy as np
+    f = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+    r = np.cross(f, [0, 0, 1.0]); r /= np.linalg.norm(r)
+    u = np.cross(r, f)
+    return f, r, u
+
+
+def project(pts_w, view, proj, W, H):
+    """월드 점 -> 화면 픽셀. 카메라 뒤면 None. view/proj 는 pybullet 의 열우선 16개."""
+    import numpy as np
+    V = np.asarray(view, float).reshape(4, 4).T
+    P = np.asarray(proj, float).reshape(4, 4).T
+    out = []
+    for q in np.atleast_2d(pts_w):
+        clip = P @ V @ np.array([q[0], q[1], q[2], 1.0])
+        if clip[3] <= 1e-6:
+            out.append(None)
+            continue
+        ndc = clip[:3] / clip[3]
+        out.append(((ndc[0] * 0.5 + 0.5) * W, (1.0 - (ndc[1] * 0.5 + 0.5)) * H))
+    return out

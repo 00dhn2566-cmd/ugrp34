@@ -17,12 +17,35 @@ Isaac Sim 없이 **PyBullet** 위에서 파이프라인을 끝에서 끝까지 �
 ## 빠른 시작
 
 ```bash
-bash prototype/scripts/setup.sh          # conda 환경 'ugrp' (GPU 없으면 --cpu)
+bash prototype_demo/scripts/setup.sh     # conda 환경 'ugrp' (GPU 없으면 --cpu)
 conda activate ugrp
-# prototype/model/ 에 가중치 넣기 (model/README.md 참고)
-bash prototype/scripts/run_pipeline.sh   # 전 구간 데모
-bash prototype/scripts/run_rl.sh         # 학습된 PPO 정책 비행 평가
+bash prototype_demo/control/build.sh     # 성진 제어기 ctypes 브리지 빌드
+# prototype_demo/model/ 에 가중치 넣기 (model/README.md 참고)
+
+cd prototype_demo
+python window_flight.py                          # GT 계획으로 창문 통과 (제어 검증)
+python window_flight.py --seq                    # 비전만으로 순차 통과 (GT 미사용)
+python window_flight.py --n-windows 10 --merge-m 0.60   # 10창문
 ```
+
+### window_flight.py 가 전부입니다
+
+계획 → 궤적 → 성진 제어기 → PyBullet 물리 → (선택) 관측·복원·재계획까지 한 파일에서
+돕니다. 주요 스위치:
+
+| 스위치 | 하는 일 |
+|---|---|
+| `--seq` | 목표 색만 마스킹 + 같은 색 중 최대 박스 1개로 창문을 하나씩 비전으로 찾아 통과 |
+| `--observe` | GT 계획으로 날면서 관측·복원 (복원 정확도 측정용) |
+| `--replan` | 조금 날아 관측 → 비전으로 재계획 → 나머지 통과 |
+| `--gif PATH` | 3인칭(`_3p`)·1인칭(`_fpv`) GIF 두 개 |
+| `--export-euroc DIR` | EuRoC MAV(MH) 포맷 덤프. IMU 200 Hz + 카메라 20 Hz + GT |
+| `--merge-m` | 궤적 웨이포인트 중복제거 반경. **창문이 많으면 0.6 필요** (아래) |
+
+**`--merge-m` 주의.** 플래너 게이트 간격이 `2.5, 0.25, 2.5, 0.30 …` 으로 극단적으로
+불균등한데, 성진의 7차 최소시간 다항식이 그 짧은 구간마다 오버슛했다가 되돌아온다.
+창문 3개는 후퇴폭 1.12 m 로 버티지만 10개는 2.59 m 라 t=18 s 에 전복한다. 중복제거
+반경을 0.60 m 로 올리면 그 짧은 구간이 사라져 후퇴폭이 0.70 m 로 내려가고 완주한다.
 
 ## 구조
 
@@ -39,21 +62,21 @@ prototype_demo/
 ├── overrides/             ★ 팀 코드를 우리 입맛대로 고친 버전 (원본은 불변)
 │   ├── detections.py      §5 검출 스트림 후처리 (중복 표 제거, conf/크기 필터)
 │   ├── recon_rays.py      태민 수치 경로 + conf 가중 + Huber IRLS
+│   ├── frames.py          T_imu_cam 을 표준 전방 카메라 값으로 (OpenVINS 규약)
 │   └── README.md          뭘 왜 바꿨는지 + 측정 결과
 ├── module/                태민 코드 연결 (그의 파일 무수정)
 │   ├── contract.py        그의 상수를 AST 로 읽음 + ROS 스텁
 │   └── taemin_bridge.py   observe / run_offline / run_ros_publisher
 ├── scripts/
 │   ├── setup.sh           venv 환경 구성 (ROS2 rclpy 때문에 conda 아님)
-│   ├── run_pipeline.sh    이미지 → 검출 → 삼각측량 → 웨이포인트
-│   ├── run_taemin.sh      태민 노드 경로
-│   ├── run_rl.sh          PPO 정책 평가
 │   ├── compare_weights.py 가중치 세대 비교 (v1 vs v2)
-│   └── compare_recon.py   복원 방식 비교 (태민 원본 vs overrides)
-├── pipeline_demo.py       전 구간 실행기 (길남 경로)
-├── taemin_demo.py         태민 노드 경로 (--override 로 우리 버전)
-├── rl_demo.py             PPO 정책 평가
-├── render_status.py       현황 그림 5종
+│   ├── compare_recon.py   복원 방식 비교 (태민 원본 vs overrides)
+│   ├── sweep_layout.py    모터 배정 전수조사 (96조합 -> [3,2,1,0])
+│   └── tune_gains.py      제어 게인 스윕
+├── window_flight.py       **본체** — 계획→궤적→제어→물리→관측→재계획
+├── planner.py             통과 후 거동까지 정하는 플래너 (길남 원본이 안 하는 부분)
+├── traj.py                궤적 생성기 3종 (성진 flythrough 어댑터 / 자체 2종)
+├── export_euroc.py        EuRoC MAV(MH) 포맷 덤프 (IMU·카메라·GT, 노이즈 포함)
 └── out/                   산출물 (프레임·그림)
 ```
 

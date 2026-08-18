@@ -161,3 +161,57 @@ def count(samples: Sequence[dict]) -> Dict[str, int]:
             seen[w["color"]] = seen.get(w["color"], 0) + 1
         dup += sum(v - 1 for v in seen.values() if v > 1)
     return {"frames_with_det": n_frames, "detections": n_det, "duplicate_votes": dup}
+
+
+#: 통과 순서 = 색 (임무 규격 §4). 씬이 r,g,b 를 순환하므로 k 번째 창문의 색.
+PASS_ORDER = ("red", "green", "blue")
+
+
+def target_color(k: int) -> str:
+    return PASS_ORDER[k % len(PASS_ORDER)]
+
+
+def mask_target(msg: Dict, color: str, order_index: int,
+                largest_only: bool = True) -> Dict:
+    """지금 통과할 창문 **하나만** 남긴다.
+
+    두 단계로 거른다.
+
+    1. **색 마스킹** — 목표 색이 아닌 검출은 아예 버린다. 창문이 3개를 넘으면
+       색이 순환해서 order_index 가 겹치는데, 어차피 한 번에 한 창문만 통과하므로
+       나머지 색은 볼 이유가 없다. 다른 색 창문이 화각에 들어와도 무시된다.
+
+    2. **최대 박스 1개** — 같은 색이 여러 개 보이면 (30 m 복도에 red 가 4개 있으면
+       출발 지점에서 4개가 한 화면에 겹친다) 가장 큰 것만 남긴다. 창문 크기가
+       고만고만하니 화면에서 큰 쪽이 가까운 쪽이다. 뒤쪽 동색 창문의 광선이
+       섞이는 걸 막는다 — 실측으로 그게 10창문 복원을 1091 mm 로 망가뜨렸다.
+
+    남은 검출의 order_index 를 목표 인덱스로 덮어써서 복원기가 올바른 바구니에
+    넣게 한다.
+    """
+    picks = [w for w in msg["windows"] if w.get("color") == color]
+    if largest_only and len(picks) > 1:
+        def area(w):
+            xs = [q[0] for q in w["corners"]]
+            ys = [q[1] for q in w["corners"]]
+            return (max(xs) - min(xs)) * (max(ys) - min(ys))
+        picks = [max(picks, key=area)]
+    out = dict(msg)
+    out["windows"] = [dict(w, order_index=order_index) for w in picks]
+    return out
+
+
+def mask_samples(samples: Sequence[dict], color: str, order_index: int,
+                 largest_only: bool = True) -> List[dict]:
+    """샘플 전체에 mask_target 적용 (원본 불변, 사본 반환)."""
+    out = []
+    for s in samples:
+        s2 = copy.copy(s)
+        det = s.get("detection")
+        if det is None:
+            out.append(s2)
+            continue
+        m = mask_target(det, color, order_index, largest_only)
+        s2["detection"] = m if m["windows"] else None
+        out.append(s2)
+    return out
