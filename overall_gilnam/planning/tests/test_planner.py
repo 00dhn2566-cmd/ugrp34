@@ -311,3 +311,36 @@ def test_v2_matches_yunho_wrapper_reference():
     ], atol=1e-6)
     assert p2.passes == 4 and p2.shrink == pytest.approx(0.4)
     assert not p2.ok and p2.backtrack_m == pytest.approx(0.5) and len(p2.warnings) == 2
+
+
+def test_v3_leg_diagnostics_always_present():
+    p = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 9.0)]}, V2)
+    assert len(p.leg_lengths) == len(p.waypoints) - 1
+    assert p.min_leg_m == pytest.approx(min(p.leg_lengths))
+    assert p.merged == [] and p.exit_shrunk == {}
+
+
+def test_v3_merge_short_leg_between_windows():
+    # 간격 2.6m: exit0(x=5.0)→approach1(x=5.1) 구간 0.1m < min_leg 0.6 → 중점 병합
+    cfg = dict(V2, min_leg=0.6)
+    p = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 6.6)]}, cfg)
+    assert "exit0+approach1" in p.labels
+    assert "exit0" not in p.labels and "approach1" not in p.labels
+    i = p.labels.index("exit0+approach1")
+    assert p.waypoints[i][0] == pytest.approx(5.05)          # 중점
+    assert p.merged == ["exit0+approach1"]
+    assert min(p.leg_lengths) >= 0.6 - 1e-9 or p.min_leg_m == pytest.approx(min(p.leg_lengths))
+
+
+def test_v3_never_merges_pass_line_or_start():
+    cfg = dict(V2, min_leg=5.0)   # 극단값: 모든 구간이 짧음
+    p = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 9.0)]}, cfg)
+    assert p.labels[0] == "start"                              # start 고정
+    for k in (0, 1):
+        assert not any(l.startswith(f"approach{k}+exit{k}") or l == f"approach{k}+exit{k}" for l in p.labels)
+    assert p.labels[-1] == "stop"                              # stop 고정
+
+
+def test_v3_off_when_key_absent():
+    a = plan_waypoints_v2(STATE, {"windows": [_win(0, 4.0), _win(1, 6.6)]}, V2)
+    assert a.merged == [] and "exit0" in a.labels and "approach1" in a.labels

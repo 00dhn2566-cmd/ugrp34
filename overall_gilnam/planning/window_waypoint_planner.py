@@ -196,6 +196,10 @@ class Plan:
     passes: int = 0
     shrink: float = 1.0
     backtrack_m: float = 0.0
+    leg_lengths: list = field(default_factory=list)   # v3: 연속 웨이포인트 간 거리 진단
+    min_leg_m: float = 0.0                            # v3: leg_lengths 최솟값
+    merged: list = field(default_factory=list)        # v3: 병합된 라벨(예: "exit0+approach1")
+    exit_shrunk: dict = field(default_factory=dict)   # v3: 창문 k → 축소된 d_exit (Task 2)
 
     @property
     def ok(self):
@@ -236,22 +240,63 @@ def _build_v2(windows, start, d_app, d_exit, margin, force_h, gate_z, align_back
     return pts, labels, backtrack
 
 
+def _merge_short_legs(points, labels, min_leg):
+    """왼쪽부터 1패스: (p_i, p_{i+1}) 거리 < min_leg 이고 금지 쌍이 아니면 중점으로 병합.
+
+    금지 쌍(병합 안 함): approach{k}↔exit{k}(같은 창문 통과선), start가 왼쪽(시작점은 드론
+    실제 위치라 이동 불가), stop이 오른쪽(종점 고정). 병합 후 재검사는 하지 않는다(과병합 방지).
+    """
+    n = len(points)
+    out_pts, out_labels, merged = [], [], []
+    i = 0
+    while i < n - 1:
+        a, b = labels[i], labels[i + 1]
+        protected = (a == "start" or b == "stop"
+                     or (a.startswith("approach") and b.startswith("exit") and a[len("approach"):] == b[len("exit"):]))
+        dist = float(np.linalg.norm(points[i + 1] - points[i]))
+        if dist < min_leg and not protected:
+            label = f"{a}+{b}"
+            out_pts.append((points[i] + points[i + 1]) / 2.0)
+            out_labels.append(label)
+            merged.append(label)
+            i += 2
+        else:
+            out_pts.append(points[i])
+            out_labels.append(a)
+            i += 1
+    if i == n - 1:
+        out_pts.append(points[i])
+        out_labels.append(labels[i])
+    return out_pts, out_labels, merged
+
+
 def plan_waypoints_v2(drone_state, window_map, cfg):
-    """v2: 후진 완화·정렬점·정지점·재계획 (윤호 프로토타입 래퍼 요구사항 흡수, 2026-08-18)."""
+    """v2: 후진 완화·정렬점·정지점·재계획 (윤호 프로토타입 래퍼 요구사항 흡수, 2026-08-18).
+
+    v3 (2026-08-18): cfg에 min_leg가 있으면 짧은 구간(통과선·start·stop 제외)을 중점으로
+    병합 — 윤호 PyBullet 실측(--merge-m) 근거. leg_lengths/min_leg_m 진단은 항상 계산.
+    """
     windows = ordered_open_windows(window_map)
     if not windows:
         raise ValueError("열린 창문이 없음 — 계획할 대상 없음")
     force_h = bool(cfg.get("force_horizontal_normal", False))
     gate_z = tuple(cfg["gate_z"]) if cfg.get("gate_z") else None
     shrinks = list(cfg.get("shrink", [1.0]))
+    min_leg = cfg.get("min_leg")
     best = None
     for i in range(int(cfg.get("max_passes", 1))):
         s = shrinks[min(i, len(shrinks) - 1)]
         pts, labels, back = _build_v2(windows, drone_state["position"], cfg["d_app"] * s, cfg["d_exit"] * s,
                                       cfg["clearance_margin"], force_h, gate_z,
                                       cfg.get("align_back", 0.45), cfg.get("stop_ahead", 0.6))
+        merged = []
+        if min_leg:
+            pts, labels, merged = _merge_short_legs(pts, labels, min_leg)
+        leg_lengths = [float(np.linalg.norm(pts[j + 1] - pts[j])) for j in range(len(pts) - 1)]
+        min_leg_m = min(leg_lengths) if leg_lengths else 0.0
         warns = crossing_warnings([p.tolist() for p in pts], windows, cfg["clearance_margin"])
-        plan = Plan([[float(v) for v in p] for p in pts], labels, warns, i + 1, s, back)
+        plan = Plan([[float(v) for v in p] for p in pts], labels, warns, i + 1, s, back,
+                     leg_lengths=leg_lengths, min_leg_m=min_leg_m, merged=merged)
         if best is None or (len(plan.warnings), plan.backtrack_m) < (len(best.warnings), best.backtrack_m):
             best = plan
         if plan.ok:
