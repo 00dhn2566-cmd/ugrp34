@@ -24,8 +24,8 @@ for _sub in ("vision", "planning"):
 from noisy_stream import DEFAULT_DROP, DEFAULT_MEAN_PX, DEFAULT_P95_PX, P_TAIL, load_records, make_noisy_records  # noqa: E402
 from eval_recon3d import reconstruct_windows  # noqa: E402
 from window_waypoint_planner import (  # noqa: E402
-    PLANNING_DIR, UP, crossing_warnings, gate_points, load_planner_config,
-    normal_from_corners, plan_waypoints,
+    PLANNING_DIR, UP, assemble_window_map, crossing_warnings, format_warning,
+    gate_points, load_planner_config, plan_waypoints,
 )
 
 SAMPLE = GILNAM / "vision" / "sample_stream"
@@ -38,30 +38,6 @@ def load_inputs():
     scene_gt = json.loads((SAMPLE / "scene_gt.json").read_text(encoding="utf-8"))
     cfg = load_planner_config(PLANNING_DIR / "planner_limits.yaml")
     return records, scene_gt, cfg
-
-
-def assemble_window_map(recon):
-    """reconstruct_windows 결과 → §6.2 창문 맵. 복원 불가 창문은 제외하고 failed로 보고."""
-    windows, failed = [], []
-    for order_index in sorted(recon):
-        r = recon[order_index]
-        est = r["corners_3d_est"]
-        if est is None:
-            failed.append(order_index)
-            continue
-        est = np.asarray(est, dtype=float)
-        tl, tr, br, bl = est
-        w = (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2.0
-        h = (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2.0
-        windows.append({
-            "order_index": order_index,
-            "color": r["color"],
-            "corners_3d": est.tolist(),
-            "center": est.mean(axis=0).tolist(),
-            "normal": normal_from_corners(est).tolist(),  # 부호 확정 공식 (spec §3.1)
-            "size_wh": [float(w), float(h)],
-        })
-    return {"windows": windows}, failed
 
 
 def _pass_point(a, b, center, n):
@@ -83,7 +59,8 @@ def run_scale(records, scene_gt, cfg, scale, seed=1234):
     start = records[0]["pose"]["position"]
     warnings = []
     wc = plan_waypoints({"position": start}, wmap, cfg, warn=warnings.append)
-    warnings += crossing_warnings(wc.waypoints, scene_gt["windows"], cfg["clearance_margin"])
+    warnings += [format_warning(x) for x in
+                 crossing_warnings(wc.waypoints, scene_gt["windows"], cfg["clearance_margin"])]
 
     gt_by_order = {w["order_index"]: w for w in scene_gt["windows"]}
     rows = []

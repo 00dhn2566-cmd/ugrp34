@@ -73,12 +73,13 @@ def gate_points(window, d_app, d_exit, clearance_margin):
 
 
 def crossing_warnings(waypoints, windows, clearance_margin):
-    """연속 웨이포인트 구간이 창문 벽 평면을 개구부 밖에서 교차하면 경고 문자열 리스트.
+    """연속 웨이포인트 구간이 창문 벽 평면을 개구부 밖에서 교차하면 구조화 경고 dict 리스트.
 
     벽의 실제 범위는 스펙에 없어 거부 판단이 불가 — v1은 경고만 (설계 §알고리즘 5).
     개구부 내부 판정: 평면 교차점을 창문 폭축(cross(UP, n̂))·높이축(UP)에 투영,
     |u| ≤ w/2−margin ∧ |v| ≤ h/2−margin.
     높이축은 world UP 사용 — 수직 창문(pitch 0) 가정, 기울어진 창문에선 세로 오프셋을 과소평가.
+    사람용 문자열이 필요하면 format_warning으로 변환.
     """
     warns = []
     for w in windows:
@@ -103,7 +104,7 @@ def crossing_warnings(waypoints, windows, clearance_margin):
         width_axis = width_axis / wa_len
         half_w = w["size_wh"][0] / 2.0 - clearance_margin
         half_h = w["size_wh"][1] / 2.0 - clearance_margin
-        for a, b in zip(waypoints, waypoints[1:]):
+        for seg_i, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
             a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
             da, db = np.dot(a - center, n), np.dot(b - center, n)
             if da * db >= 0:  # 평면을 안 가로지름 (한 점이 평면 위인 경우 포함)
@@ -111,12 +112,19 @@ def crossing_warnings(waypoints, windows, clearance_margin):
             p = a + (b - a) * (da / (da - db))  # 평면 교차점
             u, v = np.dot(p - center, width_axis), np.dot(p - center, UP)
             if abs(u) > half_w or abs(v) > half_h:
-                warns.append(
-                    f"경고: 구간 {np.round(a, 2).tolist()}→{np.round(b, 2).tolist()}가 "
-                    f"창문 order_index={w['order_index']}({w.get('color', '?')}) 평면을 "
-                    f"개구부 밖(u={u:.2f}, v={v:.2f})에서 교차"
-                )
+                warns.append({
+                    "order_index": w["order_index"], "color": w.get("color", "?"),
+                    "seg_index": seg_i, "a": a.tolist(), "b": b.tolist(),
+                    "u": float(u), "v": float(v), "half_w": float(half_w), "half_h": float(half_h),
+                })
     return warns
+
+
+def format_warning(w):
+    """구조화 경고 → 사람용 문자열 (v1 문자열 형식 유지)."""
+    return (f"경고: 구간 {np.round(w['a'], 2).tolist()}→{np.round(w['b'], 2).tolist()}가 "
+            f"창문 order_index={w['order_index']}({w['color']}) 평면을 "
+            f"개구부 밖(u={w['u']:.2f}, v={w['v']:.2f})에서 교차")
 
 
 def ordered_open_windows(window_map):
@@ -125,6 +133,33 @@ def ordered_open_windows(window_map):
         (w for w in window_map["windows"] if not w.get("passed", False)),
         key=lambda w: w["order_index"],
     )
+
+
+def assemble_window_map(recon):
+    """reconstruct_windows 결과 → §6.2 창문 맵. 복원 불가 창문은 제외하고 failed로 보고.
+
+    실전 소비처(윤호 pipeline_demo) 생겨 planning으로 승격 (2026-08-18).
+    """
+    windows, failed = [], []
+    for order_index in sorted(recon):
+        r = recon[order_index]
+        est = r["corners_3d_est"]
+        if est is None:
+            failed.append(order_index)
+            continue
+        est = np.asarray(est, dtype=float)
+        tl, tr, br, bl = est
+        w = (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2.0
+        h = (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2.0
+        windows.append({
+            "order_index": order_index,
+            "color": r["color"],
+            "corners_3d": est.tolist(),
+            "center": est.mean(axis=0).tolist(),
+            "normal": normal_from_corners(est).tolist(),  # 부호 확정 공식 (spec §3.1)
+            "size_wh": [float(w), float(h)],
+        })
+    return {"windows": windows}, failed
 
 
 def load_planner_config(path):
@@ -144,7 +179,7 @@ def plan_waypoints(drone_state, window_map, cfg, warn=print):
         points.append([float(c) for c in approach])
         points.append([float(c) for c in exit_])
     for msg in crossing_warnings(points, windows, cfg["clearance_margin"]):
-        warn(msg)
+        warn(format_warning(msg))
     wc = WaypointsConfig(waypoints=points, limits=dict(cfg["limits"]), dt=float(cfg["dt"]))
     wc.validate()  # 성진 스키마 검증 — 실패 시 여기서 즉시 드러남
     return wc

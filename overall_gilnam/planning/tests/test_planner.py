@@ -109,7 +109,7 @@ def test_crossing_warning_outside_opening():
            "normal": [-1.0, 0.0, 0.0], "size_wh": [1.0, 1.0]}
     seg = [[0.0, 2.0, 1.5], [10.0, 2.0, 1.5]]      # x=5 평면을 y=2.0에서 관통
     warns = crossing_warnings(seg, [win], clearance_margin=0.35)
-    assert len(warns) == 1 and "order_index=0" in warns[0]
+    assert len(warns) == 1 and warns[0]["order_index"] == 0
 
 
 def test_no_warning_through_opening():
@@ -165,3 +165,32 @@ def test_gate_points_requires_normal_or_corners():
     bare = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 1.5], "size_wh": [1.0, 1.2]}
     with pytest.raises(ValueError, match="corners_3d"):
         gate_points(bare, 1.5, 1.0, 0.35)
+
+
+from window_waypoint_planner import assemble_window_map, format_warning
+
+
+def test_crossing_warnings_structured():
+    win = {"order_index": 0, "color": "red", "center": [5.0, 0.0, 1.5],
+           "normal": [-1.0, 0.0, 0.0], "size_wh": [1.0, 1.0]}
+    seg = [[0.0, 2.0, 1.5], [10.0, 2.0, 1.5]]
+    warns = crossing_warnings(seg, [win], 0.35)
+    assert len(warns) == 1
+    w = warns[0]
+    assert w["order_index"] == 0 and w["seg_index"] == 0
+    # width_axis = cross(UP, n) — n=(-1,0,0) → width_axis=(0,-1,0), 실제 부호는 -2.0 (기존 기하 불변)
+    assert w["u"] == pytest.approx(-2.0, abs=1e-6) and abs(w["v"]) < 1e-9
+    assert w["half_w"] == pytest.approx(0.15) and w["half_h"] == pytest.approx(0.15)
+    s = format_warning(w)
+    assert "order_index=0" in s and "개구부 밖" in s
+
+
+def test_assemble_window_map_moved_to_planning():
+    recon = {
+        1: {"color": "green", "n_pairs": 5, "corners_3d_est": np.array(
+            [[4.0, 0.6, 2.0], [4.0, -0.6, 2.0], [4.0, -0.6, 1.0], [4.0, 0.6, 1.0]])},
+        0: {"color": "red", "corners_3d_est": None, "n_pairs": 0},
+    }
+    wmap, failed = assemble_window_map(recon)
+    assert failed == [0] and [w["order_index"] for w in wmap["windows"]] == [1]
+    assert np.dot(wmap["windows"][0]["normal"], [-1.0, 0.0, 0.0]) > 0.999  # 부호 확정 공식
