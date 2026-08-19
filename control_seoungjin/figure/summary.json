@@ -1,0 +1,742 @@
+{
+ "missions": [
+  {
+   "T_traj_s": 3.63,
+   "T_sim_s": 11.63,
+   "track_rms_x_cm": 1.8491970937118778,
+   "track_rms_y_cm": 0.08248436589635044,
+   "track_rms_z_cm": 2.2061579366050457,
+   "track_rms_3d_cm": 2.8798379126706437,
+   "track_max_3d_cm": 5.77378776281952,
+   "endpoint_err_cm": 0.24959855162318567,
+   "z_sag_cm": 5.773787645400996,
+   "z_dev_max_cm": 0.32697895271494026,
+   "overshoot_cm": 3.0004021967030337,
+   "pitch_rms_fly_deg": 2.512068176890071,
+   "pitch_peak_deg": 4.85585798763467,
+   "pitch_tail_rms_deg": 0.0788000408747235,
+   "roll_rms_fly_deg": 0.00657497170327729,
+   "roll_peak_deg": 0.01651589773564549,
+   "roll_tail_rms_deg": 0.000979110974622827,
+   "att_tail_rms_deg": 0.05572434432166395,
+   "hover_drift_cm": 1.1923203975639947,
+   "yaw_rms_fly_deg": 0.014101697719962395,
+   "prop_w_mean_rad_s": 624.894866269661,
+   "prop_w_max_rad_s": 824.4484844256505,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "step"
+  },
+  {
+   "T_traj_s": 3.98,
+   "T_sim_s": 11.98,
+   "track_rms_x_cm": 2.6775227506380106,
+   "track_rms_y_cm": 0.0898938350820293,
+   "track_rms_z_cm": 2.114169230410027,
+   "track_rms_3d_cm": 3.412758490808047,
+   "track_max_3d_cm": 5.77403172907248,
+   "endpoint_err_cm": 0.23247180438880724,
+   "z_sag_cm": 5.774015263967658,
+   "z_dev_max_cm": 0.3301420680116074,
+   "overshoot_cm": 4.018353251646034,
+   "pitch_rms_fly_deg": 3.5188403616705233,
+   "pitch_peak_deg": 6.171143836906486,
+   "pitch_tail_rms_deg": 0.11961200253382778,
+   "roll_rms_fly_deg": 0.006224833168195016,
+   "roll_peak_deg": 0.01632893996391177,
+   "roll_tail_rms_deg": 0.0019018531878142945,
+   "att_tail_rms_deg": 0.08458914881857016,
+   "hover_drift_cm": 2.1425536357966606,
+   "yaw_rms_fly_deg": 0.018747570929073382,
+   "prop_w_mean_rad_s": 625.2482222069542,
+   "prop_w_max_rad_s": 823.8634436395498,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "jitter_a"
+  },
+  {
+   "T_traj_s": 4.55,
+   "T_sim_s": 12.55,
+   "track_rms_x_cm": 2.391895588251619,
+   "track_rms_y_cm": 0.09295926515333708,
+   "track_rms_z_cm": 2.0654781589996145,
+   "track_rms_3d_cm": 3.1616460831946145,
+   "track_max_3d_cm": 5.773789627030988,
+   "endpoint_err_cm": 0.21317393069889487,
+   "z_sag_cm": 5.773789054931311,
+   "z_dev_max_cm": 0.32901735332213633,
+   "overshoot_cm": 3.2770833133725086,
+   "pitch_rms_fly_deg": 3.095947231352535,
+   "pitch_peak_deg": 5.799247274875309,
+   "pitch_tail_rms_deg": 0.07456569709161892,
+   "roll_rms_fly_deg": 0.005434754663019187,
+   "roll_peak_deg": 0.016763528339216873,
+   "roll_tail_rms_deg": 0.0007790602578450839,
+   "att_tail_rms_deg": 0.05272878776173609,
+   "hover_drift_cm": 1.1380716029514744,
+   "yaw_rms_fly_deg": 0.013294502969626063,
+   "prop_w_mean_rad_s": 625.5254731483637,
+   "prop_w_max_rad_s": 824.524142219902,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "jitter_b"
+  },
+  {
+   "T_traj_s": 9.82,
+   "T_sim_s": 17.82,
+   "track_rms_x_cm": 1.5791076879460588,
+   "track_rms_y_cm": 1.4810503910029749,
+   "track_rms_z_cm": 1.6508747963213628,
+   "track_rms_3d_cm": 2.7225868110951965,
+   "track_max_3d_cm": 5.768426278016277,
+   "endpoint_err_cm": 0.09729244549403394,
+   "z_sag_cm": 5.768425600091831,
+   "z_dev_max_cm": 1.0957368943577794,
+   "overshoot_cm": 3.0891214245573058,
+   "pitch_rms_fly_deg": 2.358572549198988,
+   "pitch_peak_deg": 5.6224921759991116,
+   "pitch_tail_rms_deg": 0.08003967214033614,
+   "roll_rms_fly_deg": 1.4559870313374605,
+   "roll_peak_deg": 3.6109883729672942,
+   "roll_tail_rms_deg": 0.015812802096958813,
+   "att_tail_rms_deg": 0.05769052706679877,
+   "hover_drift_cm": 1.1462196172442354,
+   "yaw_rms_fly_deg": 14.686734593627419,
+   "prop_w_mean_rad_s": 626.993772484196,
+   "prop_w_max_rad_s": 825.9809241646457,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "fly_through"
+  },
+  {
+   "T_traj_s": 9.07,
+   "T_sim_s": 17.07,
+   "track_rms_x_cm": 1.1369125115593457,
+   "track_rms_y_cm": 2.319443509302028,
+   "track_rms_z_cm": 1.4247929137522355,
+   "track_rms_3d_cm": 2.949986965880031,
+   "track_max_3d_cm": 4.992505192239835,
+   "endpoint_err_cm": 0.12011210215998891,
+   "z_sag_cm": 4.992501208846322,
+   "z_dev_max_cm": 0.44502093232237083,
+   "overshoot_cm": 2.2130204573659875,
+   "pitch_rms_fly_deg": 2.9361725752209082,
+   "pitch_peak_deg": 5.614719756103958,
+   "pitch_tail_rms_deg": 0.06657307736791995,
+   "roll_rms_fly_deg": 1.3422672476837105,
+   "roll_peak_deg": 3.750654869814255,
+   "roll_tail_rms_deg": 0.011387508878269849,
+   "att_tail_rms_deg": 0.047757983566560525,
+   "hover_drift_cm": 0.6929910546860043,
+   "yaw_rms_fly_deg": 13.589659612682173,
+   "prop_w_mean_rad_s": 628.5236732777289,
+   "prop_w_max_rad_s": 827.4241576482317,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "look_at"
+  },
+  {
+   "T_traj_s": 12.33,
+   "T_sim_s": 20.33,
+   "track_rms_x_cm": 0.6170733211276241,
+   "track_rms_y_cm": 0.2195563205034006,
+   "track_rms_z_cm": 1.3779187437423157,
+   "track_rms_3d_cm": 1.5256619959469624,
+   "track_max_3d_cm": 4.991506499139075,
+   "endpoint_err_cm": 0.08148517031914536,
+   "z_sag_cm": 4.9915018661768285,
+   "z_dev_max_cm": 0.17267253047983377,
+   "overshoot_cm": 0.23508761487587293,
+   "pitch_rms_fly_deg": 0.3680990768514806,
+   "pitch_peak_deg": 0.821602414494393,
+   "pitch_tail_rms_deg": 0.0030189174650011217,
+   "roll_rms_fly_deg": 0.43580931302264503,
+   "roll_peak_deg": 0.9552290969237799,
+   "roll_tail_rms_deg": 0.002345157377973136,
+   "att_tail_rms_deg": 0.0027031117057893326,
+   "hover_drift_cm": 0.24505505972180572,
+   "yaw_rms_fly_deg": 67.85739632390953,
+   "prop_w_mean_rad_s": 628.1804034746674,
+   "prop_w_max_rad_s": 827.3361757562722,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "scan"
+  },
+  {
+   "T_traj_s": 34.91,
+   "T_sim_s": 42.91,
+   "track_rms_x_cm": 1.4229679458608544,
+   "track_rms_y_cm": 1.4202086059850885,
+   "track_rms_z_cm": 0.49161276906939233,
+   "track_rms_3d_cm": 2.069665039124361,
+   "track_max_3d_cm": 5.23495083572311,
+   "endpoint_err_cm": 0.03261404080314895,
+   "z_sag_cm": 0.3817628487975372,
+   "z_dev_max_cm": 1.1040412475663341,
+   "overshoot_cm": 0.07692907639860133,
+   "pitch_rms_fly_deg": 2.4739917240377585,
+   "pitch_peak_deg": 6.7523788363104105,
+   "pitch_tail_rms_deg": 0.0025528728925142538,
+   "roll_rms_fly_deg": 0.40020933363413025,
+   "roll_peak_deg": 1.9067149210381387,
+   "roll_tail_rms_deg": 0.00012521364171722677,
+   "att_tail_rms_deg": 0.0018073237758362754,
+   "hover_drift_cm": 0.04030534896673952,
+   "yaw_rms_fly_deg": 15.21554069606189,
+   "prop_w_mean_rad_s": 629.9888211253983,
+   "prop_w_max_rad_s": 661.9306155331492,
+   "pass_track": true,
+   "pass_overshoot": true,
+   "pass_zdev": true,
+   "pass_drift": true,
+   "mission": "stop_batch"
+  }
+ ],
+ "step": [
+  {
+   "case": "1m",
+   "profile": "precision",
+   "rise_s": 0.8740000000000001,
+   "overshoot_pct": 5.942626728926337,
+   "settle2pct_s": 2.4700000000000006,
+   "sse_mm": -0.21400070200794374,
+   "t0": 3.002
+  },
+  {
+   "case": "1m",
+   "profile": "agile",
+   "rise_s": 0.9360000000000004,
+   "overshoot_pct": 1.311137474105628,
+   "settle2pct_s": 1.7560000000000002,
+   "sse_mm": -0.11167759223595919,
+   "t0": 3.002
+  },
+  {
+   "case": "0.1m",
+   "profile": "precision",
+   "rise_s": 0.5379999999999998,
+   "overshoot_pct": 49.25586720624899,
+   "settle2pct_s": 16.754,
+   "sse_mm": -0.0028157891679009284,
+   "t0": 3.002
+  },
+  {
+   "case": "0.1m",
+   "profile": "agile",
+   "rise_s": 0.492,
+   "overshoot_pct": 47.404675251963305,
+   "settle2pct_s": 16.646,
+   "sse_mm": -0.6417185112278928,
+   "t0": 3.002
+  }
+ ],
+ "ramp": [
+  {
+   "speed": "0.5mps",
+   "profile": "precision",
+   "lag_rms_cm": 6.245716486665597,
+   "lag_peak_cm": 10.761012797369007,
+   "resid_rms_cm": 0.058673163373424306
+  },
+  {
+   "speed": "0.5mps",
+   "profile": "agile",
+   "lag_rms_cm": 1.885547939392496,
+   "lag_peak_cm": 3.378673974873969,
+   "resid_rms_cm": 0.08540542661592013
+  },
+  {
+   "speed": "1.5mps",
+   "profile": "precision",
+   "lag_rms_cm": 4.823901600978585,
+   "lag_peak_cm": 8.662291015602896,
+   "resid_rms_cm": 0.1313340862007135
+  },
+  {
+   "speed": "1.5mps",
+   "profile": "agile",
+   "lag_rms_cm": 1.5728871005371414,
+   "lag_peak_cm": 2.780865841289104,
+   "resid_rms_cm": 0.19798292498882428
+  },
+  {
+   "speed": "2mps",
+   "profile": "precision",
+   "lag_rms_cm": 4.687214431726114,
+   "lag_peak_cm": 8.662291015602896,
+   "resid_rms_cm": 0.13138802025164312
+  },
+  {
+   "speed": "2mps",
+   "profile": "agile",
+   "lag_rms_cm": 1.518074369557768,
+   "lag_peak_cm": 2.780865841289104,
+   "resid_rms_cm": 0.12881830065795338
+  }
+ ],
+ "jitter": [
+  {
+   "profile": "precision",
+   "tail_pitch_rms_deg": 2.0723262515576546e-05,
+   "tail_pitch_peak_deg": 3.900448083019309e-05
+  },
+  {
+   "profile": "agile",
+   "tail_pitch_rms_deg": 0.17117821052955576,
+   "tail_pitch_peak_deg": 0.2745336267285419
+  }
+ ],
+ "battery": {
+  "hover_0kg": {
+   "att_rms_deg": 0.005119567691346218,
+   "att_peak_deg": 0.009614709178467951,
+   "z_min_m": 0.998793369623485,
+   "z_max_m": 1.00103548269535,
+   "z_sag_cm": 2.4615400717193037,
+   "drift_cm": 0.044855508472339586,
+   "yaw_wander_deg": 1.43321358354335e-05
+  },
+  "pulse_0kg": {
+   "precision": {
+    "peak_dev_deg": 10.12703162055639,
+    "t_recover_s": 5.25,
+    "z_dev_cm": 0.18578633366099773,
+    "xy_excursion_cm": 25.712091443294515,
+    "motor_diff_max_rad_s": 349.689299680209,
+    "motor_max_rad_s": 642.60201910993
+   },
+   "agile": {
+    "peak_dev_deg": 10.13299937910292,
+    "t_recover_s": 5.26,
+    "z_dev_cm": 0.18554848975300686,
+    "xy_excursion_cm": 25.72781946861585,
+    "motor_diff_max_rad_s": 349.99832480098,
+    "motor_max_rad_s": 642.800144445374
+   }
+  },
+  "alt_step_0kg": {
+   "rise_s": 0.9450000000000003,
+   "overshoot_cm": 0.9233337253049978,
+   "sse_mm": -0.0685938461599811,
+   "att_peak_deg": 0.01975084466548374,
+   "xy_excursion_cm": 0.10376429032710632
+  },
+  "yaw_step_0kg": {
+   "rise_s": 2.4149999999999996,
+   "overshoot_deg": 14.474854983534996,
+   "lag_at_90pct_s": 2.09,
+   "err_peak_deg": 62.04694814675862,
+   "settle_2deg_s": NaN,
+   "xy_excursion_cm": 0.10376429032710632,
+   "z_dev_cm": 0.10231847067199151
+  },
+  "diag_0kg": {
+   "track_rms_3d_cm": 13.2590940176209,
+   "track_max_cm": 27.596100102501524,
+   "z_dev_cm": 0.4100923741891971,
+   "end_err_cm": 0.7862374179080998,
+   "att_peak_deg": 19.755598461998865,
+   "roll_pitch_ratio": 0.9762477884627702
+  },
+  "wind_0kg": {
+   "바람 0 m/s": {
+    "xy_hold_cm": 0.006622588207994629,
+    "z_hold_cm": 0.1888809951250181,
+    "att_mean_deg": 0.0001419019621967075,
+    "att_rms_deg": 0.011644034998696108
+   },
+   "바람 5 m/s": {
+    "xy_hold_cm": 10.961476976356352,
+    "z_hold_cm": 0.2851251132690358,
+    "att_mean_deg": 0.9559862961712675,
+    "att_rms_deg": 1.714211756377766
+   }
+  },
+  "hover_1kg": {
+   "att_rms_deg": 0.0013565778457828546,
+   "att_peak_deg": 0.007144845911681739,
+   "z_min_m": 1.00116831522731,
+   "z_max_m": 1.00172772009583,
+   "z_sag_cm": 4.990743019314503,
+   "drift_cm": 0.20485127407803708,
+   "yaw_wander_deg": 0.02375746539450279
+  },
+  "pulse_1kg": {
+   "precision": {
+    "peak_dev_deg": 2.3312809546156945,
+    "t_recover_s": 0.7400000000000002,
+    "z_dev_cm": 0.1997557188559984,
+    "xy_excursion_cm": 4.3059563746042935,
+    "motor_diff_max_rad_s": 176.67571307397202,
+    "motor_max_rad_s": 719.22354902443
+   },
+   "agile": {
+    "peak_dev_deg": 1.5788119126562523,
+    "t_recover_s": 0.4400000000000004,
+    "z_dev_cm": 1.0049147266187997,
+    "xy_excursion_cm": 1.568286011664994,
+    "motor_diff_max_rad_s": 341.178831396108,
+    "motor_max_rad_s": 785.064277781367
+   }
+  },
+  "alt_step_1kg": {
+   "rise_s": 0.9550000000000001,
+   "overshoot_cm": 0.8470520384479929,
+   "sse_mm": 0.6830926113698954,
+   "att_peak_deg": 0.009288907571740843,
+   "xy_excursion_cm": 0.5499010227217357
+  },
+  "yaw_step_1kg": {
+   "rise_s": 2.12,
+   "overshoot_deg": 15.764691347918003,
+   "lag_at_90pct_s": 1.8150000000000004,
+   "err_peak_deg": 61.80258071804542,
+   "settle_2deg_s": NaN,
+   "xy_excursion_cm": 0.5390218130101617,
+   "z_dev_cm": 0.17311626244500555
+  },
+  "diag_1kg": {
+   "track_rms_3d_cm": 6.063972494604143,
+   "track_max_cm": 11.850496657104692,
+   "z_dev_cm": 0.23359620543099702,
+   "end_err_cm": 0.16452188853212724,
+   "att_peak_deg": 17.58531722359503,
+   "roll_pitch_ratio": 0.9655204057239958
+  },
+  "wind_1kg": {
+   "바람 0 m/s": {
+    "xy_hold_cm": 0.30021492097955227,
+    "z_hold_cm": 0.17243825475299346,
+    "att_mean_deg": 0.00017336257817692375,
+    "att_rms_deg": 0.0003196191345704365
+   },
+   "바람 5 m/s": {
+    "xy_hold_cm": 1.4649359614773205,
+    "z_hold_cm": 0.17161750789798091,
+    "att_mean_deg": 0.48344841787498516,
+    "att_rms_deg": 0.5703845979497308
+   }
+  },
+  "mass": [
+   {
+    "m_pkg": 0.0,
+    "track_rms_cm": 6.959013282522738,
+    "overshoot_cm": 13.107805327308997,
+    "z_dev_cm": 0.13146929901409754,
+    "att_peak_deg": 13.785976811660854,
+    "tail_att_rms_deg": 0.5810054157629306,
+    "hover_drift_cm": 0.8206340462096007
+   },
+   {
+    "m_pkg": 0.25,
+    "track_rms_cm": 5.244789380763085,
+    "overshoot_cm": 9.316662018635991,
+    "z_dev_cm": 0.13045830927700397,
+    "att_peak_deg": 12.466552744649315,
+    "tail_att_rms_deg": 0.6135045815904424,
+    "hover_drift_cm": 0.6846871066362059
+   },
+   {
+    "m_pkg": 0.5,
+    "track_rms_cm": 4.294421755768525,
+    "overshoot_cm": 7.1789318627700105,
+    "z_dev_cm": 0.14829726067799864,
+    "att_peak_deg": 12.415118206654926,
+    "tail_att_rms_deg": 0.676204719350772,
+    "hover_drift_cm": 0.7094546921587064
+   },
+   {
+    "m_pkg": 0.75,
+    "track_rms_cm": 3.701663184877737,
+    "overshoot_cm": 5.815606896915004,
+    "z_dev_cm": 0.16661882625699231,
+    "att_peak_deg": 12.072012555439674,
+    "tail_att_rms_deg": 0.6534287303504421,
+    "hover_drift_cm": 0.6340913714620977
+   },
+   {
+    "m_pkg": 1.0,
+    "track_rms_cm": 3.2747069580088755,
+    "overshoot_cm": 4.849845296946009,
+    "z_dev_cm": 0.19445769890200637,
+    "att_peak_deg": 11.84002499595554,
+    "tail_att_rms_deg": 0.6433268580218319,
+    "hover_drift_cm": 0.6019324533959147
+   },
+   {
+    "m_pkg": 1.5,
+    "track_rms_cm": 3.3109240774481496,
+    "overshoot_cm": 4.990112025941995,
+    "z_dev_cm": 0.08935962565059796,
+    "att_peak_deg": 11.969443332927991,
+    "tail_att_rms_deg": 0.6496502618044971,
+    "hover_drift_cm": 0.7638812704849118
+   },
+   {
+    "m_pkg": 2.0,
+    "track_rms_cm": 3.3091608774331003,
+    "overshoot_cm": 4.993722455026006,
+    "z_dev_cm": 0.1441520998498036,
+    "att_peak_deg": 11.829642100482877,
+    "tail_att_rms_deg": 0.6609206219411045,
+    "hover_drift_cm": 0.7924738063309067
+   }
+  ],
+  "mass_agile": [
+   {
+    "m_pkg": 0.0,
+    "track_rms_cm": 7.304503143721422,
+    "overshoot_cm": 14.11102935431401,
+    "z_dev_cm": 0.1439282188881008,
+    "att_peak_deg": 13.57385007920615,
+    "tail_att_rms_deg": 0.581479566562413,
+    "hover_drift_cm": 0.7037123986719962
+   },
+   {
+    "m_pkg": 0.25,
+    "track_rms_cm": 3.098486012970986,
+    "overshoot_cm": 4.321147959364002,
+    "z_dev_cm": 0.15478971773399408,
+    "att_peak_deg": 12.304840858023654,
+    "tail_att_rms_deg": 1.6593326040180492,
+    "hover_drift_cm": 0.7461689838450969
+   },
+   {
+    "m_pkg": 0.5,
+    "track_rms_cm": 1.847579662757888,
+    "overshoot_cm": 1.8493501155530057,
+    "z_dev_cm": 0.19774091452999798,
+    "att_peak_deg": 12.234182179622357,
+    "tail_att_rms_deg": 1.6999973796435237,
+    "hover_drift_cm": 0.37524895913590983
+   },
+   {
+    "m_pkg": 0.75,
+    "track_rms_cm": 1.1892332156354557,
+    "overshoot_cm": 0.6863969615549914,
+    "z_dev_cm": 0.1466761374830039,
+    "att_peak_deg": 12.867599058856738,
+    "tail_att_rms_deg": 1.2362249650274433,
+    "hover_drift_cm": 0.3403939075708018
+   },
+   {
+    "m_pkg": 1.0,
+    "track_rms_cm": 0.948403909094511,
+    "overshoot_cm": 0.26917205521399534,
+    "z_dev_cm": 1.5446600393245968,
+    "att_peak_deg": 14.524413663405449,
+    "tail_att_rms_deg": 1.5175084607677605,
+    "hover_drift_cm": 0.3831574913058966
+   },
+   {
+    "m_pkg": 1.5,
+    "track_rms_cm": 1.5269861878258473,
+    "overshoot_cm": 0.9678010136709991,
+    "z_dev_cm": 1.280770773074802,
+    "att_peak_deg": 12.213550973007465,
+    "tail_att_rms_deg": 1.0069637640986717,
+    "hover_drift_cm": 0.6286810515789054
+   },
+   {
+    "m_pkg": 2.0,
+    "track_rms_cm": 3.3091608774331003,
+    "overshoot_cm": 4.993722455026006,
+    "z_dev_cm": 0.1441520998498036,
+    "att_peak_deg": 11.829642100482877,
+    "tail_att_rms_deg": 0.6609206219411045,
+    "hover_drift_cm": 0.7924738063309067
+   }
+  ]
+ },
+ "battery_raw": {
+  "hover_0kg": {
+   "att_rms_deg": 5.412238413126375,
+   "att_peak_deg": 8.872056608986098,
+   "z_min_m": 0.969216775158336,
+   "z_max_m": 1.00146113526174,
+   "z_sag_cm": 14.614711474604302,
+   "drift_cm": 12.736485383997783,
+   "yaw_wander_deg": 7.206600920628807
+  },
+  "pulse_0kg": {
+   "precision": {
+    "peak_dev_deg": 13.349650251694474,
+    "t_recover_s": NaN,
+    "z_dev_cm": 2.3892826775740006,
+    "xy_excursion_cm": 16.76963210853817,
+    "motor_diff_max_rad_s": 887.9586713106223,
+    "motor_max_rad_s": 913.378186317086
+   },
+   "agile": {
+    "peak_dev_deg": 13.349650251694474,
+    "t_recover_s": NaN,
+    "z_dev_cm": 2.3892826775740006,
+    "xy_excursion_cm": 16.76963210853817,
+    "motor_diff_max_rad_s": 887.9586713106223,
+    "motor_max_rad_s": 913.378186317086
+   }
+  },
+  "alt_step_0kg": {
+   "rise_s": 1.5899999999999999,
+   "overshoot_cm": 22.902399594714986,
+   "sse_mm": 52.689795647620215,
+   "att_peak_deg": 22.165343304420503,
+   "xy_excursion_cm": 11.045765730809787
+  },
+  "yaw_step_0kg": {
+   "rise_s": 3.57,
+   "overshoot_deg": 8.891976995095703,
+   "lag_at_90pct_s": 1.5750000000000002,
+   "err_peak_deg": 57.29638435953012,
+   "settle_2deg_s": NaN,
+   "xy_excursion_cm": 11.045765730809787,
+   "z_dev_cm": 2.773938100089701
+  },
+  "diag_0kg": {
+   "track_rms_3d_cm": 344.9509307122546,
+   "track_max_cm": 573.1444151416027,
+   "z_dev_cm": 19.586632455806797,
+   "end_err_cm": 3881.951924623161,
+   "att_peak_deg": 37.44983647431209,
+   "roll_pitch_ratio": 0.7720521555708273
+  },
+  "wind_0kg": {
+   "바람 0 m/s": {
+    "xy_hold_cm": 2031.5939691672436,
+    "z_hold_cm": 127.97817928268191,
+    "att_mean_deg": 4.964222212062011,
+    "att_rms_deg": 8.21727182002888
+   },
+   "바람 5 m/s": {
+    "xy_hold_cm": 3573.627447291706,
+    "z_hold_cm": 130.90084491756892,
+    "att_mean_deg": 10.664277335821179,
+    "att_rms_deg": 16.02239232910682
+   }
+  },
+  "hover_1kg": {
+   "att_rms_deg": 0.001356468011946337,
+   "att_peak_deg": 0.007133808973286455,
+   "z_min_m": 1.00116831500942,
+   "z_max_m": 1.00172772006737,
+   "z_sag_cm": 4.990743016365295,
+   "drift_cm": 0.20485355859803417,
+   "yaw_wander_deg": 0.023757440592891862
+  },
+  "pulse_1kg": {
+   "precision": {
+    "peak_dev_deg": 2.331249833690052,
+    "t_recover_s": 0.7400000000000002,
+    "z_dev_cm": 0.1997525002719991,
+    "xy_excursion_cm": 4.305961946027026,
+    "motor_diff_max_rad_s": 176.65511585191405,
+    "motor_max_rad_s": 719.213155309048
+   },
+   "agile": {
+    "peak_dev_deg": 1.5788118315263482,
+    "t_recover_s": 0.4400000000000004,
+    "z_dev_cm": 1.0049148295041,
+    "xy_excursion_cm": 1.568285784668514,
+    "motor_diff_max_rad_s": 341.17886982627806,
+    "motor_max_rad_s": 785.064300332526
+   }
+  },
+  "alt_step_1kg": {
+   "rise_s": 0.8250000000000002,
+   "overshoot_cm": 1.4667342701319974,
+   "sse_mm": 5.099384120400119,
+   "att_peak_deg": 0.01453562398495468,
+   "xy_excursion_cm": 0.5563891213385592
+  },
+  "yaw_step_1kg": {
+   "rise_s": 2.12,
+   "overshoot_deg": 15.764690900012994,
+   "lag_at_90pct_s": 1.8150000000000004,
+   "err_peak_deg": 61.80257919717603,
+   "settle_2deg_s": NaN,
+   "xy_excursion_cm": 0.5390238118004059,
+   "z_dev_cm": 0.17311626176899075
+  },
+  "diag_1kg": {
+   "track_rms_3d_cm": 6.964337908111287,
+   "track_max_cm": 14.029438324552233,
+   "z_dev_cm": 0.25177059322099016,
+   "end_err_cm": 2.507061839516365,
+   "att_peak_deg": 19.226351134160957,
+   "roll_pitch_ratio": 0.9473862659803081
+  },
+  "wind_1kg": {
+   "바람 0 m/s": {
+    "xy_hold_cm": 0.30114333182719094,
+    "z_hold_cm": 0.4369190928350086,
+    "att_mean_deg": 0.00010222220886621198,
+    "att_rms_deg": 0.0020336635457251897
+   },
+   "바람 5 m/s": {
+    "xy_hold_cm": 1.473920225138652,
+    "z_hold_cm": 0.43788527430494995,
+    "att_mean_deg": 0.48585486188563265,
+    "att_rms_deg": 0.5746848746934123
+   }
+  },
+  "mass": [
+   {
+    "m_pkg": 0.0,
+    "track_rms_cm": 24.418818450380602,
+    "overshoot_cm": 34.84156702954599,
+    "z_dev_cm": 12.912336491241906,
+    "att_peak_deg": 21.994852696021685,
+    "tail_att_rms_deg": 6.275331244534125,
+    "hover_drift_cm": 12.073344558366506
+   },
+   {
+    "m_pkg": 0.5,
+    "track_rms_cm": 4.208419568268832,
+    "overshoot_cm": 7.949467935996002,
+    "z_dev_cm": 1.225579598677795,
+    "att_peak_deg": 13.572681835079706,
+    "tail_att_rms_deg": 4.120795516458072,
+    "hover_drift_cm": 2.2123807705593967
+   },
+   {
+    "m_pkg": 1.0,
+    "track_rms_cm": 4.077498767368511,
+    "overshoot_cm": 7.731044844546009,
+    "z_dev_cm": 0.1943265027319896,
+    "att_peak_deg": 13.219541863520925,
+    "tail_att_rms_deg": 4.42485550282149,
+    "hover_drift_cm": 2.273164148901996
+   },
+   {
+    "m_pkg": 1.5,
+    "track_rms_cm": 4.053417681741055,
+    "overshoot_cm": 7.75963103241899,
+    "z_dev_cm": 1.0208519990529963,
+    "att_peak_deg": 13.373481157002288,
+    "tail_att_rms_deg": 4.640447771746966,
+    "hover_drift_cm": 2.4163896639461946
+   },
+   {
+    "m_pkg": 2.0,
+    "track_rms_cm": 3.9547505408351933,
+    "overshoot_cm": 7.624998084548995,
+    "z_dev_cm": 1.764171737006004,
+    "att_peak_deg": 13.54092912039064,
+    "tail_att_rms_deg": 4.787326610503564,
+    "hover_drift_cm": 2.5002260736461945
+   }
+  ]
+ }
+}
