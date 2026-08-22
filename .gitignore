@@ -28,3 +28,6 @@ window_dataset/
 # 루트 output/ = 스크립트를 repo 루트에서 돌렸을 때 생기는 생성물
 # (make_equation_images.py 등 — 재생성 가능, 산출물은 control_seoungjin/ 아래가 규약)
 /output/
+
+# Claude 세션 인계 폴더 — 로컬 전용 (저장소에 올리지 않는다)
+claude_handoff/
