@@ -27,6 +27,17 @@ mdl = 'quadcopter_package_delivery';
 load_system(mdl);
 qc_zsplit_apply(mdl);   % 18차 z분리: PosErr Sat Z -> posErrSatZ (메모리 수술, 전 프로파일 무해)
 
+% yaw 강건화 (2026-08-22 외란 강건화 세션). 둘 다 '포화/한바퀴' 구간에서만 동작이 달라지고
+% 정상 임무에서는 항등이다. env 로 끌 수 있게 둔다 (회귀 대조용).
+%   YAWWRAP=0  -> yaw 오차 ±pi 랩 끄기   (기본 켬. 구운 Add3 에는 랩이 없어 C++ 이식본과 달랐다)
+%   YAWAW=0    -> yaw 적분 와인드업 방지 끄기 (기본 켬, AntiWindupMode clamping)
+if ~strcmp(getenv('YAWWRAP'), '0')
+    qc_yawwrap_apply(mdl);
+end
+if ~strcmp(getenv('YAWAW'), '0')
+    qc_antiwindup_apply(mdl, 'clamping', {'Control Yaw'});
+end
+
 % --- 궤적 로드 + 형식 검증 (침묵 no-op 금지: 이상하면 즉사) ---
 trajFile = fullfile(modelDir, 'trajectory.mat');
 if ~exist(trajFile, 'file'); error('trajectory.mat 없음: %s', trajFile); end

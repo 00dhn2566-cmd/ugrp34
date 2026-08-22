@@ -4,3 +4,11 @@ slprj/
 trajectory.mat
 run_sample_sim_result.png
 sim_result.mat
+
+# 생성 산출물 — 저장소에 넣지 않는다 (CLAUDE.md: .mat/CSV 결과는 git 밖)
+sim_result_*.mat
+diagnose/results/*.csv
+diagnose/results/*.mat
+diagnose/results/logs/
+diagnose/results/*.png
+run_*.txt
