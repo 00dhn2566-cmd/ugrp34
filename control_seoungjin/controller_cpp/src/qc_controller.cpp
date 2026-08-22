@@ -30,6 +30,22 @@ void qc_bind(QcState& st, const QcConfig& c) {
 
     st.pidYaw = Pid{c.kpYaw * s.sQ, c.kiYaw * s.sQ,
                     c.kdYaw * s.sQ, c.filtDYaw, c.limYaw};
+    st.pidYaw.antiWindup = c.yawAntiWindup;    // Simulink qc_antiwindup_apply('clamping') 과 동기
+    st.gov.on      = c.govOn;                  // Simulink qc_clock_gov_apply 와 동기
+    st.gov.rf      = c.govRf;
+    st.gov.rs      = c.govRs;
+    st.gov.sMin    = c.govSmin;
+    st.gov.ws      = c.govWs;
+    st.gov.tauRho  = c.govTauRho;
+    st.gov.tauPsi  = c.govTauPsi;
+    st.gov.psiStop = c.govPsiStop;
+    st.gov.bind();
+    st.yawDistI.gmax     = c.yawDistGmax;      // 1.0 이면 항등 (기존 동작)
+    st.yawDistI.e0       = c.yawDistE0;
+    st.yawDistI.e1       = c.yawDistE1;
+    st.yawDistI.tau      = c.yawDistTau;
+    st.yawDistI.rateGate = c.yawDistRateGate;
+    st.yawDistI.relax    = c.yawDistRelax;
     st.pidAlt = Pid{c.kpAlt * s.sT * s.sZMass, c.kiAlt * s.sT * s.sZMass,
                     c.kdAlt * s.sT * s.sZMass, c.filtDAlt, c.limAlt};
 
@@ -81,7 +97,25 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     // ---- yaw / 고도 (측정 필터: 덤프 확정 배선) ----
     const double measY = st.fMeasY.step(in.measRpy[2], dt);   // Filter Yaw (0.01)
     const double measZ = st.fMeasZ.step(in.measAlt, dt);      // Filter pz (0.01)
-    const double uY = st.pidYaw.step(wrapPi(in.refYaw - measY), dt);   // yaw 오차 랩 (18차: yaw 입력 지원)
+    // yaw 외란 적응 적분: 참조 각속도로 슬루 여부를 가른 뒤, 지속 오차에만 적분률을 올린다.
+    // (gmax=1 기본값이면 refRate 계산만 돌고 kiScale 은 항상 1 -> 골든 트레이스 불변)
+    const double eYaw = wrapPi(in.refYaw - measY);                     // yaw 오차 랩 (18차: yaw 입력 지원)
+    const double refRate = st.refYawFirst ? 0.0 : wrapPi(in.refYaw - st.refYawPrev) / dt;
+    st.refYawPrev = in.refYaw; st.refYawFirst = false;
+    st.pidYaw.kiScale = st.yawDistI.step(eYaw, refRate, dt);
+    const double uY = st.pidYaw.step(eYaw, dt);
+
+    // ---- 속도 조속기 + 진단 (상위 capability 입력) ----
+    // govOn=false 면 s≡1 이라 여기 계산은 출력에 영향을 주지 않는다 (진단만).
+    out.uYaw   = uY;
+    out.eYaw   = eYaw;
+    const double rhoYaw = (c.limYaw > 0.0) ? std::fabs(uY) / c.limYaw : 0.0;
+    const double uAttMax = std::fabs(uP) > std::fabs(uR) ? std::fabs(uP) : std::fabs(uR);
+    const double rhoAtt = (c.limAtt > 0.0) ? uAttMax / c.limAtt : 0.0;
+    out.rho    = rhoYaw > rhoAtt ? rhoYaw : rhoAtt;   // INTERFACE_SPEC §5b 정의
+    out.sClock = st.gov.step(uY, c.limYaw, eYaw, dt);
+    out.rhoEff = st.gov.rhoEff;
+    st.tauClock += out.sClock * dt;
     const double uA = st.pidAlt.step(in.refPos[2] - measZ, dt);
 
     // ---- 추력 바이어스 + 2단 클램프 + 믹서 ----

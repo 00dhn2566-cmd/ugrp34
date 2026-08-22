@@ -16,6 +16,7 @@ MATLAB 배터리: [`../controller/Quadcopter-Drone-Model-Simscape/diagnose/perf_
 | [05_battery_0kg/](05_battery_0kg/) | 배터리 6케이스 × 짐 0 kg — 접미 없음 = **신 스케줄(ZVD)**, `_raw` = **구 앵커**(셰이퍼 없음) | `perf_*_0kg.csv`, `perf_raw_*_0kg.csv` |
 | [06_mass_sweep/](06_mass_sweep/) | 질량 스윕 1 m 이동 0/0.25/0.5/0.75/1/1.5/2 kg (+ 구/신 대조) | `perf_move1m_*.csv` |
 | [07_retune_0kg/](07_retune_0kg/) | 0 kg 재튜닝 근거: 축별 스캔, 맞교환, 전/후 비교, 후보 대조 배터리(`_tuned`, `_tuned0p5`) | `tune_0kg_r1~r4.csv`, `perf_tuned*_*.csv` |
+| [10_capability/](10_capability/) | **실시간 능력 표 / 연산 부하 / 쉐이퍼 정지 거동** (08-22 외란 강건화 세션 신설) — 비행 실측이 아니라 *상위에 무엇을 노출하는가* 의 그림 | `make_capability_figures.py` (MATLAB 불필요) |
 
 재생성: `cd control_seoungjin && python perf_metrics.py && python perf_metrics.py --tag _0kg && python perf_0kg_compare.py` (MATLAB 불필요 — 로그·CSV만 읽음).
 배터리 재실측: 모델 폴더에서 `PKG=0 SHAPER=zvd FF=sqrt matlab -batch "cd(fullfile(pwd,'diagnose')); perf_battery"` (PKG=1 로 짐 1 kg). 미션 0 kg 재실측: `UGRP_PKG_KG=0 python verify_pipeline.py --tag _0kg`.

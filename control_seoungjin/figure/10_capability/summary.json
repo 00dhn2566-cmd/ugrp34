@@ -1,0 +1,76 @@
+{
+  "generated": "2026-08-22",
+  "cost_model": {
+    "smoother_us_per_sample": 25.089,
+    "plan_ms_per_seg": 5.158
+  },
+  "cost_defaults": {
+    "smoother": [
+      0.0,
+      2.51e-05
+    ],
+    "zv": [
+      4e-05,
+      0.0
+    ],
+    "gate": [
+      0.0001,
+      5e-08
+    ],
+    "plan_segment": [
+      0.0,
+      0.0053
+    ],
+    "capability": [
+      5e-05,
+      0.0
+    ]
+  },
+  "load_example_heavy": {
+    "duty": 0.1428,
+    "raw_duty": 0.1428,
+    "saturated": false,
+    "service_s": 0.0476,
+    "predicted_latency_s": 0.051565,
+    "tasks": {
+      "smoother": 0.1004,
+      "plan_segment": 0.0424
+    }
+  },
+  "shaper_overshoot_cm": {
+    "계단 3 m": {
+      "old": 0.744,
+      "new": 0.0
+    },
+    "계단 0.5 m": {
+      "old": 1.308,
+      "new": 0.244
+    }
+  },
+  "capability_examples": {
+    "1kg_nominal": {
+      "v": 1.2,
+      "a": 1.2,
+      "j": 6.0,
+      "snap": 48.0
+    },
+    "1kg_rho031": {
+      "v": 0.786667,
+      "a": 0.515704,
+      "j": 1.690362,
+      "snap": 8.86501
+    },
+    "1kg_rho031_lat40ms": {
+      "v": 0.5,
+      "a": 0.515704,
+      "j": 1.690362,
+      "snap": 8.86501
+    },
+    "0kg_rho07_yaw30": {
+      "v": 0.2,
+      "a": 0.037037,
+      "j": 0.065844,
+      "snap": 0.117055
+    }
+  }
+}

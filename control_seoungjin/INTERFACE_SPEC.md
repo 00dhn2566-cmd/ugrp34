@@ -334,6 +334,169 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
 - MATLAB 배치판: 시뮬 종료 후 로그를 30Hz 격자로 후처리해 "마지막 상태" 1건을
   쓰는 것으로 충분 (실시간 흉내는 실기/Gazebo 단계 몫).
 
+## 5b. 실시간 능력 표 (`capability.json`) — schema_version 0.1
+
+**누가 읽나**: 상위 경로 생성기(계획기/RL). **누가 쓰나**: 컨트롤러 측 `capability.py`.
+저장 경로·원자적 쓰기 규칙은 §5 와 같다 (`env UGRP_RT_DIR` → `%LOCALAPPDATA%/ugrp_drone/`).
+갱신율은 30 Hz 가 필요 없다 — **~5 Hz 또는 값이 바뀔 때**로 충분하다.
+
+**왜 필요한가**: [PERFORMANCE.md §8b](PERFORMANCE.md) 능력 카드는 **질량별 정적 표**다.
+그런데 지금 줘도 되는 스펙은 (a) 현재 짐 질량, (b) 지금 감지되는 외란 크기,
+(c) 지금 측정되는 시간 지연 세 가지로 달라진다. 이 파일은 그 정적 표를 기저로 삼아
+**지금 이 순간 값**으로 깎아 내보낸다. 상위는 `limits` 를 그대로
+`path_time.plan_waypoints(v_max, a_max, j_max, snap_max)` 에 넣으면 된다.
+
+```json
+{
+  "schema_version": "0.1",
+  "timestamp": "2026-08-22T09-14-07.412",
+  "basis":    { "pkg_kg": 1.0, "profile": "precision", "mass_source": "scheduled" },
+  "limits":   { "v": 0.444444, "a": 0.515704, "j": 1.690362, "snap": 8.86501 },
+  "budget":   { "track": 0.04, "overshoot": 0.05, "settle": 2.2, "keepout_inflate": 0.1 },
+  "yaw":      { "scan_rate": 1.0, "align_deg": 15.0, "step90_s": 2.1 },
+  "observed": { "rho": 0.31, "yaw_err_deg": 8.0, "rho_eff": 0.31, "latency_s": 0.045 },
+  "degraded": { "active": true, "time_scale": 0.6556,
+                "reasons": ["disturbance", "latency"], "hold_until_recovered": true },
+  "guarantees": { "recovery": "full", "pulse_dev_deg": 2.3 },
+  "shaper":   { "brake_share": 0.8 },
+  "valid_for_s": 1.0
+}
+```
+
+### 필드
+
+| 키 | 뜻 | 상위가 할 일 |
+|---|---|---|
+| `limits.{v,a,j,snap}` | **지금 줘도 되는 궤적 한계** (감쇄 이미 반영) | `plan_waypoints` 에 그대로 투입 |
+| `budget.track` / `overshoot` | 추종·오버슈트 여유 [m] | keep-out inflate·통과 여유 산정 |
+| `budget.settle` | 정지 후 정착 [s] | 정밀 작업 전 대기 |
+| `budget.keepout_inflate` | 권장 금지구역 팽창 [m] | `keep_out` 설정 |
+| `yaw.scan_rate` / `align_deg` / `step90_s` | yaw 계획 규칙 | scan 속도·heading 정확도 기대치 |
+| `observed.*` | 관측 원값 | 로깅·판단 참고 (계획엔 `limits` 만 쓰면 됨) |
+| `degraded.time_scale` | 감쇄 배율 `s` | 진단용 — `limits` 에 이미 반영돼 있음 |
+| `degraded.reasons` | `disturbance` / `latency` | 왜 느려졌는지 |
+| `degraded.hold_until_recovered` | 회복 전까지 안 되돌림 | 곧 복구될 거라 기대하고 계획하지 말 것 |
+| `guarantees.recovery` | `full` / `bounded_only` | `bounded_only` 면 **외란 복구 전제 계획 금지** |
+| `shaper.brake_share` | 쉐이퍼 제동 여유 | 참고 |
+| `valid_for_s` | 유효 기간 [s] | 이보다 낡으면 재읽기 |
+
+### 감쇄 규칙 — 시계 배율 `s` 하나로 표현
+
+경로 기하를 바꾸지 않고 **시간축만 늘리는 것**과 동치라, 상위는 "s 배 느리게"만 알면 된다:
+
+```
+v ∝ s,   a ∝ s²,   j ∝ s³,   snap ∝ s⁴
+```
+
+- `s` 는 **외란 권한 점유율 `rho`** 에 선형 비례해 줄어든다 (`rho_stop` 0.90 에서 `s_min` 0.10).
+- **yaw 오차도 `rho` 로 환산해서 같이 본다** (`|e_psi| / 45도`). 돌풍이 끝나도 기수가 틀어져
+  있으면 스펙을 되돌리지 않기 위해서다 — "회복까지 유지" 가 별도 타이머 없이 성립한다.
+- **지연은 속도에만 건다**: `v <= 0.5 * budget.track / latency`. 지연 × 속도가 곧 위치
+  오차이므로, 추종 예산의 절반까지만 지연 몫으로 내준다 (나머지 절반은 게인·외란 몫).
+
+관측 예 (`python capability.py`):
+
+| 조건 | v | a | j | snap | s | reasons |
+|---|---|---|---|---|---|---|
+| 1 kg 평시 | 1.200 | 1.200 | 6.00 | 48.0 | 1.000 | — |
+| 1 kg, rho 0.31 | 0.787 | 0.516 | 1.69 | 8.87 | 0.656 | disturbance |
+| 1 kg, rho 0.31, 지연 40 ms | 0.500 | 0.516 | 1.69 | 8.87 | 0.656 | disturbance, latency |
+| 0 kg 평시 | 0.900 | 0.750 | 6.00 | 48.0 | 1.000 | — |
+| 0 kg, rho 0.7, yaw 30도 | 0.200 | 0.037 | 0.07 | 0.12 | 0.222 | disturbance |
+| 1 kg agile | 1.600 | 1.600 | 8.00 | 64.0 | 1.000 | — |
+
+### 소비 규약 (읽는 쪽이 지켜야 하는 것)
+
+§5 의 `current_state` 와 달리 이 파일은 **낡아도 즉사시키지 않는다** — 능력 표는 천천히
+변하는 값이라, 잠깐 못 읽었다고 임무를 멈추는 게 더 위험하다. 대신:
+
+| 상황 | 상위가 할 일 |
+|---|---|
+| 나이 `<= valid_for_s` | 그대로 사용 |
+| `valid_for_s` 초과 ~ 5 s | **마지막 값 유지**, 단 `limits` 를 0.7 배로 보수화 |
+| 5 s 초과 / 파일 없음 | **정적 표(PERFORMANCE §8b)의 0 kg 열**로 폴백 — 가장 보수적인 기체로 간주 |
+| `degraded.hold_until_recovered` 가 true | 곧 복구될 거라 **가정하고 계획하지 말 것** |
+| `guarantees.recovery == "bounded_only"` | 외란 복구를 전제한 계획 금지 (0 kg 이 이 경우) |
+| `basis.anchor_provisional` 가 true | 해당 질량 앵커가 잠정(2 kg 은 1 kg 복사본) — 보수적으로 볼 것 |
+
+### rho 는 무엇을 넣나 (쓰는 쪽 규정)
+
+```
+rho = max( |u_yaw| / limit_yaw ,  |u_att| / limit_att )
+```
+
+제어기 PID **출력**의 클램프 대비 점유율이다. 정상상태에서 적분기는 "외란을 상쇄하는 데
+필요한 명령"을 들고 있으므로, 이 값이 곧 외란 추정치다 — 별도 센서가 필요 없다.
+`diagnose_yaw_final.m` 이 이미 `authSS`/`authPk` 라는 이름으로 계산하던 값과 같다.
+표본은 제어 주기에서 뽑되 `capability` 갱신 주기(~5 Hz)에 맞춰 **구간 최대값**을 쓴다
+(평균을 쓰면 짧은 포화를 놓친다).
+
+물리 환산: **`tau_max ≈ 0.317 N·m`** (yaw). `rho 0.315` ↔ `0.10 N·m`.
+산출 근거는 [SPEED_GOVERNOR.md §4](docs/SPEED_GOVERNOR.md).
+
+### 스키마 진화 규칙
+
+- **필드 추가는 마이너 올림** (`0.1` → `0.2`), 소비자는 **모르는 필드를 무시**해야 한다.
+- **필드 삭제·의미 변경은 메이저 올림** (`1.0`), 소비자는 major 가 다르면 **거부**한다.
+- `limits` / `budget` 키 집합은 계약의 핵심이라 마이너에서 줄이지 않는다.
+- 단위는 `units` 블록에 동봉한다 — 필드명(`v`, `a`)만으로는 알 수 없다.
+
+### 열린 항목 (2026-08-22 기준 미완)
+
+1. **양쪽 끝이 아직 안 붙었다** — 컨트롤러가 이 파일을 쓰지 않고(MATLAB/C++ 미배선),
+   계획기가 읽지도 않는다. 규격과 생성기만 있는 상태.
+2. **`observed.rho` 를 실제로 채우는 경로 없음** — 위 규정대로 제어기에서 뽑아야 한다.
+   현재는 호출자가 인자로 넣어주는 것만 지원.
+3. **2 kg 앵커가 1 kg 복사본** (`anchor_provisional`로 표시만 해둠).
+4. **`budget.overshoot` 이 쉐이퍼 설정과 연동 안 됨** — 정지 거동을 바꾸면(거리 연동
+   포락선) 오버슈트 예산도 달라져야 하는데 지금은 정적 표 값 그대로다.
+5. **지연 표본 주입 지점 미정** — `latency_tracker` 에 무엇을 넣을지(상태 파일 나이 /
+   명령→응답 / 계획 왕복) 셋 다 가능하다고만 적혀 있고 배포 구성이 안 정해졌다.
+
+### 연산 부하 → 지연 예측 (`compute_load.py`)
+
+지연을 **재고 나서** 반응하면 늦다. 부하는 선행 지표라 — 무엇을 얼마나 자주 돌릴지는
+미리 알 수 있으므로 — 지연이 나타나기 전에 깎을 수 있다.
+
+```
+cost(n) = fixed + per_unit * n        실측(2026-08-22, 이 노트북):
+                                        traj_smoother  25.1 us/샘플 (R2 0.9995)
+                                        plan_waypoints 5.3 ms/세그먼트
+duty    = sum(cost_i * rate_i)
+지연 R  = S + duty*S / (2*(1-duty))   (M/D/1 근사, duty->1 에서 발산)
+```
+
+**근거는 예상량과 실측값 둘 다** (`LoadGovernor.fuse`):
+
+| 원천 | 역할 | 왜 |
+|---|---|---|
+| 예상 (부하 모델) | **선행** | 부하가 올라가는 순간, 지연이 나타나기 전에 잡는다 |
+| 실측 | **백스톱** | 모델이 모르는 원인(OneDrive 잠금·GC·타 프로세스)까지 잡는다 |
+
+둘 중 나쁜 쪽을 적용하고, 차이(`실측 − 예상`)를 `model_bias_s` 로 들고 있어 모델이 계속
+과소예측하면 드러난다. `observed.load` 블록으로 상위에 같이 내보낸다.
+
+**복귀도 포함**: 부하가 줄면 스펙을 되돌린다. 다만 **올릴 땐 즉시, 내릴 땐 dwell 후 지수 감쇠** —
+대칭으로 두면 경계에서 스펙이 요동치고, 그게 재계획을 유발해 부하가 또 오르는 양의 되먹임이 된다.
+
+스펙을 깎는 대신 **재계획 지평을 줄이는** 손잡이도 있다 (`horizon_for_budget`) — 상위가 고른다.
+
+그림: [figure/10_capability/](figure/10_capability/)
+
+### 시간 지연 추적 (`latency_tracker.py`)
+
+지연은 한 샘플이 아니라 **평균**으로 판단한다 — 단발 스파이크로 스펙을 깎으면 순항
+속도가 요동친다. EMA 두 개를 쓴다: 빠른 EMA(8표본)로 감지, 느린 EMA(60표본)를 예측치로
+내보낸다. 진입에는 연속 초과 3표본(`arm_n`), 해제에는 연속 정상 30표본(`hold_n`)이 필요하다.
+
+표본으로 무엇을 넣어도 된다 — `current_state.json` timestamp 나이(§8c T8),
+명령→응답 등가 지연(T4), 계획 동사 왕복(T7). 셋 다 "상위가 본 세상이 얼마나 낡았나"라는
+같은 단위다.
+
+**§8c T3(센서·통신 지연) 이 "미측정" 으로 남아 있는데, 이 추적기가 그 자리를 채운다.**
+
+---
+
 ## 6. 플랜트 상수 추정 (`output/param_estimate.json`)
 
 `estimate_params.py`가 시뮬 로그(모터 입력 w/T ↔ 센서 출력 자세/vz) 회귀로 생성.

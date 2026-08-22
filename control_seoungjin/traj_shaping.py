@@ -264,14 +264,49 @@ def _stop_dist(v, a, ab, jmax):
     return d1 + v1**2 / (2.0 * ab)
 
 
-def traj_smoother(t, pos, vmax, amax, jmax):
+def _v_from_dist(g, ab, jmax, smax=None):
+    """남은 거리 g 안에서 저크·가속 한계로 '정확히' 0까지 감속 가능한 최대 속도.
+
+    `_stop_dist` 의 해석적 역함수 (a=0 기준). smax 를 주면 스냅 제한까지 반영. 저크 제한 감속의 속도곡선은
+    중점 대칭이라 평균속도가 정확히 v/2 이므로 d = v·T/2:
+        상수감속 구간 없음 (v <= ab²/j):  T = 2·sqrt(v/j)      -> d = v^1.5 / sqrt(j)
+        상수감속 구간 있음              :  T = v/ab + ab/j     -> d = v²/(2ab) + v·ab/(2j)
+    경계는 v = ab²/j  <=>  d = ab³/j².
+
+    이 값을 속도 상한으로 쓰면 (a) 정지가 포락선 안에서 매끄럽게 일어나고
+    (b) 남은 거리가 짧으면 애초에 vmax 까지 안 올라간다 (사다리꼴 -> 삼각형 자동 절단).
+    """
+    if g <= 0.0:
+        return 0.0
+    if smax is None:
+        # 저크만 제한: T = v/ab + ab/j
+        d_b = ab**3 / jmax**2
+        if g <= d_b:
+            return (g * np.sqrt(jmax)) ** (2.0 / 3.0)
+        c = ab / jmax
+    else:
+        # 스냅까지 제한: 미분 차수마다 천이 시간이 한 항씩 붙는다
+        #   T = v/ab + ab/j + j/s   (표준 S-커브 계열 결과)
+        # 전 구간 이 식을 쓰면 소속도 구간에서 T 를 과대평가 -> v 과소평가 = 보수적.
+        c = ab / jmax + jmax / smax
+    # v²/(2ab) + v·c/2 − g = 0   ->   v² + v·ab·c − 2·ab·g = 0
+    b = ab * c
+    return 0.5 * (-b + np.sqrt(b * b + 8.0 * ab * g))
+
+
+def traj_smoother(t, pos, vmax, amax, jmax, smooth_stop=False, smax=None,
+                  profile='precision'):
     """min/max 도달가능성 포락선 성형기.
 
     성형된 기준의 스텝 변위 d를 매 샘플 아래 구간에 클램프:
         상한: min( v·dt + a·dt² + jmax·dt³,  v·dt + amax·dt²,  +vmax·dt )
         하한: max( v·dt + a·dt² - jmax·dt³,  v·dt - amax·dt²,  -vmax·dt )
-    + 정지거리 트리거: 현 상태의 정확 2단 정지거리가 "미래 기준의 전방
-    극값"(running max/min)까지 남은 거리를 넘으면 물리 최대 제동 모드.
+    + 거리 연동 속도 상한 (`smooth_stop=True`, 2026-08-22 신설): 속도 상한을
+    `min(vmax, _v_from_dist(전방 극값까지 남은 거리))` 로 둔다. 정지가 **포락선
+    안에서** 일어나므로 매끄럽고, 남은 거리가 짧으면 애초에 vmax 까지 안 올라간다
+    (가속 구간과 감속 구간이 겹치면 사다리꼴 -> 삼각형 자동 절단).
+    + 정지거리 트리거(백스톱): 그래도 정확 2단 정지거리가 남은 거리를 넘으면
+    물리 최대 제동 모드. `smooth_stop=True` 에서는 거의 발동하지 않는다.
 
     무개입 보장: 입력의 후방차분 v/a/j가 전 구간 한계 이내이고 감속이
     0.8·amax 이내면 출력 == 입력 (정상 궤적 개입 < 2mm).
@@ -281,6 +316,21 @@ def traj_smoother(t, pos, vmax, amax, jmax):
     t    : (N,) 시간 [s]
     pos  : (N,) 또는 (N, C) 위치 [m] — 각 열 독립 성형
     vmax, amax, jmax : 물리 한계 (권장 2.0 / 2.0 / 10)
+    smooth_stop : 거리 연동 속도 상한(매끄러운 정지). **기본 False = 기존 동작.**
+           True 로 켜면 계단 입력의 오버슈트가 0.74 -> 0.00 cm, 정착 12.0 -> 3.8 s 로
+           좋아지고 짧은 이동은 vmax 까지 안 올라간다(사다리꼴->삼각형 자동 절단).
+           **[미완] 다만 목표 근처에서 저크 밴드를 깨는 경우가 남아 있다**
+           (killer_step 에서 j 39 실측, 기존 회귀 5건 실패). 원인은 상한이 0 으로
+           죄이는 구간과 뱅뱅 백스톱의 상호작용. 프로덕션 투입 전 재작업 필요.
+    profile : 'precision'(기본) | 'agile' — **선행 감쇄(미리 깎기) 여유의 차이**.
+              스냅이 유한하면 저크·가속을 즉시 못 꺾으므로 정지를 '미리' 시작해야 한다.
+              그 선행량을 얼마로 잡느냐가 두 프로파일을 가른다:
+                precision : 제동권한 0.60·amax, 선행 천이시간 100% -> 도달 오차 최소
+                agile     : 제동권한 0.90·amax, 선행 천이시간  50% -> 빠르지만 오버슈트 큼
+    smax : 스냅 한계 [m/s⁴]. **None(기본) 이면 스냅 밴드 미적용.**
+           값을 주면 스냅까지 지키지만, 이 탐욕적 위치 추종 구조에서는 4차 지연이
+           링잉을 만들어 목표 도달 오차가 0.8 cm -> 7~30 cm 로 악화된다 (2026-08-22 실측).
+           스냅은 `traj_gate(..., smax=)` 의 사후 검사로 두는 편이 낫다.
 
     Returns
     -------
@@ -298,10 +348,27 @@ def traj_smoother(t, pos, vmax, amax, jmax):
     C = pos.shape[1]
 
     pos_s = pos.copy()
-    ab = 0.8 * amax      # 제동 정속 가속 (저크 천이 마진 20%)
+    # smax=None 이면 스냅 밴드 미적용 (기본). 켜면 스냅은 지켜지지만 이 '탐욕적
+    # 위치 추종' 구조에서는 4차 지연이 링잉을 만들어 목표 도달 오차가 커진다 — 실측 §아래.
+    use_snap = smax is not None
+    if not use_snap:
+        smax = float("inf")
+    # precision = 기존 채택값(0.8·amax) 그대로 — 기본 경로에서 동작 불변.
+    # agile 은 제동 여유를 줄여 더 늦게·세게 선다.
+    _PROFILES = {'precision': (0.80, 0.0), 'agile': (0.90, 0.0)}
+    if isinstance(profile, tuple):          # 스윕용 직접 지정 (brake_share, look_share)
+        brake_share, look_share = profile
+    elif profile in _PROFILES:
+        brake_share, look_share = _PROFILES[profile]
+    else:
+        raise ValueError(f"traj_smoother: 알 수 없는 profile '{profile}'")
+    ab = brake_share * amax      # 제동 정속 가속
+    # 선행 천이시간 — 저크를 0->ab 로, (스냅 켜면) 스냅을 0->jmax 로 세우는 데 걸리는 시간.
+    # 이 시간 동안 기체는 계속 전진하므로, 목표를 그만큼 '앞당겨' 잡아야 늦게 깎이지 않는다.
+    t_trans = look_share * (ab / jmax + (jmax / smax if use_snap else 0.0))
     EPS_G = 0.002        # 제동 트리거 데드밴드 [m] — 종점 수렴부 채터 방지
 
-    info = {k: np.zeros(C) for k in ("vPk", "aPk", "jPk", "maxDev")}
+    info = {k: np.zeros(C) for k in ("vPk", "aPk", "jPk", "sPk", "maxDev")}
 
     for ax in range(C):
         p = pos[:, ax]
@@ -311,7 +378,7 @@ def traj_smoother(t, pos, vmax, amax, jmax):
         fwd_max = np.maximum.accumulate(p[::-1])[::-1]
         fwd_min = np.minimum.accumulate(p[::-1])[::-1]
 
-        r, v, a = p[0], 0.0, 0.0
+        r, v, a, jj = p[0], 0.0, 0.0, 0.0     # jj = 현재 저크 (스냅 밴드용 상태)
         out = p.copy()
         mode = 0    # 0 자유추종 / +1 전진제동 / -1 후진제동
         for k in range(1, N):
@@ -322,19 +389,71 @@ def traj_smoother(t, pos, vmax, amax, jmax):
             # 연속식 a<=sqrt(2·jmax·h)의 이산-정확판: 후방차분 동역학에서
             # a를 -jmax로 램프다운할 때 v 추가 증가분이 a²/2j + 1.5·a·dt라
             # a_cap = jmax·(sqrt(2.25·dt² + 2h/jmax) - 1.5·dt).
-            h_up = max(vmax - v, 0.0)
-            h_dn = max(vmax + v, 0.0)
+            # 거리 연동 속도 상한 — 정지를 포락선에 흡수 (신판)
+            if smooth_stop:
+                g_up0 = max(fwd_max[k] - r, 0.0)
+                g_dn0 = max(r - fwd_min[k], 0.0)
+                sm_env = smax if use_snap else None
+                # 목표를 이미 지난 뒤(g<=0)에는 상한을 걸지 않는다 — 0 으로 죄면
+                # 전진이 한 샘플에 끊겨 저크가 튄다(j 27 실측). 그 구간은 기존
+                # 뱅뱅 백스톱이 담당한다.
+                v_up = (min(vmax, _v_from_dist(max(g_up0 - max(v, 0.0) * t_trans, 0.0),
+                                               ab, jmax, sm_env))
+                        if g_up0 > 1e-9 else vmax)
+                v_dn = (min(vmax, _v_from_dist(max(g_dn0 - max(-v, 0.0) * t_trans, 0.0),
+                                               ab, jmax, sm_env))
+                        if g_dn0 > 1e-9 else vmax)
+            else:
+                v_up = vmax
+                v_dn = vmax
+            h_up = max(v_up - v, 0.0)
+            h_dn = max(v_dn + v, 0.0)
             a_cap_up = max(jmax * (np.sqrt(2.25 * dt**2 + 2.0 * h_up / jmax)
                                    - 1.5 * dt), 0.0)
             a_cap_dn = max(jmax * (np.sqrt(2.25 * dt**2 + 2.0 * h_dn / jmax)
                                    - 1.5 * dt), 0.0)
-            up3 = min(v * dt + a * dt**2 + jmax * dt**3,
-                      v * dt + min(amax, a_cap_up) * dt**2,
-                      vmax * dt)
-            lo3 = max(v * dt + a * dt**2 - jmax * dt**3,
-                      v * dt - min(amax, a_cap_dn) * dt**2,
-                      -vmax * dt)
-            if up3 < lo3:      # 테이퍼가 저크 하한과 충돌하면 저크 한계 우선
+            # 저크 밴드를 먼저 확정하고, 속도/가속 상한은 그 안으로만 조인다.
+            # (거리 연동 상한은 목표를 지나면 v_up=0 이 되는데, 이를 경성 클램프로
+            #  쓰면 전진이 한 샘플에 끊겨 저크가 튄다 — j 42 실측. 밴드 클립으로 봉인)
+            j_up = v * dt + a * dt**2 + jmax * dt**3
+            j_lo = v * dt + a * dt**2 - jmax * dt**3
+            # 속도 상한 항은 저크 한 스텝이 낼 수 있는 범위 안으로 먼저 클립한다.
+            # (안 하면 목표 근처에서 v_up/v_dn 이 0 으로 죄면서 진행을 한 샘플에
+            #  끊어 저크가 튄다 — j 39 실측. 가속 항은 건드리지 않으므로
+            #  '감속 ≤ amax' 보장은 그대로 유지된다.)
+            vc_up = min(max(v_up * dt, j_lo), j_up)
+            vc_dn = min(max(-v_dn * dt, j_lo), j_up)
+            up_raw = min(j_up, v * dt + min(amax, a_cap_up) * dt**2, vc_up)
+            lo_raw = max(j_lo, v * dt - min(amax, a_cap_dn) * dt**2, vc_dn)
+            # 스냅 밴드 = 가장 안쪽 실현가능 밴드. 한 스텝에 저크가 ±smax·dt 만큼만
+            # 변할 수 있으므로, 다음 저크는 [jj−smax·dt, jj+smax·dt] ∩ [−jmax, +jmax].
+            # 저크 여유 테이퍼 — a_cap 과 같은 구조를 한 미분 위로 올린 것.
+            # 스냅이 유한하면 저크를 즉시 못 꺾으므로, a 가 amax 를 넘지 않으려면
+            # 저크를 미리 조여야 한다 (안 하면 스냅 밴드가 가속 한계를 삼킨다).
+            if not use_snap:
+                j_hi_s = jmax
+                j_lo_s = -jmax
+            else:
+                h_a_up = max(amax - a, 0.0)
+                h_a_dn = max(amax + a, 0.0)
+                j_cap_up = max(smax * (np.sqrt(2.25 * dt**2 + 2.0 * h_a_up / smax)
+                                       - 1.5 * dt), 0.0)
+                j_cap_dn = max(smax * (np.sqrt(2.25 * dt**2 + 2.0 * h_a_dn / smax)
+                                       - 1.5 * dt), 0.0)
+                j_hi_s = min(jmax, jj + smax * dt, j_cap_up)
+                j_lo_s = max(-jmax, jj - smax * dt, -j_cap_dn)
+            s_hi = v * dt + a * dt**2 + j_hi_s * dt**3
+            s_lo = v * dt + a * dt**2 + j_lo_s * dt**3
+            if s_hi < s_lo:
+                s_hi = s_lo
+            # 나머지 한계(저크/가속/속도)는 전부 스냅 밴드 안으로 클립
+            # ⚠ lo3 를 위에서 자르면 안 된다 — 자르면 '감속 ≤ amax' 보장이 깨진다
+            #   (초판이 s_hi 로 클립해서 a 2.20 실측, 게이트 거부 7건).
+            #   하한은 실현가능 바닥(s_lo)만 보장하고, 상한은 하한 아래로 못 내려간다.
+            a_lo = v * dt - amax * dt**2
+            up3 = min(up_raw, s_hi)
+            lo3 = max(lo_raw, a_lo, s_lo)
+            if up3 < lo3:      # 실현가능성(저크/스냅) 우선 — 원판과 같은 우선순위
                 up3 = lo3
             g_up = max(fwd_max[k] - r, 0.0)
             g_dn = max(r - fwd_min[k], 0.0)
@@ -357,7 +476,9 @@ def traj_smoother(t, pos, vmax, amax, jmax):
             # 상태 = 출력의 후방차분 (원칙 1)
             r += d
             v_new = d / dt
-            a = (v_new - v) / dt
+            a_new = (v_new - v) / dt
+            jj = (a_new - a) / dt
+            a = a_new
             v = v_new
             out[k] = r
         pos_s[:, ax] = out
@@ -368,6 +489,8 @@ def traj_smoother(t, pos, vmax, amax, jmax):
         info["vPk"][ax] = np.max(np.abs(dv))
         info["aPk"][ax] = np.max(np.abs(da)) if len(da) else 0.0
         info["jPk"][ax] = np.max(np.abs(dj)) if len(dj) else 0.0
+        ds4 = np.diff(dj) / np.diff(t[:-3]) if len(dj) > 1 else np.array([0.0])
+        info["sPk"][ax] = np.max(np.abs(ds4)) if len(ds4) else 0.0
         info["maxDev"][ax] = np.max(np.abs(out - p))
 
     if single_col:

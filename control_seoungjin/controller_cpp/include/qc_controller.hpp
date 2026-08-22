@@ -33,12 +33,21 @@ inline double wrapPi(double a) {
 }
 
 // 병렬형 PID + 필터드 미분 (Simulink PID 블록 대응: P + I/s + D·N/(1+N/s))
-// anti-windup 없음 — 원본과 동일 (출력만 클램프, 적분기는 계속 적분). TUNING_STATUS 명시.
+// anti-windup: 구운 모델은 `AntiWindupMode='none'` 이었다 (출력만 클램프, 적분기는 계속 적분).
+// 2026-08-22 외란 강건화 세션에서 Simulink 쪽 `Control Yaw` 를 'clamping' 으로 바꿨고
+// (`qc_antiwindup_apply` + `run_traj_baked` 기본 켬), 여기도 같은 식으로 맞춘다.
+// 포화하지 않는 구간에서는 완전히 항등이라 골든 트레이스는 불변이다.
 struct Pid {
     // 파라미터
     double kp = 0, ki = 0, kd = 0;
     double N = 100;          // 미분 필터 계수 (filtD)
     double outLim = 0;       // 출력 클램프 ±outLim (0이면 무제한)
+    double kiScale = 1.0;    // 적분 '누적률' 한시 배율 (외란 적응용; 1.0 = 항등)
+                             // ki 자체가 아니라 누적률만 곱한다 — 이미 쌓인 integ 는
+                             // 건드리지 않으므로 배율이 바뀌어도 출력에 점프가 없다.
+    bool antiWindup = false; // true = Simulink 'clamping' 과 동일 (조건부 적분).
+                             // 출력이 포화 중이고 오차가 포화를 **더 미는** 방향일 때만
+                             // 적분을 멈춘다. 포화 없으면 항등.
     // 상태
     double integ = 0;        // 적분기
     double dFilt = 0;        // 필터드 미분 상태
@@ -48,7 +57,20 @@ struct Pid {
     void reset() { integ = 0; dFilt = 0; ePrev = 0; first = true; }
 
     double step(double e, double dt) {
-        integ += ki * e * dt;                       // 전진 오일러 적분
+        // 조건부 적분 판정은 '이번 스텝 적분을 더하기 전' 상태로 한다.
+        // Simulink clamping 과 같은 규칙: (출력 포화 중) AND (오차가 포화를 더 미는 방향)
+        bool hold = false;
+        if (antiWindup && outLim > 0) {
+            double de0 = first ? 0.0 : (e - ePrev) / dt;
+            double a0 = 1.0 / (1.0 + N * dt);
+            double dPre = a0 * dFilt + (1.0 - a0) * kd * de0;
+            double uPre = kp * e + integ + dPre;
+            const bool sat = (uPre > outLim) || (uPre < -outLim);
+            hold = sat && ((uPre > 0.0 && ki * e > 0.0) || (uPre < 0.0 && ki * e < 0.0));
+        }
+        if (!hold) {
+            integ += ki * kiScale * e * dt;         // 전진 오일러 적분 (kiScale=1 이면 원본과 동일)
+        }
         double de = first ? 0.0 : (e - ePrev) / dt; // 후방차분
         first = false;
         ePrev = e;
@@ -71,6 +93,113 @@ struct Lpf1 {
         if (first) { y = u; first = false; return y; }  // 초기 과도 방지
         y += dt / (tau + dt) * (u - y);                 // 후방 오일러
         return y;
+    }
+};
+
+// ---------- yaw 외란 적응 적분 (2026-08-22, 사용자 설계) ----------
+// 목적: yaw 는 약권한 채널이라 지속 외란이 걸리면 PD 만으로는 영구 고착한다(12차 실측 42~65도).
+//       그래서 ki_yaw=1.5(Ti=10s)를 상시 켜 두는데, 이 값은 '평시 지터를 안 건드리는 선'에서
+//       고른 것이라 외란 소거가 느리다. 여기서는 외란이 감지된 동안만 적분 누적률을 올린다.
+//
+// 설계 요지 (왜 |e| 가 아니라 저역통과 ē 인가):
+//   scan 미션은 yaw 를 0.6~1.0 rad/s 로 의도적으로 슬루한다. 그 구간의 추종 오차는 외란이 아니다.
+//   |e| 만 보면 슬루마다 적분을 키워 오버슈트를 만든다. 그래서 두 겹으로 거른다.
+//     (a) 지속성  : ē = LPF(e, tau) — 순간 오차가 아니라 '남아 있는' 오차만 통과
+//     (b) 명령 게이트: |psi_ref_dot| > rateGate 이면 슬루 중으로 보고 아예 판정하지 않음
+//
+// 배율 궤적: k in [0,1] 로 sat((|ē|-e0)/e1). 상승은 즉시(외란 대응은 빨라야 함),
+//            하강은 기울기 -relax [1/s] 로 제한 (경계에서 채터링하면 적분률이 요동친다).
+//            Simulink 측은 같은 자리에 Rate Limiter(RisingSlewLimit=inf, Falling=-relax) 를 쓴다.
+//   반환값 g = 1 + (gmax-1)*k  ->  Pid::kiScale 에 그대로 물린다.
+//
+// gmax = 1.0 (기본값) 이면 항상 g=1 -> 골든 트레이스 비트 동일. 켤 때만 값을 올릴 것.
+struct YawDistI {
+    // 파라미터
+    double gmax     = 1.0;    // 최대 적분률 배율 (1.0 = 기능 꺼짐)
+    double e0       = 0.0349; // rad (2.0도) — 판정 시작 문턱
+    double e1       = 0.0349; // rad (2.0도) — 문턱 위로 이만큼 더 가면 gmax 포화 (총 4.0도)
+    double tau      = 1.0;    // s — 오차 저역통과(지속성 판정) 시정수
+    double rateGate = 0.05;   // rad/s — |psi_ref_dot| 이 값 초과면 슬루로 보고 게이트 닫음
+    double relax    = 0.5;    // 1/s — 해제 시 k 하강 기울기 제한 (Simulink Rate Limiter 와 같은 식)
+    // 상태
+    double eLpf = 0, k = 0;
+    bool   first = true;
+
+    void reset() { eLpf = 0; k = 0; first = true; }
+
+    // e: yaw 오차 [rad] (wrapPi 적용된 값), refRate: 참조 yaw 각속도 [rad/s]
+    double step(double e, double refRate, double dt) {
+        if (first) { eLpf = e; first = false; }
+        else       { eLpf += dt / (tau + dt) * (e - eLpf); }
+
+        double target = 0.0;
+        if (std::fabs(refRate) <= rateGate)
+            target = clamp((std::fabs(eLpf) - e0) / e1, 0.0, 1.0);
+
+        // 상승 무제한 / 하강 -relax [1/s] — Simulink 쪽 Rate Limiter 와 동일 의미
+        const double kLo = k - relax * dt;
+        k = (target > kLo) ? target : kLo;
+
+        return 1.0 + (gmax - 1.0) * k;
+    }
+};
+
+// ---------- 외란 연동 속도 조속기 (2026-08-22) ----------
+// Simulink `qc_clock_gov_apply.m` 의 1:1 이식. 설계: docs/SPEED_GOVERNOR.md
+//
+//   rho_eff = max( LPF(|u_yaw|/limYaw, tauRho),  LPF(|wrapPi(e_yaw)|, tauPsi)/psiStop )
+//   d*      = (1 - sMin) * sat01( (rho_eff - rf) / (rs - rf) )      <- 벗어난 양에 선형 비례
+//   d       = 3차 임계감쇠 필터(d*)                                   <- (s/w+1)^-3
+//   s       = 1 - govOn * d
+//
+// ★ 필터를 s 가 아니라 '1로부터의 편차 d' 에 건다. s 를 직접 필터하면 초기값이 0 이라
+//   시작부터 시계가 멎는다 (Simulink 구현에서 같은 함정을 겪었다).
+//
+// 이 구조체는 **s 만 낸다.** tau 적분과 참조 조회는 호출자 몫이다 —
+// Simulink 에서도 Integrator 출력이 Lookup 을 먹이는 구조라 같은 분업이다.
+// govOn = false (기본) 이면 s ≡ 1 -> 기존 동작과 완전히 동일.
+struct SpeedGovernor {
+    // 파라미터 (qc_clock_gov_defaults.m 와 동일 기본값)
+    bool   on      = false;
+    double rf      = 0.00;      // 무개용 문턱 (0 = 문턱 없이 선형 비례)
+    double rs      = 1.00;      // 정규화 1.0 에서 s = sMin
+    double sMin    = 0.00;      // 최저 시계 배율 (0 = 완전 정지 허용)
+    double ws      = 0.50;      // 3차 임계감쇠 대역 [rad/s] (스냅 예산 §6)
+    double tauRho  = 0.20;      // rho 저역통과 [s]
+    double tauPsi  = 0.20;      // yaw 오차 저역통과 [s]
+    double psiStop = 0.7853981633974483;   // 45 deg [rad] — 안정성 경계 90 도의 절반
+    // 상태
+    Lpf1 fRho, fPsi;
+    Lpf1 f1, f2, f3;            // 3차 = 1차 3단 (각 시정수 1/ws)
+    double rhoEff = 0, sOut = 1.0;
+
+    void bind() {
+        fRho.tau = tauRho;
+        fPsi.tau = tauPsi;
+        f1.tau = f2.tau = f3.tau = 1.0 / (ws > 1e-9 ? ws : 1e-9);
+    }
+    void reset() {
+        fRho.reset(); fPsi.reset(); f1.reset(); f2.reset(); f3.reset();
+        // 편차 필터의 초기값은 0 이어야 s(0)=1 이 된다
+        f1.y = f2.y = f3.y = 0.0; f1.first = f2.first = f3.first = false;
+        rhoEff = 0.0; sOut = 1.0;
+    }
+
+    // uYaw: yaw PID 출력, limYaw: 그 클램프, eYaw: yaw 오차(rad, 랩 전/후 무관)
+    double step(double uYaw, double limYaw, double eYaw, double dt) {
+        const double rho = (limYaw > 0.0) ? std::fabs(uYaw) / limYaw : 0.0;
+        const double rBar = fRho.step(rho, dt);
+        const double pBar = fPsi.step(std::fabs(wrapPi(eYaw)), dt) / psiStop;
+        rhoEff = rBar > pBar ? rBar : pBar;
+
+        const double den = (rs - rf) > 1e-9 ? (rs - rf) : 1e-9;
+        double u = (rhoEff - rf) / den;
+        u = clamp(u, 0.0, 1.0);
+        const double dStar = (1.0 - sMin) * u;
+
+        const double d = f3.step(f2.step(f1.step(dStar, dt), dt), dt);
+        sOut = 1.0 - (on ? d : 0.0);
+        return sOut;
     }
 };
 
@@ -128,6 +257,17 @@ struct QcConfig {
     double kpAtt = -85, kiAtt = -10, kdAtt = -127.5, filtDAtt = 2500, limAtt = 800;
     // yaw (12차)
     double kpYaw = 15, kiYaw = 1.5, kdYaw = 4, filtDYaw = 100, limYaw = 20;
+    // 속도 조속기 (SpeedGovernor). govOn=false 면 s≡1 = 기존 동작.
+    bool   govOn = false;
+    double govRf = 0.00, govRs = 1.00, govSmin = 0.00, govWs = 0.50;
+    double govTauRho = 0.20, govTauPsi = 0.20;
+    double govPsiStop = 0.7853981633974483;   // 45 deg
+    // yaw 적분 와인드업 방지 (Simulink 'clamping' 대응, run_traj_baked 기본 켬 = YAWAW).
+    // 포화 없는 구간 항등 -> 골든 트레이스 불변.
+    bool yawAntiWindup = true;
+    // yaw 외란 적응 적분 (YawDistI). yawDistGmax = 1 이면 완전히 꺼진 상태 = 기존 동작.
+    double yawDistGmax = 1.0, yawDistE0 = 0.0349, yawDistE1 = 0.0349;
+    double yawDistTau = 1.0, yawDistRateGate = 0.05, yawDistRelax = 0.5;
     // 고도 (11~12차)
     double kpAlt = 0.5, kiAlt = 0.1, kdAlt = 0.15, filtDAlt = 1000, limAlt = 10;
     // 모터 PI (per-motor 속도 루프)
@@ -231,6 +371,14 @@ struct QcOutput {
     double cmdPitch, cmdRoll;   // 위치→자세 명령 (rad)
     double motorRef[4];         // 믹서 후 모터 속도 참조 (rev/s)
     double motorCmd[4];         // 모터 PI 출력 (정규화 토크 명령)
+    // ── 진단 / 상위 노출 (capability.json `observed` 입력) ──
+    // INTERFACE_SPEC §5b: rho = max(|u_yaw|/limYaw, |u_att|/limAtt).
+    // 정상상태 적분기가 곧 외란 추정치라 별도 센서가 필요 없다.
+    double uYaw;                // yaw PID 출력
+    double eYaw;                // yaw 오차 (wrapPi 적용, rad)
+    double rho;                 // 권한 점유율 [0,1] — 그 스텝 순간값
+    double rhoEff;              // 조속기가 본 유효 점유율 (yaw 오차 환산 포함)
+    double sClock;              // 가상 시계 배율 s  (호출자가 tau += s*dt 로 적분)
 };
 
 struct QcState {
@@ -241,12 +389,19 @@ struct QcState {
     Lpf1 fMeasP, fMeasR;             // 자세 측정 필터 (tau=0.05, 덤프 확정)
     Lpf1 fMeasY, fMeasZ;             // yaw(0.01)/고도(0.01) 측정 필터 (덤프 확정)
     Lpf1 fPosPath[3];                // 위치 명령 경로 필터
+    YawDistI yawDistI;               // yaw 외란 적응 적분 (기본 항등)
+    SpeedGovernor gov;               // 속도 조속기 (기본 항등, s≡1)
+    double tauClock = 0;             // 가상 시계 누적 (편의 — 참조 조회는 호출자 몫)
+    double refYawPrev = 0;           // 참조 yaw 각속도 산출용
+    bool   refYawFirst = true;
     void reset() {
         pidPosX.reset(); pidPosY.reset(); pidPosZ.reset();
         pidAttP.reset(); pidAttR.reset(); pidYaw.reset(); pidAlt.reset();
         for (auto& p : pidMot) p.reset();
         fMeasP.reset(); fMeasR.reset(); fMeasY.reset(); fMeasZ.reset();
         for (auto& f : fPosPath) f.reset();
+        yawDistI.reset(); refYawPrev = 0; refYawFirst = true;
+        gov.reset(); tauClock = 0;
     }
 };
 
