@@ -6,6 +6,10 @@
 **국문 과제명**: 결함 허용 및 장애물 회피 기능을 갖춘 현수하물 탑재 드론의 강건 통합 비행 제어 시스템 연구
 **영문 과제명**: A Study on Robust Integrated Flight Control System for Slung-load Drones with Fault Tolerance and Obstacle Avoidance Capabilities
 
+> 최종 갱신: 2026-08-01 (7월 진행분 반영). 이 문서는 개괄이며, 최신 상세는 각 파트 모듈 문서가 기준.
+>
+> **📢 pull 받으셨다면 [NEWS.md](NEWS.md)부터 — 최근 변동 요약·멤버별 액션이 거기 있습니다.** (최근: 2026-08-11 묶음 — 재학습 채택·잠정 확정 4건)
+
 ---
 
 ## 1. 주제 (Topic)
@@ -37,9 +41,11 @@
 
 ### 공통 / 인프라
 - [ ] Isaac Sim 시뮬레이션 환경 구축 (창문 배치·드론·물리 · 배경에 VIO 특징점용 패턴/사물 필수 — 단색 배경 금지, 태민 요청 07/03)
-- [ ] 시뮬레이션 내 합성 데이터셋 자동 생성 (Replicator)
+  - 씬 생성·데이터셋 파이프라인 코드는 완성([reinforcement_yunho/sim/](reinforcement_yunho/sim/)). **클러스터 Isaac 렌더러가 호스트 드라이버 버그로 차단** (07/17, NVIDIA 확인 — 관리자 다운그레이드 요청 중, [ISAAC_CLUSTER_NOTES.md](reinforcement_yunho/sim/ISAAC_CLUSTER_NOTES.md)). CPU 절차적 렌더러 폴백 마련됨
+- [ ] 시뮬레이션 내 합성 데이터셋 자동 생성 (Replicator) — 생성·분할·라벨 로직 완성(순수 numpy로 테스트됨), 렌더만 위 드라이버 이슈 대기
 - [x] 데이터셋·인터페이스 규격 문서 확정 (`window_detection_spec_v0.2.md` 확정본)
-- [ ] 전체 파이프라인 통합 검증 (초기엔 ground-truth 값으로 흐름 확인)
+- [x] 파트 간 인터페이스 정비 (07월) — 제어: [EXTERNAL_INTERFACE.md](control_seoungjin/EXTERNAL_INTERFACE.md) (미션 JSON/yaw/비상) + 받는 사람용 [SETUP.md](control_seoungjin/SETUP.md) / 팀 규약: [CONVENTIONS.md](reinforcement_yunho/CONVENTIONS.md) (좌표계·쿼터니언 순서·시간 단위)
+- [ ] 전체 파이프라인 통합 검증 (초기엔 ground-truth 값으로 흐름 확인) — 비전→VIO 구간은 GT 스트림으로 검증 완료 (07/04, 아래 VIO 항목)
 
 ### 비전 / 이미지 처리기
 - [x] 창문 검출 모델 방식 확정 → **4-corner keypoint 검출** (YOLO-pose 기반, 구조 확정 7건)
@@ -62,25 +68,29 @@
     - update_rate: IMU 주파수 (예: 200)
 - [ ] 테스트용 시뮬레이션 비행 데이터 수령 (from 윤호) — 카메라 이미지 + IMU 측정값 + groundtruth(실제 드론 위치·가속도 정답지)
 - [ ] OpenVINS 파라미터 조정·최적화 (위 스펙·데이터 수령 후 — 실행·평가 루프는 EuRoC 리허설로 검증 완료)
-- [ ] 창문 3D 위치 복원 — corner(§5) + pose 삼각측량 융합 (착수: 창문 3D 좌표 가정 하 행렬 계산 검증(07/03) → 픽셀 좌표 기반 삼각측량 진행 중. 길남 합성 샘플 스트림([overall_gilnam/vision/sample_stream/](overall_gilnam/vision/sample_stream/), scene_gt.json으로 채점 가능)으로 시뮬 데이터 대기 없이 진행 가능)
+- [x] 창문 3D 위치 복원(GT 스트림 검증) — corner(§5) + pose 삼각측량 융합을 길남 합성 샘플 스트림(302프레임)으로 검증 완료 (07/04): corner 오차 0.01~0.07mm, 창문 크기 GT 일치. ROS2 노드([window_recon_node.py](visual_imaging_taemin/window_recon_node.py)) 커밋
+- [ ] 창문 3D 복원을 실측 조건으로 확장 — 실모델 추론 출력(노이즈 포함)·시뮬 비행 데이터에서 재검증, VIO 추정 pose 사용으로 전환
 - [ ] OpenVINS 실시간 구독 전환 → 제어기 파트에 신뢰도 높은 위치·가속도 값 제공
 - VIO 파트 상세·진행 로그: [visual_imaging_taemin/README.md](visual_imaging_taemin/README.md)
 
 
 ### 경로계획 · 제어
-- [ ] 강화학습 기반 경로계획 정책 (기존 ALM 시도 엎음 → RL로 전환, §7 고려사항 반영)
-- [ ] PID 저수준 제어기 (초기 시도 후 엎음 → 재설계 예정)
+- [ ] 강화학습 기반 경로계획 정책 (기존 ALM 시도 엎음 → RL로 전환, §7 고려사항 반영) — 정책 출력이 꽂히는 제어 측 스키마(waypoints+limits)는 확정, **정책 학습 실무 담당은 미정 (회의 안건)**
+- [x] PID 저수준 제어기 재설계 (07월) — MATLAB Simscape 기체(FX450) 튜닝으로 안정 호버 달성 후, 궤적 파이프라인([traj_pipeline.py](control_seoungjin/traj_pipeline.py) — 미션 동사 6종, 성형·검증 게이트, 테스트 169개), C++ 1kHz 제어기(MATLAB 골든 트레이스 대조 합격), yaw 4모드, 비상 규약 v0.2(비행 감독자·금지 구역·자동 회생)까지 구축
+- [ ] 제어 잔여: MATLAB 검증 큐 소화(비상 ①②), Gazebo/Isaac 폐루프 연결, 실기 전환 시 VIO 상태 출처 교체(태민 조율점)
+- 제어 파트 통신 규약: [EXTERNAL_INTERFACE.md](control_seoungjin/EXTERNAL_INTERFACE.md) · 환경 준비: [SETUP.md](control_seoungjin/SETUP.md)
 
 ### 학습
-- [ ] 강화학습 환경 조성 및 모델 훈련 (방학 중 checkpoint)
-- 시뮬·RL 파트 상세: [reinforcement_yunho/docs/To_do_checklist_yunho.md](reinforcement_yunho/docs/To_do_checklist_yunho.md)
+- [ ] 강화학습 환경 조성 및 모델 훈련 (방학 중 checkpoint) — 환경 스캐폴드 완성 (gym env·보상 config·학습 스모크·평가 스크립트, 목업 물리로 구동 확인 — [reinforcement_yunho/rl/](reinforcement_yunho/rl/)). Isaac 백엔드 연결·보상 가중치 설계가 잔여
+- [x] 본 학습용 CUDA GPU 확보 — 윤호 GPU 클러스터 (40GB × 20장). 작업 배분: [gpu_jobs_yunho.md](reinforcement_yunho/docs/gpu_jobs_yunho.md) (Job 1 = 길남 YOLO 본 학습 위탁이 최우선)
+- 시뮬·RL 파트 상세: [reinforcement_yunho/README.md](reinforcement_yunho/README.md) · [To_do_checklist_yunho.md](reinforcement_yunho/docs/To_do_checklist_yunho.md)
 
 ## 5. 역할 분담 (Roles)
 
 | 이름 | 학번 | 역할 |
 |---|---|---|
 | 류길남 | 202111056 | 파이프라인 전반 설계·감독 + 이미지 처리 상용모델 조사·파인튜닝 |
-| 박성진 | 202111068 | PID 제어기 설계 |
+| 박성진 | 202111068 | 저수준 제어 전반 — PID·Simscape 튜닝 + 궤적 파이프라인(경로→시간 성형) + C++ 제어기 + 비상 규약 |
 | 박태민 | 202211085 | VIO(OpenVINS) 상태추정 + 창문 3D 복원(corner+pose 삼각측량 융합) |
 | 조윤호 | 202211191 | 시뮬레이션 환경 조성 및 강화학습 환경 조성 (데이터셋 생성 포함) |
 
@@ -122,10 +132,10 @@
 - 학습 시 GT 관측으로 시작하더라도, 추정치 노이즈를 주입한 학습(observation noise)을 거쳐야 실제 파이프라인 연결 시 성능 붕괴를 막을 수 있다.
 
 ### 후속 조치 (제안)
-- [ ] RL 정책 입출력 경계 확정 → 규격 문서(`window_detection_spec`) 또는 별도 인터페이스 문서에 반영
-- [ ] 보상 함수 초안 + 가중치 config 구조 설계 (담당 지정 필요)
-- [ ] 평가 프로토콜 정의 (랜덤 씬 생성 규칙, 지표: 성공률·충돌률·통과 시간)
-- [ ] 도메인 랜덤화 항목 목록화 (동역학·센서·조명) — 조윤호의 데이터셋 랜덤화 규격과 정합
+- [ ] RL 정책 입출력 경계 확정 — 출력 측(→제어)은 `waypoints_config` 스키마로 확정, **관측(입력) 측은 `state_window_interface_spec_v0_1` 후보안 상태 → 회의 확정 필요**
+- [ ] 보상 함수 초안 + 가중치 config 구조 설계 — config 분리 구조는 구현됨([reward_default.yaml](reinforcement_yunho/rl/configs/reward_default.yaml) 스텁), **가중치 설계 담당 지정 필요 (회의 안건)**
+- [x] 평가 프로토콜 정의 — `rl/evaluate.py` 구현 (랜덤 씬 N개, 성공률·충돌률·평균 통과 시간, baseline 동일 씬 비교)
+- [x] 도메인 랜덤화 항목 목록화 — `rl/domain_randomization.py` + config (데이터셋 랜덤화 규격 §4.1과 정합)
 - [x] README의 경로계획 항목 갱신 (ALM 재설계 예정 → RL 채택)
 
 ## 8. 참고문헌 (References)

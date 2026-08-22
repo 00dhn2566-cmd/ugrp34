@@ -22,6 +22,7 @@ control_seoungjin/output/
 # vision 학습 데이터셋 (로컬 전용, git 미포함)
 window_dataset/
 
+
 # 로컬 편집기 설정 (머신별 컴파일러 경로가 박혀 있어 공유 부적합)
 .vscode/
 
@@ -31,3 +32,19 @@ window_dataset/
 
 # Claude 세션 인계 폴더 — 로컬 전용 (저장소에 올리지 않는다)
 claude_handoff/
+# 랩미팅 발표 자료 (로컬 전용 — 팀 공유 결정 전까지 커밋 제외)
+labmeeting/
+
+# --- 윤호 prototype_demo (feat/pybullet-prototype-pipeline 병합, 2026-08-18) ---
+CLAUDE.md
+# prototype_demo 실행 산출물·빌드물 (재생성됨)
+prototype_demo/out/*
+!prototype_demo/out/.gitkeep
+*.so
+
+# 가중치·정책은 커밋 제외 (model/README.md 에 받는 법)
+prototype_demo/model/*.pt
+prototype_demo/model/*.zip
+
+# 안 쓰는 것 보관 (커밋 제외 — 필요하면 이 줄을 지우고 커밋)
+backup/

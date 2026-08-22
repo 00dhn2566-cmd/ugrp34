@@ -73,9 +73,9 @@
 | **B-3 corner 4점 + 유도값 병기 ★** | corners_3d[4] + center/normal/size 병기 | 삼각측량 원천 그대로라 정보 손실 없음, 여유(clearance) 계산 직접적. §5가 corner에 center를 편의 병기한 것과 같은 방식 — 팀 스타일과 일치 |
 
 - **크기 필드는 어느 후보든 유지 권장** — 2학기 현수하물 확장 시 수직 여유 계산에 필수.
-- B-3 채택 시 추가로 확정할 관례 2개:
-  - **normal의 ± 방향** (예: 접근측을 향하도록)
-  - **corner winding 재정의** — v0.2의 "좌상→우상→우하→좌하"를 "**접근측에서 본 기준**"으로 명시 (3D에서는 보는 쪽에 따라 시계방향이 뒤집히므로)
+- B-3 채택 시 추가로 확정할 관례 2개 → **잠정 확정 (2026-08-08, 비동기 — 이의 없으면 v1.0 반영)**:
+  - **corner winding**: v0.2의 "좌상→우상→우하→좌하"는 "**접근측에서 본 기준**"으로 명시 (3D에서는 보는 쪽에 따라 뒤집히므로). 합성 스트림 계약(`vision/sample_stream/README_stream.md`)과 동일.
+  - **normal의 ± 방향**: **접근측을 향한다.** winding이 접근측 기준 시계방향이므로 corner에서 유도 가능 — `n̂ = normalize(cross(c3−c0, c1−c0))` ((BL−TL)×(TR−TL)). 별도 관례가 아니라 winding 계약의 따름정리. `cross(c1−c0, c3−c0)`는 반대 방향이니 주의 (`reinforcement_yunho/rl/README.md`의 antiparallel 지적 — 본 확정으로 해소). 소비측 구현: `overall_gilnam/planning/window_waypoint_planner.py`의 `normal_from_corners`.
 
 ### 3.2 전송 범위·상태 관리
 
@@ -157,7 +157,7 @@
 - [ ] §1 설계 원칙 2개 합의 (GT 치환 / world-frame 분리)
 - [ ] 축 1 선택 (A-1/A-2/A-3) + §2.1 관례 ①~④
 - [ ] 축 2 표현 선택 (B-1/B-2/B-3) + 범위 선택 (S-1/S-2/S-3)
-- [ ] B-3 채택 시: normal ± 방향, corner winding(접근측 기준) 확정
+- [x] B-3 채택 시: normal ± 방향, corner winding(접근측 기준) — **잠정 확정 (2026-08-08 비동기, §3.1)**. 회의에서 추인만
 - [ ] 전송 방식 확정 (ROS2 토픽 / JSON)
 - [ ] `passed` 마킹 소유권 — 맵(태민) vs planner 관리, 택1
 - [ ] 성진: 고주파 상태(A-3) 필요 여부 회신 — README 할일 구체화와 함께

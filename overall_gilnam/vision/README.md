@@ -19,6 +19,7 @@
 | `sample_stream/` | 태민(VIO)용 산출물: `sample_stream.jsonl` + `scene_gt.json` + `README_stream.md` |
 | `make_toy_dataset.py` | 학습 리허설용 토이 데이터셋 생성 CLI (정책 A 정합 렌더, 80/10/10 + meta.jsonl) |
 | `eval_corners.py` | corner 픽셀 오차 평가 — 코어(거리 구간별 mean/p95) + ultralytics CLI 모드 |
+| `infer_stream.py` | **학습 모델 추론 래퍼**: YOLO-pose 검출 → color_judge → §5 (unknown 색 드롭, det_conf=박스 conf). CLI: 이미지 폴더 → §5 JSONL + 추론 속도 벤치(scan rate 산정용) |
 
 데이터 흐름:
 
@@ -52,6 +53,8 @@ python eval_corners.py --model runs/pose/train/weights/best.pt --dataset window_
 
 ## 남은 일 (의존성 대기)
 
-- 데이터셋 수령(윤호) → `window_pose.yaml`의 `path:` 기입 → 학습 (`model_decisions.md` 기준 명령)
+- ~~데이터셋 수령 → 학습~~ → **본 학습 완료** (윤호 GPU 위탁 Job 1, 2026-08-01 `best.pt` 수령 — 키포인트 mAP50-95 0.927, 가중치는 git 미포함)
+- ~~추론 래퍼 작성~~ → **완료**: `infer_stream.py` (유닛 4개 + 실모델 스모크 검증)
+- 윤호 데이터셋(또는 `eval_corners` 표) 수령 → 거리 구간별 픽셀 오차 확인 (spec 합격 기준, model_decisions #7)
 - 시뮬 렌더 색 확인(윤호) → `color_order.yaml` HSV 구간 미세조정 (spec §7)
-- 학습 후: 검출 결과를 `color_judge` + `vision_msg`로 잇는 추론 래퍼 작성 (det_conf = 박스 conf)
+- ⚠ 수령 모델은 토이 렌더에서 거의 미검출 (**렌더 도메인 갭** — 자기 val에선 mAP 0.93). 평가·데모는 반드시 학습 도메인(윤호 렌더) 데이터로. 도메인 강건성은 2차 데이터셋 랜덤화에서 다룰 것

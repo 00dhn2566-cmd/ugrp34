@@ -1,0 +1,25 @@
+# 계획 파라미터 + 성진 waypoints_config limits 기본값
+# limits = 물리 한계의 80% (예산 규칙 잠정 적용, 2026-08-11 — 성진이 100% 승인 시 이 파일만 복원)
+d_app: 1.5              # 접근점 거리 [m] — 합성 씬 전방 간격 4~6m 대비
+d_exit: 1.0             # 이탈점 거리 [m]
+clearance_margin: 0.35  # 기체 여유 [m] ≈ 휠베이스 450mm/2 + 프로펠러 — margin 회의 확정 시 갱신
+limits:
+  v_max: 1.6            # [m/s]   (물리 2.0의 80%)
+  a_max: 1.6            # [m/s^2] (물리 2.0의 80%)
+  j_max: 8.0            # [m/s^3] (물리 10의 80%)
+  snap_max: 40.0        # [m/s^4] (물리 50의 80%)
+dt: 0.01                # [s]
+
+# --- v2 (2026-08-18, 윤호 프로토타입 실측 요구사항 흡수 — stop_ahead 키를 지우면 v1 동작 (나머지 v2 키는 기본값 존재)) ---
+force_horizontal_normal: true   # 복원 법선 기울어짐 → 접근점 지면 아래 추락 실측. 창문 수직 씬 가정
+gate_z: [0.5, 1.9]              # 게이트 z 안전대역 [m]
+stop_ahead: 0.6                 # 마지막 이탈점 후 정지점까지 [m]
+align_back: 0.45                # 통과축 정렬점을 접근점 뒤로 [m] (v3 min_leg 활성 시 align점은 접근점과 병합됨 — 0.45 < 0.6)
+max_passes: 4                   # 후진/경고 시 재계획 최대 횟수
+shrink: [1.0, 0.75, 0.55, 0.4]  # 패스별 standoff 축소 계수
+
+# --- v3 (2026-08-18, 짧은 구간 병합 + d_exit 국소 축소 — min_leg 없으면 v2와 바이트 동일) ---
+min_leg: 0.6      # [m] 윤호 PyBullet 실측 --merge-m 권장치 (prototype_demo/README.md "--merge-m 주의";
+                   # window_flight.py --merge-m 기본값은 0.12)
+d_exit_min: 0.3   # [m] 국소 축소 시 이탈점 거리 하한 (Task 2, 통과 여유 확보용)
+# 알려진 한계: d_exit 축소는 진행방향 투영 S_k 기준 양·유클리드 구간 기준 트리거
