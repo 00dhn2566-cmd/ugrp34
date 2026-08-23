@@ -563,7 +563,16 @@ struct QcConfig {
     double latencyAttS = 0.003;      // 자세 경로 지연 — 하드웨어 상수에 가깝다 (구성값)
     // 질량 1차식을 08-18 채택 0 kg 앵커 기준으로 바꾼다 (qc_mass_lerp_apply.m 의 짝).
     // false(기본) = 07-19 18차 법칙 그대로 = 기존 동작. **1 kg 에서는 둘이 같다.**
-    // MATLAB `verify_mass_lerp.m` 이 통과하면 기본값을 뒤집을 것. [TODO-채택]
+    //
+    // ⚠ 켜기 전에 풀어야 할 것 — **프로파일과 충돌한다.** 1차식의 kp_pos 앵커
+    //   (5 -> 8)는 precision 기준이다. agile 은 프로파일이 kpPos 를 24 로 올리는데,
+    //   massLerpOn 이 켜지면 qc_scales 가 posErrSat 을 1차식의 kpPos 로 계산해
+    //   프로파일 설정을 덮어쓴다 (곱 불변식 C·kp = 1.2 가 깨진다).
+    //   MATLAB `qc_mass_lerp_apply.m` 도 같은 전제(precision)로 쓰여 있다.
+    //   -> 채택 시 결정할 것: 1차식을 precision 기저로 두고 프로파일이 그 위에
+    //      곱해지게 할지, 아니면 프로파일별 앵커를 따로 잴지.
+    //   MATLAB verify_mass_lerp.m 은 통과했다 (0 kg 호버 11.58 -> 0.0088도,
+    //   1 kg 완전 동일). 남은 것은 이 프로파일 문제뿐이다. [TODO-채택]
     bool massLerpOn = false;
     // 회복 감시. recOn=false 면 배율 1 고정 = 기존 동작과 동일.
     bool   recOn = false;
