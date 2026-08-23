@@ -16,12 +16,67 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import capability as cap  # noqa: E402
+from recovery_watcher import RecoveryWatcher  # noqa: E402
 from spec_governor import (  # noqa: E402
     REPUBLISH_EPS,
     SpecGovernor,
     att_delay_verdict,
     scale_from_latency_pos,
 )
+
+
+class TestRecoveryWatcher:
+    """표가 틀렸을 때 폐루프로 교정 (사용자 설계 08-23)."""
+
+    def _run(self, w, err, secs, dt=0.01, lead=2.0, ref_ok=True):
+        for _ in range(int(secs / dt)):
+            w.observe(err, ref_ok, dt)
+            w.decide(lead)
+        return w.s
+
+    def test_quiet_never_cuts(self):
+        w = RecoveryWatcher()
+        assert self._run(w, 0.01, 30.0) == 1.0
+        assert w.cuts == 0
+
+    def test_slow_recovery_cuts_gradually(self):
+        """한 판단에 한 걸음씩. 한 번에 바닥으로 떨어지면 다리가 따라올 수 없다."""
+        w = RecoveryWatcher()
+        seen = []
+        for _ in range(int(30.0 / 0.01)):
+            w.observe(0.09, True, 0.01)
+            before = w.s
+            if w.decide(2.0) != before:
+                seen.append(round(w.s, 3))
+        assert len(seen) >= 3, f"걸음이 너무 적다: {seen}"
+        assert all(a > b for a, b in zip(seen, seen[1:])), f"단조 감소 아님: {seen}"
+        assert max(a - b for a, b in zip([1.0] + seen, seen)) <= w.max_cut + 1e-9
+
+    def test_restores_after_clean(self):
+        w = RecoveryWatcher()
+        self._run(w, 0.09, 25.0)
+        low = w.s
+        assert low < 1.0
+        assert self._run(w, 0.01, 60.0) == pytest.approx(1.0, abs=1e-3)
+        assert w.s > low
+
+    def test_period_never_below_bridge_convergence(self):
+        """판단 주기 < 다리 수렴 시간이면, 앞 결정이 반영되기 전에 또 결정한다 = 발진."""
+        w = RecoveryWatcher(min_period_s=1.0)
+        assert w.period_s(4.0) >= 4.0
+        assert w.period_s(None) == 1.0
+        assert w.period_s(float("nan")) == 1.0
+
+    def test_reference_over_limits_is_not_charged(self):
+        """기준이 한계 밖이면 계획 문제다 — 그걸로 스펙을 깎으면 안 된다."""
+        w = RecoveryWatcher()
+        assert self._run(w, 0.30, 30.0, ref_ok=False) == 1.0
+        assert w.cuts == 0 and w.n_skipped > 0
+
+    def test_floor_is_slow_not_stop(self):
+        """감시는 '느리게' 까지만. 정지 판단은 감독자(§9) 몫이다."""
+        w = RecoveryWatcher()
+        assert self._run(w, 1.0, 200.0) >= 0.15 - 1e-9
 
 
 def gov(**kw):
@@ -211,7 +266,8 @@ class TestReportShape:
         for k in ("latency_att_s", "latency_pos_applied_s"):
             assert k in c["observed"], k
         assert set(c["degraded"]["scale_sources"]) == {
-            "disturbance", "latency_pos", "latency_att"}
+            "disturbance", "latency_pos", "latency_att", "recovery"}
+        assert "recovery" in c["observed"]
 
     def test_disturbance_and_latency_take_min_not_product(self):
         """둘을 곱하면 겹칠 때 필요 이상으로 깎여 임무가 서지 않는다."""

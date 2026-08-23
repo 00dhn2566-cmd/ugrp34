@@ -282,27 +282,50 @@ struct SpecLatencyRule {
     double attMaxS    = 0.016;   // 이 위 운용 불가
     double attMargin  = 0.60;    // 그 사이 구간의 고정 배율
 
-    // 위치 경로 실측표 (오름차순 지연 [s] -> 허용 배율). 표 밖은 **외삽하지 않는다** —
-    // 안 재본 구간의 추정치를 내면 그게 곧 사고다. 마지막 값을 유지하고 플래그를 세운다.
+    // 위치 경로 실측표. 표 밖은 **외삽하지 않는다** — 안 재본 구간의 추정치를 내면
+    // 그게 곧 사고다. 마지막 값을 유지하고 플래그를 세운다.
+    //
+    // ★ 두 벌인 이유 (사용자 정정): **기본은 외란 없음.** 상위에 늘 내보내는 스펙은
+    //   지연만 반영해야 한다. 돌풍 표는 외란이 실제로 감지될 때만, 그것도 rho 크기로
+    //   기본표와 **보간**해서 쓴다 (한 점에서 잰 값을 약한 돌풍에 그대로 쓰면 과감쇄).
     static constexpr int kMaxAnchors = 8;
-    double posTau[kMaxAnchors]   = {0.000, 0.020, 0.030, 0.040, 0.060, 0.080, 0.0, 0.0};
-    double posScale[kMaxAnchors] = {1.00, 1.00, 1.00, 0.55, 0.28, 0.00, 0.0, 0.0};
-    int    posN = 6;             // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
+    double posTau[kMaxAnchors]      = {0.000, 0.020, 0.040, 0.060, 0.080, 0.120, 0.160, 0.0};
+    double posScale[kMaxAnchors]    = {1.00, 1.00, 0.88, 0.75, 0.37, 0.00, 0.00, 0.0};
+    int    posN = 7;         // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
 
-    double posScaleFor(double tauS, bool* extrapolated = nullptr) const {
-        const double t = tauS > 0.0 ? tauS : 0.0;
-        if (extrapolated) *extrapolated = (posN > 0 && t > posTau[posN - 1]);
-        if (posN <= 0) return 1.0;
-        if (t <= posTau[0]) return posScale[0];
-        if (t >= posTau[posN - 1]) return posScale[posN - 1];
-        for (int i = 1; i < posN; ++i) {
-            if (t <= posTau[i]) {
-                const double d = posTau[i] - posTau[i - 1];
-                const double w = d > 1e-12 ? (t - posTau[i - 1]) / d : 0.0;
-                return posScale[i - 1] + (posScale[i] - posScale[i - 1]) * w;
+    // 돌풍 표 (0.3 N*m x 0.3 s 를 이동 중 맞고도 복귀가 사는 배율). sync_delay_anchors.py 생성.
+    double gustTau[kMaxAnchors]     = {0.000, 0.020, 0.030, 0.040, 0.060, 0.080, 0.0, 0.0};
+    double gustScale[kMaxAnchors]   = {1.00, 1.00, 1.00, 0.55, 0.28, 0.00, 0.0, 0.0};
+    int    gustN = 6;        // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
+    // 돌풍 표를 잰 외란 크기에 대응하는 rho (0.3 N*m = yaw 권한의 94.6%).
+    double gustRhoRef = 0.90;
+
+    static double lookup(const double* tau, const double* sc, int n, double t,
+                         bool* extrapolated) {
+        if (extrapolated) *extrapolated = (n > 0 && t > tau[n - 1]);
+        if (n <= 0) return 1.0;
+        if (t <= tau[0]) return sc[0];
+        if (t >= tau[n - 1]) return sc[n - 1];
+        for (int i = 1; i < n; ++i) {
+            if (t <= tau[i]) {
+                const double d = tau[i] - tau[i - 1];
+                const double w = d > 1e-12 ? (t - tau[i - 1]) / d : 0.0;
+                return sc[i - 1] + (sc[i] - sc[i - 1]) * w;
             }
         }
-        return posScale[posN - 1];
+        return sc[n - 1];
+    }
+
+    // rhoEff = 관측된 유효 외란 점유율 (0 이면 기본표 그대로).
+    double posScaleFor(double tauS, double rhoEff = 0.0,
+                       bool* extrapolated = nullptr) const {
+        const double t = tauS > 0.0 ? tauS : 0.0;
+        const double sNom = lookup(posTau, posScale, posN, t, extrapolated);
+        if (rhoEff <= 0.0) return sNom;
+        const double sG = lookup(gustTau, gustScale, gustN, t, nullptr);
+        double u = rhoEff / (gustRhoRef > 1e-9 ? gustRhoRef : 1e-9);
+        u = clamp(u, 0.0, 1.0);
+        return sNom + (sG - sNom) * u;      // 잰 조합이므로 가산이 아니라 보간
     }
 
     // 반환 0.0 = 운용 불가 (임무 거부)
@@ -329,6 +352,8 @@ struct SpecReport {
 
 // baseV/A/J/Snap: 질량 앵커 기저 한계, limitScale: 프로파일 배율(precision 0.75)
 // sDisturb: 외란 쪽 배율 (SpeedGovernor 의 s 를 그대로 넣으면 된다)
+// sDisturb: 외란 쪽 배율 (SpeedGovernor 의 s). 1 - sDisturb 를 rhoEff 로 써서
+// 위치 지연표(기본/돌풍) 사이를 보간한다.
 inline SpecReport qc_spec_report(const SpecLatencyRule& rule,
                                  double baseV, double baseA, double baseJ, double baseSnap,
                                  double limitScale, double sDisturb,
@@ -336,15 +361,21 @@ inline SpecReport qc_spec_report(const SpecLatencyRule& rule,
     SpecReport r;
     r.latencyAppliedS = latencyPosS;
     r.scaleDisturb = clamp(sDisturb, 0.0, 1.0);
-    r.scaleLatPos  = rule.posScaleFor(latencyPosS, &r.latencyExtrapolated);
+    r.scaleLatPos  = rule.posScaleFor(latencyPosS, 1.0 - r.scaleDisturb,
+                                      &r.latencyExtrapolated);
     r.scaleLatAtt  = rule.attScaleFor(latencyAttS);
     r.missionAllowed = (r.scaleLatAtt > 0.0);
 
-    // 세 배율은 곱이 아니라 min — 곱하면 요인이 겹칠 때 필요 이상으로 깎여 임무가 안 선다.
-    double s = r.scaleDisturb;
-    if (r.scaleLatPos < s) s = r.scaleLatPos;
-    if (r.missionAllowed && r.scaleLatAtt < s) s = r.scaleLatAtt;
-    if (!r.missionAllowed) s = 0.0;
+    // **가산**으로 합친다 (사용자 지적): 배율 s 가 아니라 깎인 양 1-s 가 소모량이라,
+    // 서로 다른 원인이면 더해야 맞다. min 은 두 원인이 같은 제약을 다르게 표현한
+    // 경우에만 옳고, 그렇지 않으면 낙관적이다.
+    // 여유(제어 권한/위상 여유)라는 **하나의 자원**을 속도·외란·지연이 나눠 쓰는 모델.
+    double d = 0.0;
+    d += 1.0 - clamp(r.scaleDisturb, 0.0, 1.0);
+    d += 1.0 - clamp(r.scaleLatPos, 0.0, 1.0);
+    if (r.missionAllowed) d += 1.0 - clamp(r.scaleLatAtt, 0.0, 1.0);
+    double s = r.missionAllowed ? (1.0 - d) : 0.0;
+    if (s < 0.0) s = 0.0;
 
     r.timeScale = s;
     r.v    = baseV    * limitScale * s;

@@ -46,12 +46,9 @@ def py_reference(att_s):
         sample = 0.075 if 30 <= k < 70 else 0.012
         pred = tr.update(sample)
         pred = tr.predicted_s
-        s_pos = scale_from_latency_pos(pred)
-        s = min(1.0, s_pos)
-        if s_att > 0.0:
-            s = min(s, s_att)
-        else:
-            s = 0.0
+        # C++ main_spec_trace 는 sDisturb=1.0 (외란 없음) 으로 부른다 -> rhoEff = 0
+        s_pos = scale_from_latency_pos(pred, gust=False)
+        s = cap.combine_scales(1.0, s_pos, s_att) if s_att > 0.0 else 0.0
         rows.append(dict(
             k=k, detected=tr.detected, ema_fast=tr.ema_fast, ema_slow=tr.ema_slow,
             predicted=pred, scale=s,
@@ -100,7 +97,10 @@ def test_cpp_rule_constants_match_python():
         assert literal(name) == pytest.approx(val), f"{name}: C++ {literal(name)} vs py {val}"
 
     # 위치 실측표 앵커 개수도 같아야 한다 (표를 갱신하면 양쪽 다 고쳤는지 확인)
-    n_cpp = int(literal("posN"))
-    assert n_cpp == len(cap._LAT_POS_ANCHORS), (
-        f"위치 앵커 개수 불일치: C++ {n_cpp} vs py {len(cap._LAT_POS_ANCHORS)} — "
-        "실측표를 한쪽만 갱신했다")
+    for name, tbl, label in (("posN", cap._LAT_POS_ANCHORS, "기본"),
+                             ("gustN", cap._LAT_POS_ANCHORS_GUST, "돌풍")):
+        n_cpp = int(literal(name))
+        assert n_cpp == len(tbl), (
+            f"{label} 앵커 개수 불일치: C++ {n_cpp} vs py {len(tbl)} — "
+            "실측표를 한쪽만 갱신했다")
+    assert literal("gustRhoRef") == pytest.approx(cap.GUST_RHO_REF)

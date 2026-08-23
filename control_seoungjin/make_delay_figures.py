@@ -60,10 +60,15 @@ def _save(fig, name):
     return p
 
 
-def _read_progress():
-    """tight 게이트 스윕 진행 파일 파싱 -> [(tau, s, end_cm, over_cm, devy_cm, rec_s, ok)]."""
-    # 확정본(_1kg) 을 우선 읽고, 없으면 진행 중 파일을 본다.
-    for name in ("sweep_delay_spec_progress_1kg.txt", "sweep_delay_spec_progress.txt"):
+def _read_progress(which="gust"):
+    """스윕 진행 파일 파싱 -> [{tau, s, end_cm, over_cm, devy_cm, rec_s, ok}].
+
+    which: 'gust'(0.3 N*m 배터리) | 'nominal'(외란 없음, 기본표)
+    """
+    names = {"gust": ["sweep_delay_spec_progress_1kg_gust.txt"],
+             "nominal": ["sweep_delay_spec_progress_1kg_nominal.txt",
+                         "sweep_delay_spec_progress.txt"]}[which]
+    for name in names:
         p = os.path.join(RES, name)
         if os.path.exists(p):
             break
@@ -119,9 +124,19 @@ def fig_att_gate():
     return _save(fig, "fig_att_gate.png")
 
 
+def _smax(rows):
+    taus = sorted({r["tau"] for r in rows})
+    out = []
+    for t in taus:
+        ok = [r["s"] for r in rows if r["tau"] == t and r["ok"]]
+        out.append(max(ok) if ok else 0.0)
+    return taus, out
+
+
 def fig_pos_spec():
-    """위치 경로: 지연별로 어디까지 스펙을 줄 수 있나 + 왜 복귀 게이트가 필요했나."""
-    rows = _read_progress()
+    """위치 경로: 왜 복귀 게이트가 필요했나 + 기본표 vs 돌풍표."""
+    rows = _read_progress("gust")
+    nom = _read_progress("nominal")
     fig, ax = plt.subplots(1, 2, figsize=(9.4, 3.4))
 
     if rows:
@@ -147,20 +162,26 @@ def fig_pos_spec():
         ax[0].axhline(1.73, color=C_GRAY, ls="--", lw=1.0)
         ax[0].text(41, 0.9, "무지연 기준 1.73 s", color=C_GRAY, fontsize=8)
         ax[0].set_xlabel("위치 경로 지연 [ms]"); ax[0].set_ylabel("외란 복귀 시간 [s]")
-        ax[0].set_title("복귀 시간 — 종단오차만 보면 놓친다")
+        ax[0].set_title("외란 배터리: 복귀 시간 — 종단오차만 보면 놓친다")
         ax[0].grid(alpha=.3)
 
-        # 오른쪽: 채택된 s_max -> 한계
-        taus = sorted({r["tau"] for r in rows})
-        smax = []
-        for t in taus:
-            ok = [r["s"] for r in rows if r["tau"] == t and r["ok"]]
-            smax.append(max(ok) if ok else 0.0)
-        ax[1].plot(taus, [1.6 * s for s in smax], "o-", color=C_OK, label="v [m/s]")
-        ax[1].plot(taus, [1.6 * s ** 2 for s in smax], "s-", color=C_ACC, label="a [m/s²]")
-        ax[1].plot(taus, [8.0 * s ** 3 for s in smax], "^-", color=C_GRAY, label="j [m/s³]")
-        ax[1].set_xlabel("위치 경로 지연 [ms]"); ax[1].set_ylabel("허용 한계")
-        ax[1].set_title("limits(τ) — 배율 하나로 함께 내려간다")
+        # 오른쪽: 기본표(외란 없음) vs 돌풍표. 둘의 간격이 곧 '이중 감쇄' 의 크기다.
+        tg, sg = _smax(rows)
+        ax[1].plot(tg, [1.6 * v for v in sg], "s--", color=C_BAD,
+                   label="돌풍표 (0.3 N·m)")
+        if nom:
+            tn, sn = _smax(nom)
+            ax[1].plot(tn, [1.6 * v for v in sn], "o-", color=C_OK,
+                       label="기본표 (외란 없음)")
+            # 60 ms 간격을 화살표로 짚는다
+            if 60 in tn and 60 in tg:
+                a = 1.6 * sn[tn.index(60)]
+                b = 1.6 * sg[tg.index(60)]
+                ax[1].annotate("", xy=(60, a), xytext=(60, b),
+                               arrowprops=dict(arrowstyle="<->", color="k", lw=1.0))
+                ax[1].text(63, (a + b) / 2, f"{a / max(b, 1e-9):.1f}배", fontsize=8)
+        ax[1].set_xlabel("위치 경로 지연 [ms]"); ax[1].set_ylabel("허용 속도 [m/s]")
+        ax[1].set_title("기본표 vs 돌풍표 — 섞어 재면 이만큼 과감쇄")
         ax[1].legend(fontsize=8); ax[1].grid(alpha=.3)
     else:
         for a in ax:
@@ -282,7 +303,9 @@ def main():
                       "hover_peak_deg": ATT_PK, "dist_peak_deg": ATT_DIST},
         "att_rule": {"clean_s": cap.LAT_ATT_CLEAN_S, "max_s": cap.LAT_ATT_MAX_S,
                      "margin_scale": cap.LAT_ATT_MARGIN_SCALE},
-        "pos_sweep": _read_progress(),
+        "pos_sweep_gust": _read_progress("gust"),
+        "pos_sweep_nominal": _read_progress("nominal"),
+        "pos_anchors_gust": {str(k): v for k, v in cap._LAT_POS_ANCHORS_GUST.items()},
         "pos_anchors": {str(k): v for k, v in cap._LAT_POS_ANCHORS.items()},
         "figures": [os.path.basename(p) for p in paths],
     }

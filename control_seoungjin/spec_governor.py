@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import capability as cap                                   # noqa: E402
 from compute_load import LoadEstimator, LoadGovernor       # noqa: E402
 from latency_tracker import LatencyTracker                 # noqa: E402
+from recovery_watcher import RecoveryWatcher               # noqa: E402
 
 # 시계 배율이 이만큼 달라져야 '스펙이 바뀌었다'고 상위에 알린다.
 # 너무 작으면 경계에서 재계획이 쏟아지고, 너무 크면 감쇄가 늦게 반영된다.
@@ -60,25 +61,47 @@ REPUBLISH_EPS = 0.05
 MIN_REPLAN_BUDGET_S = 0.10
 
 
-def scale_from_latency_pos(latency_s: float) -> float:
+def scale_from_latency_pos(latency_s: float, gust: bool = False,
+                           rho_eff: float | None = None) -> float:
     """위치(VIO) 경로 지연 -> 허용 시계 배율. 실측 앵커 사이 선형 보간.
 
-    앵커는 `capability._LAT_POS_ANCHORS` (MATLAB `sweep_delay_spec.m` 실측).
-    표 밖(더 큰 지연)은 마지막 두 앵커의 기울기로 외삽하지 않는다 — 재보다 큰
-    지연에서 무슨 일이 나는지 모르는데 추정치를 내면 그게 곧 사고다. 마지막
-    앵커 값을 유지하되 `extrapolated` 플래그를 세워 상위가 알게 한다.
+    gust=False (기본) : `capability._LAT_POS_ANCHORS` — **외란 없는** 조건에서 잰 표.
+                        상위에 늘 내보내는 값이 이것이다.
+    gust=True         : `_LAT_POS_ANCHORS_GUST` — 이동 중 0.3 N*m 돌풍을 맞고도
+                        복귀가 사는 배율. 외란이 **실제로 감지될 때만** 쓴다.
+
+    사용자 규정 (2026-08-23): "디폴트는 외란 없다. 만약 시간 지연에서 외란 생기면
+    그때 깎는 거." 기본표에 돌풍을 섞으면 평시에도 최악을 가정한 값이 나가
+    임무가 필요 이상으로 느려진다.
+
+    표 밖(더 큰 지연)은 외삽하지 않는다 — 재보다 큰 지연에서 무슨 일이 나는지
+    모르는데 추정치를 내면 그게 곧 사고다. 마지막 앵커 값을 유지하고
+    `latency_extrapolated` 플래그로 상위가 알게 한다.
     """
-    tau = max(float(latency_s), 0.0)
-    keys = sorted(cap._LAT_POS_ANCHORS)
-    if tau <= keys[0]:
-        return cap._LAT_POS_ANCHORS[keys[0]]
-    if tau >= keys[-1]:
-        return cap._LAT_POS_ANCHORS[keys[-1]]
-    hi = min(k for k in keys if k >= tau)
-    lo = max(k for k in keys if k <= tau)
-    w = 0.0 if hi == lo else (tau - lo) / (hi - lo)
-    a, b = cap._LAT_POS_ANCHORS[lo], cap._LAT_POS_ANCHORS[hi]
-    return a + (b - a) * w
+    def look(tbl):
+        tau = max(float(latency_s), 0.0)
+        keys = sorted(tbl)
+        if tau <= keys[0]:
+            return tbl[keys[0]]
+        if tau >= keys[-1]:
+            return tbl[keys[-1]]
+        hi = min(k for k in keys if k >= tau)
+        lo = max(k for k in keys if k <= tau)
+        w = 0.0 if hi == lo else (tau - lo) / (hi - lo)
+        return tbl[lo] + (tbl[hi] - tbl[lo]) * w
+
+    s_nom = look(cap._LAT_POS_ANCHORS)
+    if not gust:
+        return s_nom
+    s_gust = look(cap._LAT_POS_ANCHORS_GUST)
+    if rho_eff is None:
+        return s_gust                       # 크기를 모르면 최악(잰 조건)으로 본다
+    # 두 표 **사이를 보간**한다. 돌풍 표는 rho ~ GUST_RHO_REF 에 해당하는 한 점에서
+    # 잰 것이라, 약한 돌풍에 그 값을 그대로 적용하면 과하게 깎인다.
+    # 여기서 가산(combine_scales)을 쓰면 안 된다 — 지연x외란 조합은 **직접 잰** 것이라
+    # 또 더하면 이중 계산이다.
+    u = min(max(float(rho_eff) / max(cap.GUST_RHO_REF, 1e-9), 0.0), 1.0)
+    return s_nom + (s_gust - s_nom) * u
 
 
 def att_delay_verdict(latency_att_s: float):
@@ -106,6 +129,9 @@ class SpecGovernor:
     load: LoadEstimator = field(default_factory=LoadEstimator, init=False)
     gov: LoadGovernor = field(default_factory=LoadGovernor, init=False)
     lat: LatencyTracker = field(default_factory=LatencyTracker, init=False)
+    # 실측표가 틀렸을 때 폐루프로 교정 (사용자 설계 08-23). 표 = 피드포워드, 이것 = 피드백.
+    rec: RecoveryWatcher = field(default_factory=RecoveryWatcher, init=False)
+    bridge_lead_s: float = field(default=0.0, init=False)   # 직전 다리의 수렴 시간
 
     rho: float = field(default=0.0, init=False)
     yaw_err_rad: float = field(default=0.0, init=False)
@@ -127,6 +153,14 @@ class SpecGovernor:
         """지연 실측 표본 (상태 나이 / 명령-응답 왕복 등, INTERFACE_SPEC §8c)."""
         return self.lat.update(sample_s)
 
+    def observe_tracking(self, err_m, ref_ok=True, dt=0.001):
+        """추종 오차 한 표본 (제어 주기). `ref_ok` = 지금 기준이 현재 limits 안인가.
+
+        기준이 한계 밖이면 버린다 — 계획이 과한 것을 제어기 탓으로 돌려 스펙을 깎으면
+        잘못된 계획이 기체 능력을 갉아먹는 되먹임이 된다 (recovery_watcher 주석).
+        """
+        self.rec.observe(err_m, ref_ok, dt)
+
     def observe_rho(self, rho, yaw_err_rad=0.0):
         """제어 권한 점유율. **구간 최대**를 넣어야 한다 (평균은 돌풍을 지운다)."""
         self.rho = float(rho)
@@ -140,16 +174,29 @@ class SpecGovernor:
         measured = self.lat.predicted_s
         applied = self.gov.update(predicted, measured, dt=dt)
 
-        s_pos = scale_from_latency_pos(applied)
+        # 외란이 실제로 붙었을 때만 돌풍 표로 갈아탄다 (사용자 규정: 기본은 외란 없음).
+        rho_eff = max(self.rho,
+                      abs(self.yaw_err_rad) / math.radians(45.0))
+        gust = rho_eff > 0.0
+        s_pos = scale_from_latency_pos(applied, gust=gust, rho_eff=rho_eff)
         s_att, att_reason = att_delay_verdict(self.latency_att_s)
 
-        # 외란 쪽 배율은 capability 가 rho 에서 계산한다. 지연 쪽 배율은 여기서
-        # 만들어 넘긴다 — 둘 중 **더 빡빡한 쪽**이 이긴다 (곱이 아니라 min:
-        # 곱하면 두 요인이 겹칠 때 필요 이상으로 깎여 임무가 서지 않는다).
-        s_lat = min(s_pos, s_att)
+        # 외란 쪽 배율은 capability 가 rho 에서 계산하고, 지연 쪽은 여기서 만들어
+        # 넘긴다. 합치는 규칙은 **가산** (capability.combine_scales 주석 참조).
+        #
+        # 정직하게 적어 둘 것 — rho 감쇄와 돌풍 표는 펄스 응답 부분이 **일부 겹친다**
+        # (둘 다 rho 에 반응). 그래도 더하는 쪽을 택한다: ① 두 축이 보는 외란의 모양이
+        # 다르다 (rho = 지속 외란/yaw 이탈, 표 = 0.3 s 펄스) ② 겹치는 만큼 보수적으로
+        # 틀리는 것이 낙관적으로 틀리는 것보다 낫다.
+        # 회복 감시(폐루프 교정)도 같은 자원을 먹는 축이라 가산에 넣는다.
+        # 판단 주기는 **직전 다리의 수렴 시간**보다 길어야 한다 — 앞선 결정이 반영되기
+        # 전에 또 결정하면 발진이다 (recovery_watcher §안전장치 ①).
+        s_rec = self.rec.decide(self.bridge_lead_s or None)
+        s_lat = cap.combine_scales(s_pos, s_att, s_rec)
 
         # 표 안이면 실측 배율을, 표 밖이면 해석 규칙(보수적)을 쓴다.
-        in_table = applied <= max(cap._LAT_POS_ANCHORS)
+        tbl = cap._LAT_POS_ANCHORS_GUST if gust else cap._LAT_POS_ANCHORS
+        in_table = applied <= max(tbl)
         c = cap.build_capability(
             pkg_kg=self.pkg_kg, rho=self.rho, latency_s=applied,
             profile=self.profile, yaw_err_rad=self.yaw_err_rad,
@@ -158,22 +205,9 @@ class SpecGovernor:
             now=now,
             latency_scale=(s_lat if in_table else None))
 
+        # 자세 게이트는 이미 s_lat 에 들어가 build_capability 로 넘어갔다.
+        # 여기서 또 더하면 **이중 계산**이다 (2026-08-23 실수, 시험이 잡음).
         s_dist = float(c["degraded"]["time_scale"])
-        # 자세 게이트는 build_capability 가 모르는 축이라 여기서 한 번 더 min.
-        s_eff = min(s_dist, s_att) if s_att > 0 else s_dist
-        if s_eff < s_dist:
-            base = cap._interp_anchor(self.pkg_kg)["limits"]
-            ls = cap._PROFILE[self.profile]["limit_scale"]
-            c["limits"] = {
-                "v": round(base["v"] * ls * s_eff, 6),
-                "a": round(base["a"] * ls * s_eff ** 2, 6),
-                "j": round(base["j"] * ls * s_eff ** 3, 6),
-                "snap": round(base["snap"] * ls * s_eff ** 4, 6),
-            }
-            c["degraded"]["time_scale"] = round(s_eff, 4)
-            c["degraded"]["active"] = True
-            if "latency" not in c["degraded"]["reasons"]:
-                c["degraded"]["reasons"].append("latency")
 
         # 위치 표에 0.00 이 들어 있으면 그 지연에서는 **어떤 배율로도** 통과 못한 것이다
         # (안 재본 게 아니라 못 하는 것). 자세 게이트와 같이 임무 거부로 취급한다.
@@ -198,11 +232,15 @@ class SpecGovernor:
             "disturbance": round(s_dist, 4),
             "latency_pos": round(s_pos, 4),
             "latency_att": round(s_att, 4),
+            "recovery": round(s_rec, 4),
         }
+        c["observed"]["recovery"] = self.rec.snapshot()
+        if s_rec < 1.0 and "recovery_slow" not in c["degraded"]["reasons"]:
+            c["degraded"]["reasons"].append("recovery_slow")
         c["degraded"]["mission_allowed"] = not unflyable
         # 표 밖 지연이면 상위가 값을 곧이곧대로 믿으면 안 된다
-        c["degraded"]["latency_extrapolated"] = (
-            applied > max(cap._LAT_POS_ANCHORS))
+        c["degraded"]["latency_extrapolated"] = (applied > max(tbl))
+        c["degraded"]["latency_table"] = "gust" if gust else "nominal"
 
         s_now = float(c["degraded"]["time_scale"])
         changed = abs(s_now - self.last_scale) >= REPUBLISH_EPS
@@ -237,10 +275,14 @@ class SpecGovernor:
         if self.last_cap is None:
             raise RuntimeError("spec_governor: tick() 을 먼저 부를 것")
         base_lim = cap._interp_anchor(self.pkg_kg)["limits"]
-        return plan_bridge(t, base, t_now,
-                           limits_new=self.last_cap["limits"],
-                           replan_budget_s=self.replan_budget_s(),
-                           s_now=s_now, base_limits=base_lim)
+        br = plan_bridge(t, base, t_now,
+                         limits_new=self.last_cap["limits"],
+                         replan_budget_s=self.replan_budget_s(),
+                         s_now=s_now, base_limits=base_lim)
+        # 감시의 판단 주기 하한으로 되먹인다 (무한대면 최악으로 보수적이 되므로 클램프).
+        lead = br.compliant_after_s
+        self.bridge_lead_s = lead if lead == lead and lead != float("inf") else 4.0
+        return br
 
     def snapshot(self) -> dict:
         return {
@@ -248,6 +290,7 @@ class SpecGovernor:
             "republishes": self.republishes,
             "time_scale": round(self.last_scale, 4),
             "latency": self.lat.snapshot(),
+            "recovery": self.rec.snapshot(),
             "load": self.load.snapshot(),
             "governor": self.gov.snapshot(),
         }

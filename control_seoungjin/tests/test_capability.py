@@ -198,10 +198,24 @@ class TestEndToEnd:
         assert cap2["limits"]["v"] == pytest.approx(1.6 * 0.75, rel=1e-6)
         assert cap2["observed"]["scale_latency_source"] == "measured_table"
 
-    def test_worst_case_is_still_flyable(self):
-        """전부 나쁜 조건에서도 한계가 0 이 되면 안 된다 (정지 명령은 상위가 낸다)."""
+    def test_worst_case_exhausts_the_budget(self):
+        """전부 나쁘면 한계가 0 이 된다 — 그게 맞는 답이다.
+
+        2026-08-23 이전에는 "0 이 되면 안 된다"고 시험했다. 배율을 min 으로 합치던
+        때의 규약이다. 지금은 **여유라는 하나의 자원을 속도·외란·지연이 나눠 쓰는**
+        모델이고(사용자 정의), 깎인 양을 더한다. 셋이 다 먹으면 속도 몫이 0 이 되는
+        것이 물리적으로 옳은 결론이고, 상위는 그걸 "이동 계획을 내지 말라"로 읽는다.
+        0 을 억지로 바닥으로 올리면 **없는 여유를 있다고 보고하는 것**이 된다.
+        """
         cap = build_capability(pkg_kg=0.0, rho=1.0, latency_s=0.3,
                                yaw_err_rad=math.radians(90))
+        assert cap["limits"]["v"] == 0.0
+        assert cap["degraded"]["active"] is True
+        assert "latency_severe" in cap["degraded"]["reasons"]
+
+    def test_moderate_case_stays_positive(self):
+        """반대로, 적당히 나쁜 조건에서는 여유가 남아야 한다 (전부 0 으로 만들면 무용)."""
+        cap = build_capability(pkg_kg=1.0, rho=0.2, latency_s=0.0)
         for k in ("v", "a", "j", "snap"):
             assert cap["limits"][k] > 0.0
 
