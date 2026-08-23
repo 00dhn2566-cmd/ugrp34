@@ -51,7 +51,7 @@ fprintf('감쇄 t=%.2f s -> 배율 %.2f (v %.3f), 램프 %.2f s, 새 한계 진�
 cases = {'A 전속 유지(다리 없음)', S.x_base; ...
          'B 다리로 갈아탐',        S.x_bridge};
 fprintf('%24s %10s %10s %11s %10s\n', '구성', '종단[cm]', '오버[cm]', '외란y[cm]', '복귀[s]');
-R = struct('name', {}, 'end_cm', {}, 'over_cm', {}, 'devy_cm', {}, 'rec_s', {});
+R = struct('name', {}, 'end_cm', {}, 'over_cm', {}, 'devy_cm', {}, 'rec_s', {}, 'trk_cm', {});
 
 for k = 1:size(cases, 1)
     name = cases{k,1};  xr = cases{k,2};
