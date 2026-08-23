@@ -116,6 +116,28 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     out.sClock = st.gov.step(uY, c.limYaw, eYaw, dt);
     out.rhoEff = st.gov.rhoEff;
     st.tauClock += out.sClock * dt;
+
+    // ── 지연 -> 상위 보고 스펙 (관측 전용; 제어 출력에 영향 없음) ──────────
+    // 지연 추적은 조속기와 **분리**되어 있다. 조속기는 외란(권한 점유)에 반응하는
+    // 즉시 반사이고, 지연 감쇄는 계획을 다시 짜야 하는 느린 판단이라 성격이 다르다.
+    // 여기서는 재기만 하고, 실제로 느리게 갈지는 상위가 새 궤적으로 결정한다.
+    // 보고는 ~5 Hz 로 데시메이션한다 (QcConfig::specRateHz 주석 참조 — 제어 주기로
+    // 돌리면 EMA 시정수가 표본수 기준이라 의미가 달라진다).
+    if (c.specOn) {
+        if (in.measAgeS > st.specAgeMax) st.specAgeMax = in.measAgeS;
+        st.specAcc += dt;
+        const double period = (c.specRateHz > 1e-9) ? (1.0 / c.specRateHz) : dt;
+        if (st.specAcc >= period) {
+            st.specAcc -= period;
+            const double tauPos = st.lat.update(st.specAgeMax);
+            st.specAgeMax = 0.0;
+            st.specLast = qc_spec_report(st.specRule,
+                                         c.specBaseV, c.specBaseA, c.specBaseJ,
+                                         c.specBaseSnap, c.specLimitScale,
+                                         out.sClock, tauPos, c.latencyAttS);
+        }
+        out.spec = st.specLast;
+    }
     const double uA = st.pidAlt.step(in.refPos[2] - measZ, dt);
 
     // ---- 추력 바이어스 + 2단 클램프 + 믹서 ----

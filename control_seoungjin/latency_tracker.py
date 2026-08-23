@@ -93,8 +93,24 @@ class LatencyTracker:
 
     @property
     def predicted_s(self) -> float:
-        """스펙 감쇄에 쓸 지연. 감지 중이면 느린 EMA, 아니면 0(무보정)."""
-        return self.ema_slow if self.detected else 0.0
+        """스펙 감쇄에 쓸 지연. 감지 중이면 두 EMA 중 **큰 쪽**, 아니면 0(무보정).
+
+        왜 느린 EMA 만 쓰면 안 되나 (2026-08-23 수정) —
+        느린 EMA(유효 60 표본)는 안정적이지만 **느리다.** 지연이 갑자기 붙은
+        직후에는 아직 예전 값 근처라, 그걸 그대로 내보내면 스펙 감쇄가 30 표본쯤
+        늦는다. 그런데 `traj_bridge` 분석이 말하는 바는 정반대다 — 감쇄를 결정한
+        뒤에도 새 한계 안으로 들어가는 데 0.7~4 s 가 더 걸리므로, **감쇄는 오히려
+        앞서야 한다.** 늦은 감지 + 늦은 수렴은 두 번 늦는 것이다.
+
+        그래서 `max(느린, 빠른)` 을 쓴다:
+          · 지연이 붙는 순간 : 빠른 EMA 가 크므로 **즉시** 반영된다
+          · 정상 상태       : 둘이 비슷해 느린 EMA 의 안정성을 그대로 얻는다
+          · 지연이 빠질 때  : 빠른 EMA 가 먼저 내려가지만 느린 쪽이 커서 유지된다
+                              (= 비대칭 복귀. `LoadGovernor` 와 같은 규약)
+        """
+        if not self.detected:
+            return 0.0
+        return max(self.ema_slow, self.ema_fast)
 
     def snapshot(self) -> dict:
         """capability.json `observed.latency` 에 그대로 넣을 블록."""

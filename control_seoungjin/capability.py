@@ -30,7 +30,15 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = "0.1"
+# 0.1 -> 0.2 (2026-08-23): 필드 **추가만** (§5b 스키마 진화 규칙상 마이너).
+#   observed.scale_disturbance / scale_latency / scale_latency_source
+#   degraded.scale_sources / mission_allowed / latency_extrapolated   (spec_governor 가 채움)
+#   observed.latency_att_s / latency_pos_applied_s                    (동)
+#   reasons 에 latency_severe / att_latency_* / pos_latency_unflyable 추가
+# 의미가 바뀐 것 하나: 지연이 이제 v 만 자르지 않고 **배율 전체**에 걸린다
+#   (같은 지연에서 a/j/snap 이 전보다 작게 나온다 — 소비자는 값이 더 보수적이 될 뿐이라
+#    깨지지 않지만, 회귀 비교표를 갖고 있다면 갱신할 것).
+SCHEMA_VERSION = "0.2"
 
 # ── 정적 기저: PERFORMANCE.md §8b 능력 카드 (질량 앵커) ───────────────────────
 # limits  : 줘도 되는 궤적 한계 (게이트 상한 = 물리 x0.8)
@@ -72,6 +80,35 @@ _PROFILE = {
 RHO_STOP = 0.90        # 이 이상이면 권한 소진 — s 를 s_min 으로
 S_MIN = 0.10           # 최저 시계 배율 (0 이면 정지)
 
+# ── 지연 -> 허용 스펙 (2026-08-23 MATLAB 실측) ────────────────────────────────
+#
+# 두 경로를 **다르게** 다뤄야 한다. 이게 이 절의 요점이다.
+#
+# 자세(IMU->제어기) 경로: 감쇄가 아니라 **게이트**다.
+#   실측(diagnose/sweep_delay_margin.m, 1 kg, 제자리 호버 + 0.3 N·m 펄스):
+#       지연[ms]   0      8      12     16     20     24
+#       호버RMS[°] 0.021  0.004  0.004  0.211  2.437  4.614
+#   20 ms 부터는 **기동을 전혀 안 해도** 자세가 2.4° 로 떨린다. 궤적을 느리게 만드는
+#   것으로는 못 고친다 — 정지해 있는데도 불안정하니까. 그래서 스펙을 깎는 대신
+#   임무를 거부한다. 16 ms 는 통과지만 12 ms 대비 50배 열화라 여유 구간으로 본다.
+LAT_ATT_CLEAN_S = 0.012    # 이 아래는 무보정
+LAT_ATT_MAX_S = 0.016      # 이 위는 운용 불가 (호버 자체가 불안정)
+LAT_ATT_MARGIN_SCALE = 0.60  # 청정~한계 사이 구간에서 적용할 배율 (보수적 고정값)
+
+# 위치(VIO->제어기) 경로: 여기는 **속도에 비례해** 오차가 커지므로 감쇄가 먹힌다.
+# 실측(diagnose/sweep_delay_spec.m, 3 m 이동 + 이동 중 0.3 N·m 펄스, 자세 5 ms 고정):
+#   각 지연에서 종단오차 ≤5 cm + 외란 복귀 성립을 만족하는 최대 배율 s_max.
+#   판정: 종단오차 <= 5 cm AND 외란 복귀 <= 3 s. 0.00 = 그 지연에서는
+#   어떤 배율로도 통과 못함(운용 불가). sync_delay_anchors.py 가 생성.
+_LAT_POS_ANCHORS = {
+    0.000: 1.00,
+    0.020: 1.00,
+    0.030: 1.00,
+    0.040: 0.55,
+    0.060: 0.28,
+    0.080: 0.00,
+}
+
 
 def _lerp(a, b, w):
     return a + (b - a) * w
@@ -108,6 +145,10 @@ def v_cap_from_latency(latency_s: float, track_budget_m: float) -> float:
 
     절반만 쓰는 이유 — 나머지 절반은 지연과 무관한 추종 오차(게인·외란) 몫.
     τ=0 이면 제한 없음(inf).
+
+    ⚠ 이것은 **추종 오차** 예산에서 나온 상한이지, 외란 강건성 기준이 아니다.
+    강건성 쪽 상한은 MATLAB 실측표(`_LAT_POS_ANCHORS`)에서 나오고, 둘 중 더
+    빡빡한 쪽을 쓴다 (`spec_governor.SpecGovernor.tick`).
     """
     tau = max(float(latency_s), 0.0)
     if tau <= 0.0:
@@ -115,10 +156,39 @@ def v_cap_from_latency(latency_s: float, track_budget_m: float) -> float:
     return 0.5 * float(track_budget_m) / tau
 
 
+def latency_track_scale(latency_s: float, track_budget_m: float,
+                        v_base: float) -> float:
+    """추종 예산 상한을 **시계 배율**로 환산.
+
+    속도만 따로 자르면 안 된다 — v 만 낮추고 a/j/snap 을 그대로 두면 상위가
+    "느린데 급격한" 궤적을 만들 수 있고, 그건 경로 기하가 바뀐다는 뜻이라
+    금지구역 판정과 다리(traj_bridge) 의 전제가 함께 깨진다. 감쇄는 언제나
+    배율 하나로 (v∝s, a∝s², j∝s³, snap∝s⁴).
+    """
+    if v_base <= 0:
+        return 1.0
+    vc = v_cap_from_latency(latency_s, track_budget_m)
+    if not math.isfinite(vc):
+        return 1.0
+    return min(1.0, vc / v_base)
+
+
 def build_capability(pkg_kg: float, rho: float = 0.0, latency_s: float = 0.0,
                      profile: str = "precision", yaw_err_rad: float = 0.0,
-                     load: dict | None = None, now=None) -> dict:
-    """지금 줘도 되는 스펙 한 장. 반환 dict 를 그대로 JSON 으로 쓴다."""
+                     load: dict | None = None, now=None,
+                     latency_scale: float | None = None) -> dict:
+    """지금 줘도 되는 스펙 한 장. 반환 dict 를 그대로 JSON 으로 쓴다.
+
+    latency_scale : 지연 배율을 **밖에서** 지정 (spec_governor 가 실측표로 계산해 넘긴다).
+        None 이면 해석적 추종 예산 규칙(`latency_track_scale`)으로 대체한다.
+
+        왜 밖에서 받나 — 해석 규칙은 실제보다 훨씬 보수적이다. 2026-08-23 MATLAB
+        실측에서 위치 지연 60 ms, v=1.6 m/s 로 3 m 이동했을 때 종단 오차가
+        1.03 cm 였는데, 해석 규칙은 같은 조건에서 v 를 0.33 m/s 로 깎으라고 한다
+        (약 5배 과잉 감쇄). 기준 궤적 피드포워드가 있어 측정 지연이 곧바로 추종
+        오차가 되지 않기 때문이다. 그래서 **잰 구간에서는 실측이 이기고**, 표 밖
+        에서만 해석 규칙을 보수적 대체값으로 쓴다.
+    """
     if profile not in _PROFILE:
         raise ValueError(f"capability: 알 수 없는 profile '{profile}'")
     prof = _PROFILE[profile]
@@ -127,9 +197,27 @@ def build_capability(pkg_kg: float, rho: float = 0.0, latency_s: float = 0.0,
     # ① 외란 -> 시계 배율.  yaw 오차도 '예약된 권한'으로 환산해 같이 본다
     #    (돌풍이 끝나도 회복 전까지는 스펙을 되돌리지 않기 위해 — SPEED_GOVERNOR §5.2)
     rho_eff = max(float(rho), abs(float(yaw_err_rad)) / math.radians(45.0))
-    s = scale_from_rho(rho_eff)
+    s_dist = scale_from_rho(rho_eff)
 
-    # ② 한계 = 기저 x 프로파일 x 시계 배율 (v∝s, a∝s², j∝s³, snap∝s⁴)
+    # ② 지연 -> 시계 배율 (추종 예산 몫). 속도만 따로 자르지 않는 이유는
+    #    `latency_track_scale` 주석 참조. 강건성 몫은 spec_governor 가 얹는다.
+    if latency_scale is None:
+        s_lat = latency_track_scale(latency_s, base["budget"]["track"],
+                                    base["limits"]["v"] * prof["limit_scale"])
+        lat_src = "analytic_track_budget"
+    else:
+        s_lat = float(min(max(latency_scale, 0.0), 1.0))
+        lat_src = "measured_table"
+
+    # ③ 한계 = 기저 x 프로파일 x 시계 배율 (v∝s, a∝s², j∝s³, snap∝s⁴).
+    #    두 배율은 곱이 아니라 min — 곱하면 두 요인이 겹칠 때 필요 이상으로 깎인다.
+    #
+    #    ⚠ 지연 배율에는 S_MIN 바닥을 적용하지 않는다. S_MIN 은 "움직이는 드론을
+    #    얼려버리지 말라"는 외란 쪽 규약이다. 지연 쪽에서 그 아래를 요구한다면
+    #    그건 운용점이 범위 밖이라는 신호라, 바닥으로 올려 **더 빠른 스펙을
+    #    보고하는 것**이 곧 위험이 된다. 그대로 내보내고 사유로 표시한다.
+    s = min(max(s_dist, S_MIN), s_lat)
+    lat_binding = s_lat < s_dist
     ls = prof["limit_scale"]
     lim = base["limits"]
     limits = dict(
@@ -139,17 +227,14 @@ def build_capability(pkg_kg: float, rho: float = 0.0, latency_s: float = 0.0,
         snap=lim["snap"] * ls * s ** 4,
     )
 
-    # ③ 지연 -> 속도 상한 추가 (a/j/snap 은 v 를 낮추면 자연히 여유가 생긴다)
-    v_lat = v_cap_from_latency(latency_s, base["budget"]["track"])
-    lat_binding = v_lat < limits["v"]
-    if lat_binding:
-        limits["v"] = v_lat
-
     reasons = []
     if rho_eff > 0.05:
         reasons.append("disturbance")
-    if lat_binding:
+    if lat_binding or s_lat < 1.0:
         reasons.append("latency")
+    if s < S_MIN:
+        # 최저 배율보다도 깎였다 = 사실상 정지에 가깝다. 상위는 임무 재검토할 것.
+        reasons.append("latency_severe")
     if load and load.get("saturated"):
         reasons.append("load_saturated")
 
@@ -181,10 +266,13 @@ def build_capability(pkg_kg: float, rho: float = 0.0, latency_s: float = 0.0,
             "yaw_err_deg": round(math.degrees(float(yaw_err_rad)), 3),
             "rho_eff": round(rho_eff, 4),
             "latency_s": round(float(latency_s), 5),
+            "scale_disturbance": round(s_dist, 4),
+            "scale_latency": round(s_lat, 4),
+            "scale_latency_source": lat_src,
             **({"load": load} if load else {}),
         },
         "degraded": {
-            "active": s < 1.0 or lat_binding,
+            "active": s < 1.0,
             "time_scale": round(s, 4),
             "reasons": reasons,
             "hold_until_recovered": True,

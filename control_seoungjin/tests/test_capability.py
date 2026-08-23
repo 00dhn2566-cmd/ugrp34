@@ -96,7 +96,15 @@ class TestLatency:
 
     def test_latency_binds_and_is_reported(self):
         c = build_capability(pkg_kg=1.0, latency_s=0.5)   # 0.5 s -> v ≤ 0.5·0.04/0.5 = 0.04
+        # 지연은 이제 **배율 하나**로 반영된다 (v 만 자르면 a/j/snap 이 안 따라와
+        # "느린데 급격한" 궤적이 나온다 — capability.latency_track_scale 주석).
         assert c["limits"]["v"] == pytest.approx(0.04, rel=1e-6)
+        # degraded.time_scale 은 4자리로 반올림돼 나가므로 재계산 기준으로 쓰면 안 된다.
+        # v 에서 역산한 배율로 본다 (v = v0·ls·s 이므로 s = v/(v0·ls)).
+        s = c["limits"]["v"] / (1.6 * 0.75)
+        assert c["limits"]["a"] == pytest.approx(1.6 * 0.75 * s ** 2, rel=1e-3)
+        assert c["limits"]["j"] == pytest.approx(8.0 * 0.75 * s ** 3, rel=1e-3)
+        assert "latency_severe" in c["degraded"]["reasons"]
         assert "latency" in c["degraded"]["reasons"]
         assert c["degraded"]["active"] is True
 
@@ -184,6 +192,11 @@ class TestEndToEnd:
         cap = build_capability(pkg_kg=1.0, rho=0.0, latency_s=tr.predicted_s)
         assert "latency" in cap["degraded"]["reasons"]
         assert cap["limits"]["v"] == pytest.approx(0.5 * 0.04 / tr.predicted_s, rel=0.05)
+        # 실측표 배율을 밖에서 넘기면 그쪽이 이긴다 (잰 구간에서는 실측이 진실)
+        cap2 = build_capability(pkg_kg=1.0, rho=0.0, latency_s=tr.predicted_s,
+                                latency_scale=1.0)
+        assert cap2["limits"]["v"] == pytest.approx(1.6 * 0.75, rel=1e-6)
+        assert cap2["observed"]["scale_latency_source"] == "measured_table"
 
     def test_worst_case_is_still_flyable(self):
         """전부 나쁜 조건에서도 한계가 0 이 되면 안 된다 (정지 명령은 상위가 낸다)."""

@@ -203,6 +203,157 @@ struct SpeedGovernor {
     }
 };
 
+// ---------- 시간 지연 추적 (2026-08-23) ----------
+// Python `latency_tracker.LatencyTracker` 의 1:1 이식.
+//
+// 표본 하나로 판단하지 않는다 — 단발 스파이크(스케줄러 지터, 파일 잠금)로 스펙을
+// 깎으면 순항 속도가 계속 요동친다. 그래서 EMA 두 개를 쓴다:
+//   빠른 EMA(8) 로 '걸렸다'를 감지하고, 보고값은 **둘 중 큰 쪽**을 쓴다.
+//
+// ★ 왜 max(느린, 빠른) 인가 (2026-08-23 수정) —
+//   느린 EMA(60) 만 내보내면 지연이 붙은 직후 30 표본쯤 늦게 반영된다. 그런데
+//   `traj_bridge` 분석에 따르면 감쇄를 결정한 뒤에도 새 한계 안으로 들어가는 데
+//   0.7~4 s 가 더 걸린다 — 늦은 감지 + 늦은 수렴은 두 번 늦는 것이다.
+//   max 를 쓰면 붙는 순간은 빠른 쪽이, 빠지는 순간은 느린 쪽이 이겨
+//   "즉시 깎고 천천히 되돌린다" 는 비대칭이 공짜로 나온다.
+struct LatencyTracker {
+    double baselineS = 0.017;   // 이 아래는 '지연 없음' (30 Hz 상태 주기의 절반)
+    double triggerS  = 0.040;   // 이 위면 '걸림' 판정
+    int    tauFastN  = 8;
+    int    tauSlowN  = 60;
+    int    armN      = 3;       // 감지 진입에 필요한 연속 초과 표본수
+    int    holdN     = 30;      // 해제 전 연속 정상 표본수
+    // 상태
+    double emaFast = 0, emaSlow = 0, peakS = 0;
+    int    n = 0, cleanRun = 0, overRun = 0;
+    bool   detected = false;
+
+    void reset() {
+        emaFast = emaSlow = peakS = 0.0;
+        n = cleanRun = overRun = 0;
+        detected = false;
+    }
+
+    double update(double sampleS) {
+        const double x = sampleS > 0.0 ? sampleS : 0.0;
+        ++n;
+        if (x > peakS) peakS = x;
+        if (n == 1) {
+            emaFast = emaSlow = x;
+        } else {
+            const double af = 2.0 / (tauFastN + 1.0);
+            const double as = 2.0 / (tauSlowN + 1.0);
+            emaFast += af * (x - emaFast);
+            emaSlow += as * (x - emaSlow);
+        }
+        overRun = (x > triggerS) ? (overRun + 1) : 0;
+
+        if (emaFast > triggerS && overRun >= armN) {
+            detected = true;
+            cleanRun = 0;
+        } else if (detected) {
+            if (emaFast <= baselineS) {
+                if (++cleanRun >= holdN) { detected = false; cleanRun = 0; }
+            } else {
+                cleanRun = 0;
+            }
+        }
+        return predicted();
+    }
+
+    double predicted() const {
+        if (!detected) return 0.0;
+        return emaSlow > emaFast ? emaSlow : emaFast;
+    }
+};
+
+// ---------- 지연 -> 스펙 (2026-08-23 MATLAB 실측) ----------
+// Python `capability` / `spec_governor` 의 지연 규칙과 **같은 수를 내야 한다.**
+// 실측 출처: diagnose/sweep_delay_margin.m (자세), diagnose/sweep_delay_spec.m (위치).
+//
+// 두 경로를 다르게 다룬다 — 이게 요점이다.
+//   자세(IMU->제어기): **게이트**. 20 ms 부터는 기동을 안 해도 호버가 2.4° 로 떨린다
+//                     (0/8/12/16/20/24 ms 에서 RMS 0.021/0.004/0.004/0.211/2.437/4.614°).
+//                     정지해 있는데도 불안정하니 궤적을 느리게 해도 안 고쳐진다 -> 임무 거부.
+//   위치(VIO->제어기): **감쇄**. 오차가 속도에 비례하므로 느려지면 준다.
+struct SpecLatencyRule {
+    // 자세 경로 게이트
+    double attCleanS  = 0.012;   // 이 아래 무보정
+    double attMaxS    = 0.016;   // 이 위 운용 불가
+    double attMargin  = 0.60;    // 그 사이 구간의 고정 배율
+
+    // 위치 경로 실측표 (오름차순 지연 [s] -> 허용 배율). 표 밖은 **외삽하지 않는다** —
+    // 안 재본 구간의 추정치를 내면 그게 곧 사고다. 마지막 값을 유지하고 플래그를 세운다.
+    static constexpr int kMaxAnchors = 8;
+    double posTau[kMaxAnchors]   = {0.000, 0.020, 0.030, 0.040, 0.060, 0.080, 0.0, 0.0};
+    double posScale[kMaxAnchors] = {1.00, 1.00, 1.00, 0.55, 0.28, 0.00, 0.0, 0.0};
+    int    posN = 6;             // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
+
+    double posScaleFor(double tauS, bool* extrapolated = nullptr) const {
+        const double t = tauS > 0.0 ? tauS : 0.0;
+        if (extrapolated) *extrapolated = (posN > 0 && t > posTau[posN - 1]);
+        if (posN <= 0) return 1.0;
+        if (t <= posTau[0]) return posScale[0];
+        if (t >= posTau[posN - 1]) return posScale[posN - 1];
+        for (int i = 1; i < posN; ++i) {
+            if (t <= posTau[i]) {
+                const double d = posTau[i] - posTau[i - 1];
+                const double w = d > 1e-12 ? (t - posTau[i - 1]) / d : 0.0;
+                return posScale[i - 1] + (posScale[i] - posScale[i - 1]) * w;
+            }
+        }
+        return posScale[posN - 1];
+    }
+
+    // 반환 0.0 = 운용 불가 (임무 거부)
+    double attScaleFor(double tauAttS) const {
+        const double t = tauAttS > 0.0 ? tauAttS : 0.0;
+        if (t > attMaxS) return 0.0;
+        if (t > attCleanS) return attMargin;
+        return 1.0;
+    }
+};
+
+// 상위 계획기에 보고할 스펙 한 장 (Python `capability.json` 의 C++ 대응물).
+// 한계는 **배율 하나**로 깎는다: v∝s, a∝s², j∝s³, snap∝s⁴.
+// 속도만 자르면 "느린데 급격한" 궤적이 나오고, 그건 경로 기하가 바뀐다는 뜻이라
+// 금지구역 판정과 다리 궤적(traj_bridge)의 전제가 함께 깨진다.
+struct SpecReport {
+    double timeScale = 1.0;
+    double v = 0, a = 0, j = 0, snap = 0;
+    double scaleDisturb = 1.0, scaleLatPos = 1.0, scaleLatAtt = 1.0;
+    double latencyAppliedS = 0.0;
+    bool   missionAllowed = true;
+    bool   latencyExtrapolated = false;
+};
+
+// baseV/A/J/Snap: 질량 앵커 기저 한계, limitScale: 프로파일 배율(precision 0.75)
+// sDisturb: 외란 쪽 배율 (SpeedGovernor 의 s 를 그대로 넣으면 된다)
+inline SpecReport qc_spec_report(const SpecLatencyRule& rule,
+                                 double baseV, double baseA, double baseJ, double baseSnap,
+                                 double limitScale, double sDisturb,
+                                 double latencyPosS, double latencyAttS) {
+    SpecReport r;
+    r.latencyAppliedS = latencyPosS;
+    r.scaleDisturb = clamp(sDisturb, 0.0, 1.0);
+    r.scaleLatPos  = rule.posScaleFor(latencyPosS, &r.latencyExtrapolated);
+    r.scaleLatAtt  = rule.attScaleFor(latencyAttS);
+    r.missionAllowed = (r.scaleLatAtt > 0.0);
+
+    // 세 배율은 곱이 아니라 min — 곱하면 요인이 겹칠 때 필요 이상으로 깎여 임무가 안 선다.
+    double s = r.scaleDisturb;
+    if (r.scaleLatPos < s) s = r.scaleLatPos;
+    if (r.missionAllowed && r.scaleLatAtt < s) s = r.scaleLatAtt;
+    if (!r.missionAllowed) s = 0.0;
+
+    r.timeScale = s;
+    r.v    = baseV    * limitScale * s;
+    r.a    = baseA    * limitScale * s * s;
+    r.j    = baseJ    * limitScale * s * s * s;
+    r.snap = baseSnap * limitScale * s * s * s * s;
+    return r;
+}
+
 // ---------- 물성 정규화 (parameters.m qc_phys의 1:1 이식) ----------
 // 섀시 실측(Inertia Sensor) + 로터 기하 추정 + 패키지 해석항 합성 (CoM 기준).
 // parameters.m 쪽이 바뀌면 여기도 함께 갱신할 것.
@@ -265,6 +416,18 @@ struct QcConfig {
     // yaw 적분 와인드업 방지 (Simulink 'clamping' 대응, run_traj_baked 기본 켬 = YAWAW).
     // 포화 없는 구간 항등 -> 골든 트레이스 불변.
     bool yawAntiWindup = true;
+    // ── 지연 -> 스펙 보고 (2026-08-23). **관측 전용**: 제어 출력에 아무 영향이 없다.
+    //    (다리 궤적과 재계획은 계획측이 하는 일이라, 여기서는 '무엇을 줘도 되는지'만 낸다.
+    //     그래서 golden trace 는 이 기능을 켜도 불변이다.)
+    bool   specOn = true;
+    // 스펙 보고 주기 [Hz]. **제어 주기(1 kHz)로 돌리면 안 된다** — LatencyTracker 의
+    // EMA 시정수는 표본 수(빠른 8 / 느린 60)로 정의돼 있어서, 1 kHz 에서 돌리면
+    // 8 ms / 60 ms 짜리가 되어 스케줄러 지터 하나하나에 반응한다. 파이썬 조속기와
+    // 같은 ~5 Hz 로 데시메이션해야 두 구현이 같은 수를 낸다.
+    double specRateHz = 5.0;
+    double specBaseV = 1.6, specBaseA = 1.6, specBaseJ = 8.0, specBaseSnap = 64.0;
+    double specLimitScale = 0.75;    // 프로파일 precision (agile = 1.00)
+    double latencyAttS = 0.003;      // 자세 경로 지연 — 하드웨어 상수에 가깝다 (구성값)
     // yaw 외란 적응 적분 (YawDistI). yawDistGmax = 1 이면 완전히 꺼진 상태 = 기존 동작.
     double yawDistGmax = 1.0, yawDistE0 = 0.0349, yawDistE1 = 0.0349;
     double yawDistTau = 1.0, yawDistRateGate = 0.05, yawDistRelax = 0.5;
@@ -365,6 +528,9 @@ struct QcInput {
     double measRpy[3];   // 측정 roll/pitch/yaw (rad)
     double measAlt;      // 측정 고도 (m) — 보통 measPos[2]
     double motorSpd[4];  // 측정 모터 속도 (rev/s) — 모터 PI 루프용
+    // 이 측정이 얼마나 낡았나 [s] — 상태 타임스탬프 나이 (INTERFACE_SPEC §8c T8).
+    // 0 이면 '지연 없음'. 위치(VIO) 경로 지연 추적의 입력이다.
+    double measAgeS = 0.0;
 };
 
 struct QcOutput {
@@ -379,6 +545,8 @@ struct QcOutput {
     double rho;                 // 권한 점유율 [0,1] — 그 스텝 순간값
     double rhoEff;              // 조속기가 본 유효 점유율 (yaw 오차 환산 포함)
     double sClock;              // 가상 시계 배율 s  (호출자가 tau += s*dt 로 적분)
+    // 상위 계획기에 그대로 올릴 스펙 한 장 (Python capability.json 과 같은 수).
+    SpecReport spec;
 };
 
 struct QcState {
@@ -391,6 +559,13 @@ struct QcState {
     Lpf1 fPosPath[3];                // 위치 명령 경로 필터
     YawDistI yawDistI;               // yaw 외란 적응 적분 (기본 항등)
     SpeedGovernor gov;               // 속도 조속기 (기본 항등, s≡1)
+    LatencyTracker lat;              // 위치 경로 지연 추적 (measAgeS 표본)
+    SpecLatencyRule specRule;        // 지연 -> 배율 실측 규칙
+    double specAcc = 0;              // 보고 주기 데시메이션 누적기
+    SpecReport specLast;             // 마지막 보고 (틱 사이에는 이걸 그대로 낸다)
+    // 데시메이션 구간의 measAgeS **최대값**. 평균을 넣으면 짧은 스파이크가 지워진다
+    // (rho 를 '구간 최대'로 넣으라는 INTERFACE_SPEC §5b 규정과 같은 이유).
+    double specAgeMax = 0;
     double tauClock = 0;             // 가상 시계 누적 (편의 — 참조 조회는 호출자 몫)
     double refYawPrev = 0;           // 참조 yaw 각속도 산출용
     bool   refYawFirst = true;
@@ -401,7 +576,8 @@ struct QcState {
         fMeasP.reset(); fMeasR.reset(); fMeasY.reset(); fMeasZ.reset();
         for (auto& f : fPosPath) f.reset();
         yawDistI.reset(); refYawPrev = 0; refYawFirst = true;
-        gov.reset(); tauClock = 0;
+        gov.reset(); tauClock = 0; lat.reset();
+        specAcc = 0; specAgeMax = 0; specLast = SpecReport();
     }
 };
 
