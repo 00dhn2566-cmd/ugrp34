@@ -21,15 +21,6 @@ control_seoungjin/output/
 
 # vision 학습 데이터셋 (로컬 전용, git 미포함)
 window_dataset/
-
-
-# 로컬 편집기 설정 (머신별 컴파일러 경로가 박혀 있어 공유 부적합)
-.vscode/
-
-# 루트 output/ = 스크립트를 repo 루트에서 돌렸을 때 생기는 생성물
-# (make_equation_images.py 등 — 재생성 가능, 산출물은 control_seoungjin/ 아래가 규약)
-/output/
-
 # 랩미팅 발표 자료 (로컬 전용 — 팀 공유 결정 전까지 커밋 제외)
 labmeeting/
 

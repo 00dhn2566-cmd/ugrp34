@@ -3,7 +3,7 @@
 작성: 17차 튜닝 세션 (2026-07-16). 대상: Gazebo 검증을 맡은 클로드 세션.
 전제 문서: [INTERFACE_SPEC.md](../INTERFACE_SPEC.md) (통신 규격 v0.1),
 [controller_cpp/README.md](../controller_cpp/README.md) (이식 상태),
-[gazebo_setup_log.md](../../gazebo_setup_log.md) (환경 구축 이력).
+[gazebo_setup_log.md](gazebo_setup_log.md) (환경 구축 이력).
 
 ## 임무
 
