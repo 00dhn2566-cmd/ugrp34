@@ -345,6 +345,7 @@ struct SpecReport {
     double timeScale = 1.0;
     double v = 0, a = 0, j = 0, snap = 0;
     double scaleDisturb = 1.0, scaleLatPos = 1.0, scaleLatAtt = 1.0;
+    double scaleRecovery = 1.0;   // 회복 감시(폐루프 교정)
     double latencyAppliedS = 0.0;
     bool   missionAllowed = true;
     bool   latencyExtrapolated = false;
@@ -357,8 +358,10 @@ struct SpecReport {
 inline SpecReport qc_spec_report(const SpecLatencyRule& rule,
                                  double baseV, double baseA, double baseJ, double baseSnap,
                                  double limitScale, double sDisturb,
-                                 double latencyPosS, double latencyAttS) {
+                                 double latencyPosS, double latencyAttS,
+                                 double sRecovery = 1.0) {
     SpecReport r;
+    r.scaleRecovery = clamp(sRecovery, 0.0, 1.0);
     r.latencyAppliedS = latencyPosS;
     r.scaleDisturb = clamp(sDisturb, 0.0, 1.0);
     r.scaleLatPos  = rule.posScaleFor(latencyPosS, 1.0 - r.scaleDisturb,
@@ -373,6 +376,7 @@ inline SpecReport qc_spec_report(const SpecLatencyRule& rule,
     double d = 0.0;
     d += 1.0 - clamp(r.scaleDisturb, 0.0, 1.0);
     d += 1.0 - clamp(r.scaleLatPos, 0.0, 1.0);
+    d += 1.0 - clamp(r.scaleRecovery, 0.0, 1.0);
     if (r.missionAllowed) d += 1.0 - clamp(r.scaleLatAtt, 0.0, 1.0);
     double s = r.missionAllowed ? (1.0 - d) : 0.0;
     if (s < 0.0) s = 0.0;
@@ -384,6 +388,104 @@ inline SpecReport qc_spec_report(const SpecLatencyRule& rule,
     r.snap = baseSnap * limitScale * s * s * s * s;
     return r;
 }
+
+// ---------- 회복 감시 (2026-08-23, 사용자 설계) ----------
+// Python `recovery_watcher.RecoveryWatcher` 의 1:1 이식.
+//
+// 실측표(SpecLatencyRule)는 특정 조합에서 잰 것이라 실제 운용이 그 격자 위에 놓일
+// 이유가 없다. 그래서 **표 = 피드포워드, 이 감시 = 피드백**.
+//
+// 관측량은 **밴드 초과 지속시간**: |측정-기준| 이 track 밴드를 연속으로 넘고 있는 시간.
+// 비행 중에는 "외란이 끝났다" 는 이벤트가 없으므로, MATLAB 게이트로 쓴 복귀 시간의
+// 온라인 대응물이 이것이다. 에피소드가 끝나길 기다리지 않고 넘고 있는 동안 반응한다.
+//
+// 안전장치 둘 — 둘 다 없으면 이 루프가 스스로 사고를 낸다:
+//  ① 판단 주기 > 다리 수렴 시간. 감쇄 결정 뒤에도 새 한계 안으로 드는 데 0.66~3.94 s
+//     가 걸린다(실측). 그보다 짧게 판단하면 앞 결정이 반영되기 전에 또 결정 = 발진.
+//  ② 기준이 한계 밖이면 계상 안 함. 계획이 과한 것을 제어기 탓으로 돌려 스펙을 깎으면
+//     잘못된 계획이 기체 능력을 갉아먹는 되먹임이 된다.
+//
+// 바닥은 kRecFloor 이지 0 이 아니다 — 정지 판단은 감시의 권한이 아니다(감독자 몫).
+struct RecoveryWatcher {
+    static constexpr double kLeadMargin = 1.5;   // 다리 수렴 시간에 곱할 여유
+    static constexpr double kRecFloor   = 0.15;  // 감시가 낼 수 있는 최저 배율
+
+    // 파라미터 (Python 기본값과 동일)
+    double trackBandM  = 0.04;   // capability.budget.track
+    double settleS     = 2.2;    // capability.budget.settle
+    double cutGain     = 0.5;
+    double maxCut      = 0.25;   // 한 판단당 최대 감쇄. 없으면 두세 번에 바닥을 친다
+    double minPeriodS  = 4.0;
+    double cleanHoldS  = 3.0;
+    double restoreTauS = 6.0;
+    // 상태
+    double s = 1.0;
+    double tAbove = 0, worstAbove = 0, tClean = 0, tSince = 0;
+    double lastRatio = 0;
+    long   nObs = 0, nSkipped = 0, cuts = 0;
+    bool   restoring = false;
+
+    void reset() {
+        s = 1.0;
+        tAbove = worstAbove = tClean = tSince = lastRatio = 0.0;
+        nObs = nSkipped = cuts = 0;
+        restoring = false;
+    }
+
+    // 제어 주기마다. refOk = '지금 기준이 현재 limits 안인가'.
+    void observe(double errM, bool refOk, double dt) {
+        if (dt < 0.0) dt = 0.0;
+        tSince += dt;                     // 판단 주기는 실제 시간으로 센다 (버린 표본도 포함)
+        if (!refOk) { ++nSkipped; return; }
+        ++nObs;
+        if (std::fabs(errM) > trackBandM) {
+            tAbove += dt;
+            tClean = 0.0;
+            if (tAbove > worstAbove) worstAbove = tAbove;
+        } else {
+            tAbove = 0.0;
+            tClean += dt;
+        }
+    }
+
+    // bridgeLeadS <= 0 이면 '모름' 으로 보고 minPeriodS 만 쓴다.
+    double periodS(double bridgeLeadS) const {
+        double p = minPeriodS;
+        if (bridgeLeadS > 0.0 && bridgeLeadS == bridgeLeadS) {   // NaN 방어
+            const double q = bridgeLeadS * kLeadMargin;
+            if (q > p) p = q;
+        }
+        return p;
+    }
+
+    double decide(double bridgeLeadS) {
+        const double period = periodS(bridgeLeadS);
+        if (tSince < period) return s;
+        const double elapsed = tSince;
+        tSince = 0.0;
+
+        lastRatio = worstAbove / (settleS > 1e-9 ? settleS : 1e-9);
+        worstAbove = tAbove;              // 아직 넘고 있으면 그 시간은 이월
+
+        if (lastRatio > 1.0) {
+            double step = cutGain * (lastRatio - 1.0);
+            if (step > maxCut) step = maxCut;
+            s -= step;
+            if (s < kRecFloor) s = kRecFloor;
+            ++cuts;
+            restoring = false;
+        } else if (tClean >= cleanHoldS && s < 1.0) {
+            double a = elapsed / (restoreTauS > 1e-9 ? restoreTauS : 1e-9);
+            a = clamp(a, 0.0, 1.0);
+            s += a * (1.0 - s);
+            restoring = true;
+            if (1.0 - s < 1e-6) { s = 1.0; restoring = false; }
+        } else {
+            restoring = false;
+        }
+        return s;
+    }
+};
 
 // ---------- 물성 정규화 (parameters.m qc_phys의 1:1 이식) ----------
 // 섀시 실측(Inertia Sensor) + 로터 기하 추정 + 패키지 해석항 합성 (CoM 기준).
@@ -459,6 +561,16 @@ struct QcConfig {
     double specBaseV = 1.6, specBaseA = 1.6, specBaseJ = 8.0, specBaseSnap = 64.0;
     double specLimitScale = 0.75;    // 프로파일 precision (agile = 1.00)
     double latencyAttS = 0.003;      // 자세 경로 지연 — 하드웨어 상수에 가깝다 (구성값)
+    // 질량 1차식을 08-18 채택 0 kg 앵커 기준으로 바꾼다 (qc_mass_lerp_apply.m 의 짝).
+    // false(기본) = 07-19 18차 법칙 그대로 = 기존 동작. **1 kg 에서는 둘이 같다.**
+    // MATLAB `verify_mass_lerp.m` 이 통과하면 기본값을 뒤집을 것. [TODO-채택]
+    bool massLerpOn = false;
+    // 회복 감시. recOn=false 면 배율 1 고정 = 기존 동작과 동일.
+    bool   recOn = false;
+    double recTrackBandM = 0.04;     // capability.budget.track
+    double recSettleS = 2.2;         // capability.budget.settle
+    // 계획측이 알려주는 직전 다리의 수렴 시간 [s]. 0 이면 '모름' -> minPeriodS 만 쓴다.
+    double bridgeLeadS = 0.0;
     // yaw 외란 적응 적분 (YawDistI). yawDistGmax = 1 이면 완전히 꺼진 상태 = 기존 동작.
     double yawDistGmax = 1.0, yawDistE0 = 0.0349, yawDistE1 = 0.0349;
     double yawDistTau = 1.0, yawDistRateGate = 0.05, yawDistRelax = 0.5;
@@ -531,6 +643,34 @@ inline void qc_apply_profile(QcConfig& c, Profile p) {
 // sIa/sIz/sM은 진단/비교용으로만 유지. yaw는 질량 동결(sQ만 적용, 검증 구성 그대로).
 struct QcScales { double sT, sQ, sIa, sIz, sM, sAMass, sZMass, posErrSat, posErrSatZ; };
 
+// 질량 1차식 — 두 실측 앵커를 잇는다. MATLAB `Scripts_Data/qc_mass_lerp_apply.m` 의 짝.
+//
+// 왜 두 법칙이 있나: 07-19 18차가 0 kg 앵커를 sA=0.75 로 잡았는데, 08-18 성능 세션이
+// 0 kg 을 다시 튜닝해 **sA=0.35** 를 채택했다 (0.75 는 5 Hz 세차 한계사이클 ±8°,
+// 0.40 은 자려 지터 0.156° -> 0.35 에서 0.005°). 그 결과가 parameters.m 에 동기되지
+// 않아 0 kg 만 별도 이산 구성으로 갈라져 있었다. 이 구조체가 그 둘을 하나의 1차식으로
+// 잇는다. **1 kg 에서는 두 법칙이 같으므로 1 kg 골든 트레이스는 불변이다.**
+struct MassLerp {
+    double sAMass, sZMass, kpPos, kdPos, rAtt, limAtt, filtPz, biasChassis, nlGmax;
+};
+
+inline MassLerp qc_mass_lerp(double pkgMass) {
+    const double u = clamp(pkgMass, 0.0, 1.0);   // 앵커 밖은 클램프 (2 kg 은 1 kg 복사본)
+    auto L = [u](double a0, double a1) { return a0 + (a1 - a0) * u; };
+    MassLerp m;
+    m.sAMass      = L(0.35,  1.00);
+    m.sZMass      = L(0.56,  1.00);
+    m.rAtt        = L(0.60,  1.50);   // kd/kp 비
+    m.limAtt      = L(100.0, 800.0);
+    m.kpPos       = L(5.0,   8.0);
+    m.filtPz      = L(0.005, 0.01);
+    m.biasChassis = L(75.5,  56.5);
+    m.nlGmax      = L(2.1,   1.0);
+    // 파생은 보간하지 않고 **다시 계산**한다 — 보간한 값끼리 어긋나면 불변식이 깨진다.
+    m.kdPos = 0.4 * m.kpPos;          // 두 앵커 모두 비가 0.4 (2.0/5 == 3.2/8)
+    return m;                         // posErrSat = 1.2/kpPos 는 qc_scales 가 계산
+}
+
 inline QcScales qc_scales(const QcConfig& c) {
     PhysOut now = qc_phys(c.droneMass, c.pkgMass, c.pkgSize);
     PhysOut ref = qc_phys(c.droneMassRef, c.pkgMassRef, c.pkgSizeRef);
@@ -543,10 +683,17 @@ inline QcScales qc_scales(const QcConfig& c) {
     // 질량 1차식 (18차): 배율(m) = s0 + (1-s0)·m_pkg, 0kg 앵커 실측 sA=0.75/sZ=0.56,
     // 1kg(앵커 탑재)에서 정확히 1 = 현행 채택 게인. 외삽은 2kg 캡(검증 상한).
     const double mClamped = c.pkgMass < 2.0 ? c.pkgMass : 2.0;
-    s.sAMass = 0.75 + 0.25 * mClamped;
-    s.sZMass = 0.56 + 0.44 * mClamped;
-    s.posErrSat  = c.posErrSatCoef / c.kpPos;
-    s.posErrSatZ = c.posErrSatCoef / c.kpPosZ;   // 18차 z분리 (비-agile은 kpPosZ==kpPos라 동일)
+    if (c.massLerpOn) {
+        const MassLerp m = qc_mass_lerp(c.pkgMass);
+        s.sAMass = m.sAMass;
+        s.sZMass = m.sZMass;
+        s.posErrSat = s.posErrSatZ = c.posErrSatCoef / m.kpPos;
+    } else {
+        s.sAMass = 0.75 + 0.25 * mClamped;
+        s.sZMass = 0.56 + 0.44 * mClamped;
+        s.posErrSat  = c.posErrSatCoef / c.kpPos;
+        s.posErrSatZ = c.posErrSatCoef / c.kpPosZ;   // 18차 z분리 (비-agile은 동일)
+    }
     return s;
 }
 
@@ -562,6 +709,10 @@ struct QcInput {
     // 이 측정이 얼마나 낡았나 [s] — 상태 타임스탬프 나이 (INTERFACE_SPEC §8c T8).
     // 0 이면 '지연 없음'. 위치(VIO) 경로 지연 추적의 입력이다.
     double measAgeS = 0.0;
+    // 회복 감시 입력. refWithinLimits=false 면 그 표본은 버린다 — 기준이 과한 것을
+    // 제어기 탓으로 돌려 스펙을 깎으면 잘못된 계획이 기체 능력을 갉아먹는다.
+    // (기본 true. 상위가 게이트 결과를 안 주면 감시가 보수적으로 작동한다.)
+    bool refWithinLimits = true;
 };
 
 struct QcOutput {
@@ -592,6 +743,7 @@ struct QcState {
     SpeedGovernor gov;               // 속도 조속기 (기본 항등, s≡1)
     LatencyTracker lat;              // 위치 경로 지연 추적 (measAgeS 표본)
     SpecLatencyRule specRule;        // 지연 -> 배율 실측 규칙
+    RecoveryWatcher rec;             // 회복 감시 (폐루프 교정, recOn 으로 켠다)
     double specAcc = 0;              // 보고 주기 데시메이션 누적기
     SpecReport specLast;             // 마지막 보고 (틱 사이에는 이걸 그대로 낸다)
     // 데시메이션 구간의 measAgeS **최대값**. 평균을 넣으면 짧은 스파이크가 지워진다
@@ -608,7 +760,7 @@ struct QcState {
         for (auto& f : fPosPath) f.reset();
         yawDistI.reset(); refYawPrev = 0; refYawFirst = true;
         gov.reset(); tauClock = 0; lat.reset();
-        specAcc = 0; specAgeMax = 0; specLast = SpecReport();
+        specAcc = 0; specAgeMax = 0; specLast = SpecReport(); rec.reset();
     }
 };
 

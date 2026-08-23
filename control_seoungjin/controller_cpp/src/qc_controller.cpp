@@ -124,6 +124,19 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     // 보고는 ~5 Hz 로 데시메이션한다 (QcConfig::specRateHz 주석 참조 — 제어 주기로
     // 돌리면 EMA 시정수가 표본수 기준이라 의미가 달라진다).
     if (c.specOn) {
+        // 회복 감시는 **제어 주기마다** 관측한다. 지연 추적기와 달리 시정수가
+        // 표본수가 아니라 **시간**(dt)으로 정의돼 있어 주기가 달라져도 뜻이 같다.
+        // 판단은 아래 데시메이션 지점에서 한 번만.
+        if (c.recOn) {
+            st.rec.trackBandM = c.recTrackBandM;
+            st.rec.settleS    = c.recSettleS;
+            double e = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                const double d = in.refPos[i] - in.measPos[i];
+                e += d * d;
+            }
+            st.rec.observe(std::sqrt(e), in.refWithinLimits, dt);
+        }
         if (in.measAgeS > st.specAgeMax) st.specAgeMax = in.measAgeS;
         st.specAcc += dt;
         const double period = (c.specRateHz > 1e-9) ? (1.0 / c.specRateHz) : dt;
@@ -131,10 +144,11 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
             st.specAcc -= period;
             const double tauPos = st.lat.update(st.specAgeMax);
             st.specAgeMax = 0.0;
+            const double sRec = c.recOn ? st.rec.decide(c.bridgeLeadS) : 1.0;
             st.specLast = qc_spec_report(st.specRule,
                                          c.specBaseV, c.specBaseA, c.specBaseJ,
                                          c.specBaseSnap, c.specLimitScale,
-                                         out.sClock, tauPos, c.latencyAttS);
+                                         out.sClock, tauPos, c.latencyAttS, sRec);
         }
         out.spec = st.specLast;
     }
