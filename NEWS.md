@@ -4,28 +4,6 @@
 
 ---
 
-## 2026-08-22 — 제어: yaw 외란 강건화 + 상위용 실시간 스펙표 (성진)
-
-**TL;DR**: 구운 모델에 **yaw 오차 ±pi 랩이 없던 결함**을 찾아 고쳤고(C++ 이식본은 원래 있어서 둘이 달랐다),
-anti-windup 을 켰다. 미션 7편 회귀 게이트 7/7 통과, 추종 RMS 전부 동일하거나 소폭 개선.
-그리고 **상위 경로 생성기가 읽을 실시간 스펙표 `capability.json`** 을 신설했다
-([INTERFACE_SPEC §5b](control_seoungjin/INTERFACE_SPEC.md)).
-
-- **윤호/길남**: 계획기가 이제 **정적 표 대신 `capability.json` 의 `limits` 를 읽으면 된다**
-  (`plan_waypoints(v,a,j,snap)` 에 그대로 투입). 질량·외란·연산지연에 따라 이미 깎인 값이다.
-  감쇄는 시계 배율 `s` 하나로 표현: `v∝s, a∝s², j∝s³, snap∝s⁴`.
-  **아직 컨트롤러가 파일을 쓰지 않는다** — 규격·생성기만 있는 상태라 배선은 다음 작업.
-- **전원**: 알아둘 실측 두 개
-  - **폐루프 오버슈트 ≈ 3.13·v²** [cm, m/s] → 5 cm 목표면 순항 `v ≤ 1.26 m/s`
-  - **지연 여유: 자세 10~20 ms / 위치 0~50 ms** — VIO 30~100 ms 는 현재 한계 밖 (태민 참고)
-- **성진(본인)**: 08-18 성능 지표 세션의 `parameters.m` 0 kg 재튜닝분이 이 머신에 미동기라
-  `tune_0kg_r5.m` 에서 복원해 쓰는 중 (`qc_0kg_tuned_apply.m`, 원본 회수되면 폐기)
-
-세부: `control_seoungjin/docs/YAW_DISTURBANCE_I.md`, `docs/SPEED_GOVERNOR.md`,
-그림 `control_seoungjin/figure/10_capability/`
-
----
-
 ## 2026-08-18 — 윤호 PyBullet 프로토타입 + 안건 격상 (길남 정리)
 
 **TL;DR**: 윤호가 `feat/pybullet-prototype-pipeline`(미병합)에서 **진짜 이미지 → 실추론 → 복원 → 계획 E2E를 최초 달성**. 그 과정에서 "창문을 채우면 앞 창문이 뒤를 가려 색 판정·삼각측량이 깨진다"를 실증 → 회의 안건 A2(창문 시각 정의)를 **테두리 기준 확정 제안**으로 격상, intrinsics 후보(fx=763, HFOV 80°) 확정 안건 A2-b 추가. [meeting_brief](overall_gilnam/docs/meeting_brief_2026-08-11.md) 갱신됨.
