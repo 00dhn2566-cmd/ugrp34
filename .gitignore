@@ -30,8 +30,6 @@ window_dataset/
 # (make_equation_images.py 등 — 재생성 가능, 산출물은 control_seoungjin/ 아래가 규약)
 /output/
 
-# Claude 세션 인계 폴더 — 로컬 전용 (저장소에 올리지 않는다)
-claude_handoff/
 # 랩미팅 발표 자료 (로컬 전용 — 팀 공유 결정 전까지 커밋 제외)
 labmeeting/
 
