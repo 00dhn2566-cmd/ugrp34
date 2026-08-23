@@ -65,6 +65,7 @@ if get_param(allC(1), 'Line') ~= -1 || get_param(allC(2), 'Line') ~= -1
     return;   % 이미 배선됨 (재호출 안전)
 end
 orders = [2 1; 1 2];
+lastErr = '';
 for oi = 1:2
     added = [];
     try
@@ -72,10 +73,15 @@ for oi = 1:2
         added(end+1) = add_line(sys, sph.RConn(1),   allC(orders(oi,2)), 'autorouting','on'); %#ok<AGROW>
         feval(mdl, [], [], [], 'compile'); feval(mdl, [], [], [], 'term');
         return;
-    catch
+    catch ME
+        lastErr = ME.message;
         try; feval(mdl, [], [], [], 'term'); catch; end
         for l = added; try; delete_line(l); catch; end; end
     end
 end
-error('qctest.torque_pulse: 외란 배선 실패 (두 순서 모두 compile 실패)');
+% ★ 밑에 깔린 컴파일 오류를 그대로 올린다. 이걸 삼키면 '배선 실패' 로 보이지만
+%   실제 원인은 대개 **다른 곳**이다 (2026-08-23: qc_mass_sched_apply 가 이 머신에
+%   없는 변수를 참조해 컴파일이 깨진 것을 배선 탓으로 30분 오인했다).
+error('qctest.torque_pulse: 외란 배선 실패 (두 순서 모두 compile 실패). 실제 오류: %s', ...
+      lastErr);
 end
