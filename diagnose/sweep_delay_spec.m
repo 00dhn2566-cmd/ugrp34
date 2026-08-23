@@ -11,10 +11,18 @@
 %%   s 1.00/0.75/0.55/0.40/0.28 -> 복귀 6.17/12.19/11.06/7.58/1.98 s).
 %%   중간 배율이 어떤 진동 모드를 더 잘 여기하는 듯하고, 이분하면 통과 구간을 건너뛴다.
 %%
+%% ★ 외란은 **기본이 아니다** (사용자 정정 08-23):
+%%   "디폴트는 외란 없다. 시간 지연에서 외란 생기면 그때 깎는 거."
+%%   즉 상위에 늘 내보내는 limits(tau) 는 **지연만** 반영해야 한다. 외란 감쇄는
+%%   rho(제어 권한 점유) 기반의 별도 축이고, 둘은 spec_governor 에서 min 으로 합쳐진다.
+%%   지연 표에 외란을 섞으면 **이중으로 깎여** 임무가 필요 이상으로 느려진다.
+%%   -> `SPEC_PULSE_NM=0` (기본) 이 기본표, `0.3` 은 "외란이 왔을 때 그 배율이면
+%%      복귀가 사는가" 를 확인하는 별도 배터리.
+%%
 %% 그래서 재는 것 — 각 지연 tau 에서 스펙 배율 s 를 1.0 부터 내려가며
 %%   1) 목표 도달 오차 (사용자 요구: 수 cm 이내)
-%%   2) 이동 중 외란 펄스(0.3 N*m x 0.3 s, roll 축)의 최대 이탈과 복귀
-%% 둘 다 만족하는 **첫(=가장 큰) s** 가 그 지연의 허용 스펙이다.
+%%   2) 기준 대비 최대 추종 이탈
+%%   3) (외란 배터리일 때만) 펄스 최대 이탈과 복귀
 %%
 %% 스펙 배율의 물리적 의미 — 시간축만 늘린다 (capability.py 와 같은 대수):
 %%   이동시간 TM = TM0 / s  =>  v ~ s, a ~ s^2, j ~ s^3, snap ~ s^4
@@ -27,6 +35,14 @@
 %%   SPEC_ATT_MS   = '5'               [ms] 자세(IMU) 경로 지연, 전 조건 고정
 %%   SPEC_S_LIST   = '1.0 0.75 0.55 0.40 0.28 0.20'   내림차순 스펙 배율
 %%   SPEC_PKG      = '1' (기본) | '0'   짐 질량 [kg]. 0 이면 08-18 채택 0 kg 튜닝을 얹는다
+%%   SPEC_PULSE_NM = '0' (기본) | '0.3'  외란 펄스 크기 [N*m]. **0 = 외란 없음**
+%%                                      -> 이게 기본 limits(tau) 를 만드는 조건이다.
+%%   SPEC_REFINE   = '0' (기본) | '2'   1차 통과 뒤 **직전 실패 배율과의 사이**를 이만큼
+%%                                      더 잘게 훑는다. 성긴 격자는 최대 한 단계만큼
+%%                                      과감쇄를 만든다 (사용자 지적 08-23):
+%%                                      tau=40 에서 0.75 실패/0.55 통과면 진짜 경계는
+%%                                      (0.55, 0.75] 안이고, 통과점 복귀가 1.14 s 로
+%%                                      게이트(3 s) 한참 아래라 여유가 남아 있다는 뜻이다.
 
 modelDir = fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(modelDir, 'Scripts_Data'));
@@ -42,6 +58,7 @@ TAU    = getenv_num('SPEC_TAU_LIST', [0 20 40 60 80]);
 ATT_MS = getenv_num('SPEC_ATT_MS', 5);
 SLIST  = getenv_num('SPEC_S_LIST', [1.00 0.75 0.55 0.40 0.28 0.20]);
 PKG    = getenv_num('SPEC_PKG', 1);
+REFINE = getenv_num('SPEC_REFINE', 0);
 
 % 짐 0 kg — 질량과 함께 게인도 그 앵커로 바꿔야 한다. 게인 스케줄은 비행 중이 아니라
 % **이륙 전에 한 번** 정해지는 물건이라, 시험도 그렇게 구성한다.
@@ -58,7 +75,9 @@ end
 
 DX = 3.0; Z0 = 1.0; T0 = 3.0;
 TM0   = DX * pi / (2 * V_REF);   % s=1 일 때 피크 속도가 V_REF 가 되는 이동시간
-TAU_D = 0.3; T_DUR = 0.3;        % 외란 펄스 (능력 카드 R1 규약)
+TAU_D = getenv_num('SPEC_PULSE_NM', 0);   % 0 = 외란 없음 (기본표 조건)
+T_DUR = 0.3;                              % 펄스 폭 [s] (능력 카드 R1 규약)
+HAS_PULSE = TAU_D > 0;
 
 GATE_END_CM = 5.0;               % 목표 도달 오차 상한 — 사용자 요구 "수 cm"
 GATE_DEV_M  = 1.0;               % 이 이상 옆으로 밀리면 발산 취급
@@ -71,6 +90,9 @@ GATE_DEV_M  = 1.0;               % 이 이상 옆으로 밀리면 발산 취급
 % 절대값 3 s 를 그대로 쓰면 무지연에서조차 탈락한다. 그 질량의 tau=0 복귀를 먼저 재고
 % 그 2배로 잡을 것 (SPEC_GATE_REC 로 넘긴다).
 GATE_REC_S = str2double(getenv_str('SPEC_GATE_REC', '3.0'));
+% 무외란 조건의 판정축. 외란이 없으면 복귀라는 개념이 없으므로 **추종 이탈**로 본다
+% (기준 궤적을 얼마나 벗어나며 따라갔나). 지연이 크면 여기부터 무너진다.
+GATE_TRK_CM = str2double(getenv_str('SPEC_GATE_TRK', '10.0'));
 
 % 진행 상황 파일 — -batch 의 stdout 은 리다이렉트되면 블록 버퍼링돼 끝까지 안 보인다.
 % 한 줄마다 열고 닫아 즉시 디스크에 남긴다 (긴 스윕을 밖에서 지켜볼 수 있게).
@@ -92,8 +114,7 @@ for ti = 1:numel(TAU)
     for si = 1:numel(SLIST)
         s = SLIST(si);
         r = run_case(mdl, tau, ATT_MS, s, DX, Z0, T0, TM0, TAU_D, T_DUR, PKG);
-        pass = (r.end_cm <= GATE_END_CM) && ~isnan(r.rec_s) && ...
-               (r.rec_s <= GATE_REC_S) && (r.devy_m < GATE_DEV_M);
+        pass = verdict(r, GATE_END_CM, GATE_REC_S, GATE_DEV_M, GATE_TRK_CM, HAS_PULSE);
         row = sprintf('%7g %6.2f %7.3f %9.2f %9.2f %9.2f %9s %8s  (%.0fs)', ...
                       tau, s, r.vpk, r.end_cm, r.over_cm, 100*r.devy_m, ...
                       num2str(r.rec_s, '%.2f'), tf(pass), r.sec);
@@ -102,6 +123,28 @@ for ti = 1:numel(TAU)
         r.tau = tau; r.s = s; r.pass = pass;
         ROWS = [ROWS; r]; %#ok<AGROW>
         if pass; smax = s; break; end
+    end
+
+    % 세밀화 — 통과한 s 와 직전 실패 s 사이를 더 훑어 '더 큰 통과값'을 찾는다.
+    % 복귀 시간이 배율에 단조롭지 않으므로 여기서도 **내림차순 전수**로 간다.
+    if ~isnan(smax) && REFINE > 0 && si > 1
+        sFail = SLIST(si-1);
+        cand = linspace(sFail, smax, REFINE + 2);
+        cand = cand(2:end-1);              % 양끝(이미 잰 값)은 뺀다
+        cand = sort(cand, 'descend');
+        for ci = 1:numel(cand)
+            s = cand(ci);
+            r = run_case(mdl, tau, ATT_MS, s, DX, Z0, T0, TM0, TAU_D, T_DUR, PKG);
+            pass = verdict(r, GATE_END_CM, GATE_REC_S, GATE_DEV_M, GATE_TRK_CM, HAS_PULSE);
+            row = sprintf('%7g %6.2f %7.3f %9.2f %9.2f %9.2f %9s %8s  (%.0fs) [세밀]', ...
+                          tau, s, r.vpk, r.end_cm, r.over_cm, 100*r.devy_m, ...
+                          num2str(r.rec_s, '%.2f'), tf(pass), r.sec);
+            fprintf('%s\n', row);
+            prog('%s\n', row);
+            r.tau = tau; r.s = s; r.pass = pass;
+            ROWS = [ROWS; r]; %#ok<AGROW>
+            if pass; smax = s; break; end
+        end
     end
     if isnan(smax)
         msg = sprintf('  -> tau=%g ms : 목록 내 통과 없음 (운용 불가 또는 s<%.2f 필요)', tau, min(SLIST));
@@ -148,6 +191,15 @@ s = getenv(name);
 if isempty(s); v = dflt; else; v = sscanf(s, '%f')'; end
 end
 
+function ok = verdict(r, gEnd, gRec, gDev, gTrk, hasPulse)
+% 무외란: 종단 오차 + 추종 이탈만 본다 (복귀는 정의되지 않는다).
+% 외란 배터리: 거기에 복귀 시간과 횡이탈을 더해 본다.
+ok = (r.end_cm <= gEnd) && (r.trk_cm <= gTrk);
+if hasPulse
+    ok = ok && ~isnan(r.rec_s) && (r.rec_s <= gRec) && (r.devy_m < gDev);
+end
+end
+
 function s = tf(b)
 if b; s = 'OK'; else; s = 'FAIL'; end
 end
@@ -167,7 +219,9 @@ assignin('base', 'dly_att_s', max(tau_att_ms, 0) * 1e-3);
 assignin('base', 'dly_pos_s', max(tau_pos_ms, 0) * 1e-3);
 [tr, xr, vpk] = qctest.raised_cos_move(mdl, T_END, DX, Z0, T0, TM);
 qctest.log_signals(mdl, 'pos');
-qctest.torque_pulse(mdl, amp, tPulse, dur);
+if amp > 0
+    qctest.torque_pulse(mdl, amp, tPulse, dur);
+end
 if tau_att_ms > 0 || tau_pos_ms > 0
     qc_delay_apply(mdl);          % 0/0 이면 블록 자체를 넣지 않는다 (항등 기준선)
 end
