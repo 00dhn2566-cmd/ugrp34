@@ -54,8 +54,20 @@ def load_summary():
     p = os.path.join(RES, "summary.csv")
     if not os.path.isfile(p):
         return None
+    # MATLAB 쪽이 desc 를 따옴표 없이 쓰는데 그 안에 쉼표가 있다 -> DictReader 로는
+    # 필드가 밀린다. desc 는 두 번째 자유문자열 필드 하나뿐이므로, 남는 조각을 다시
+    # 붙여서 복구한다. (verify_worstcase.m 은 이후 쉼표를 안 쓰도록 고쳤다.)
     with open(p, newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
+        raw = list(csv.reader(fh))
+    head = raw[0]
+    rows = []
+    for parts in raw[1:]:
+        if not parts:
+            continue
+        extra = len(parts) - len(head)
+        if extra > 0:
+            parts = [parts[0], ",".join(parts[1:2 + extra])] + parts[2 + extra:]
+        rows.append(dict(zip(head, parts)))
     out = {}
     for r in rows:
         d = dict(r)
@@ -206,6 +218,154 @@ def fig_energy(S):
     return _save(fig, "fig_worst_energy.png")
 
 
+
+def alt_limit_cycle(label, t_from=6.0):
+    """정착 후 고도 한계사이클 (p-p 진폭 / 영교차 주파수).
+
+    08-26 발견: 위치(VIO) 경로 지연이 ~2.5 Hz 고도 한계사이클을 만든다. 무지연
+    0.15 cm 대 60 ms 4.72 cm. **스펙을 깎아도 안 잡힌다** (0.75 에서 오히려 5.76 cm) —
+    감쇄 s 는 기준 궤적의 시간축을 늘리는 것이고 이 진동은 고도 폐루프의 성질이라
+    지연이 그대로면 동특성도 그대로다. 기존 지연 표는 횡방향 복귀·추종으로만
+    채점해서 이 축을 못 봤다.
+    """
+    d = load_ts(label)
+    if d is None:
+        return None
+    m = d["t"] > t_from
+    if m.sum() < 20:
+        return None
+    z = d["z"][m]
+    tt = d["t"][m]
+    zm = float(np.mean(z))
+    dz = z - zm
+    nz = int(np.sum(dz[1:] * dz[:-1] < 0))
+    span = float(tt[-1] - tt[0])
+    return {
+        "z_mean_m": zm,
+        "z_ripple_cm": float(100.0 * (z.max() - z.min())),
+        "z_freq_hz": (nz / (2.0 * span)) if span > 0 else float("nan"),
+        "p_min_w": float(d["P_est_W"][m].min()),
+        "p_max_w": float(d["P_est_W"][m].max()),
+        "p_mean_w": float(d["P_est_W"][m].mean()),
+    }
+
+
+def fig_altitude(S):
+    """지연이 만드는 고도 한계사이클 — 감쇄로 안 잡히는 축."""
+    order = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+    rows = []
+    for l in order:
+        if l not in S:
+            continue
+        lc = alt_limit_cycle(l)
+        if lc:
+            rows.append((l, S[l], lc))
+    if len(rows) < 2:
+        return None
+    fig, ax = plt.subplots(1, 2, figsize=(11.5, 4.2))
+    xs = np.arange(len(rows))
+    labs = [r[0] for r in rows]
+
+    rip = [r[2]["z_ripple_cm"] for r in rows]
+    cols = [C_GOOD if v < 1.0 else (C_EXTRA if v < 3.0 else C_BAD) for v in rip]
+    ax[0].bar(xs, rip, color=cols)
+    for i, (v, r) in enumerate(zip(rip, rows)):
+        ax[0].text(i, v * 1.02, "%.2f" % v, ha="center", fontsize=8)
+    ax[0].set_xticks(xs)
+    ax[0].set_xticklabels(["%s\n%g ms\ns=%.2f"
+                           % (r[0], r[1]["tau_pos_ms"], r[1]["s"])
+                           for r in rows], fontsize=7.5)
+    ax[0].set_ylabel("정착 후 고도 진동 p-p [cm]")
+    ax[0].set_title("위치 지연이 만드는 고도 한계사이클")
+    ax[0].grid(axis="y", alpha=0.3)
+
+    # 같은 지연에서 s 를 깎아도 안 줄어든다는 것을 직접 보인다
+    g = [(r[1]["s"], r[2]["z_ripple_cm"], r[0]) for r in rows
+         if abs(r[1]["tau_pos_ms"] - 60) < 1e-6]
+    if len(g) >= 2:
+        g.sort()
+        ax[1].plot([p[0] for p in g], [p[1] for p in g], "o-", color=C_BAD, lw=1.8)
+        for sv, rv, lb in g:
+            ax[1].annotate(lb, (sv, rv), textcoords="offset points", xytext=(5, 5), fontsize=8)
+        ax[1].set_xlabel("스펙 배율 s (지연 60 ms 고정)")
+        ax[1].set_ylabel("고도 진동 p-p [cm]")
+        ax[1].set_title("스펙을 깎아도 줄지 않는다\n(감쇄는 기준 궤적의 축, 진동은 고도 폐루프의 축)")
+        ax[1].invert_xaxis()
+        ax[1].grid(alpha=0.3)
+    else:
+        ax[1].axis("off")
+    fig.tight_layout()
+    return _save(fig, "fig_worst_altitude.png")
+
+
+
+def write_readme(S):
+    """figure/13_worstcase/README.md 를 실측에서 직접 뽑는다 (손으로 옮겨 적지 않게)."""
+    lines = []
+    A = lines.append
+    A("# 13_worstcase — 극한 조합 실측 (2026-08-26)")
+    A("")
+    A("생성: `python make_worstcase_figure.py` (입력 `diagnose/verify_worstcase.m` 산출).")
+    A("**이 README 는 자동 생성이다** — 숫자를 손으로 고치지 말 것.")
+    A("")
+    A("조건: 짐 1 kg, precision, 3 m 직선 이동, 외란 0.3 N·m x 0.3 s 를 이동 한복판에.")
+    A("")
+    A("## 케이스")
+    A("")
+    A("| | 시나리오 | tauP [ms] | tauA [ms] | s | 추종 [cm] | 외란y [cm] | 복귀 [s] | est [Wh] | act [Wh] |")
+    A("|---|---|---|---|---|---|---|---|---|---|")
+    for lab in ("A", "B", "C", "D", "E", "F", "G", "H", "I"):
+        r = S.get(lab)
+        if not r:
+            continue
+        rec = "-" if not math.isfinite(r["recover_s"]) else "%.2f" % r["recover_s"]
+        act = "-" if not math.isfinite(r["energy_act_Wh"]) else "%.4f" % r["energy_act_Wh"]
+        A("| %s | %s | %g | %g | %.2f | %.2f | %.2f | %s | %.4f | %s |"
+          % (lab, r["desc"], r["tau_pos_ms"], r["tau_att_ms"], r["s"],
+             r["track_cm"], r["dev_y_cm"], rec, r["energy_est_Wh"], act))
+    A("")
+    A("## 고도 한계사이클 (정착 후, t > 6 s)")
+    A("")
+    A("| | tauP [ms] | s | z 진동 p-p [cm] | 주파수 [Hz] | 전력 [W] |")
+    A("|---|---|---|---|---|---|")
+    for lab in ("A", "B", "C", "D", "E", "F", "G", "H", "I"):
+        lc = alt_limit_cycle(lab)
+        r = S.get(lab)
+        if not lc or not r:
+            continue
+        A("| %s | %g | %.2f | %.2f | %.2f | %.0f ~ %.0f (평균 %.0f) |"
+          % (lab, r["tau_pos_ms"], r["s"], lc["z_ripple_cm"], lc["z_freq_hz"],
+             lc["p_min_w"], lc["p_max_w"], lc["p_mean_w"]))
+    A("")
+    A("## 읽는 법 / 주의")
+    A("")
+    A("- **복귀는 배율에 단조롭지 않다.** 08-23 에도 같았다 (tau=60 에서 s 1.00/0.75/0.55")
+    A("  -> 6.17/12.19/11.06 s). 그래서 `sweep_delay_spec` 은 이분탐색을 금지하고")
+    A("  내림차순 전수로 돈다. 여기 B/C/D 도 같은 모양이다.")
+    A("- **표를 두 벌 쓴다.** `_LAT_POS_ANCHORS`(무외란) 60 ms = 0.75 이고,")
+    A("  `_LAT_POS_ANCHORS_GUST`(외란 중) 60 ms = **0.28** 이다. 여기 C/D 라벨의")
+    A("  '표대로'는 **무외란표** 값이라 외란 조건에서는 덜 깎은 것이다 — 표 자체의")
+    A("  반증이 아니라 케이스 설계가 표를 잘못 고른 것. (돌풍표 0.28 확인은 미실행.)")
+    A("- **고도 한계사이클은 감쇄로 안 잡힌다.** 감쇄 s 는 기준 궤적의 시간축을 늘리는")
+    A("  것이고 이 진동은 고도 폐루프의 성질이라, 지연이 그대로면 동특성도 그대로다.")
+    A("  자세 지연처럼 **관문**으로 다뤄야 할 후보다 (기존 표는 횡방향 복귀·추종으로만")
+    A("  채점해서 이 축을 못 봤다).")
+    A("- **act(Simscape 배터리)로 추정기를 교정하지 말 것.** 그 전기 모델은 SOC 표시용")
+    A("  이상화라 25 g/W 라는 불가능한 효율을 낸다. `energy.TRUSTED_SOURCES` 참조.")
+    A("")
+    A("## 그림")
+    A("")
+    A("- `fig_worst_timeseries.png` — x 추종 / 외란 방향 y / 전력, 세 구성 겹쳐 그림")
+    A("- `fig_worst_gates.png` — 복귀 시간과 추종 이탈 (게이트 대비)")
+    A("- `fig_worst_energy.png` — 추정 vs 실측 에너지, 배율 대 에너지")
+    A("- `fig_worst_altitude.png` — 고도 한계사이클 (지연별 / 배율별)")
+    os.makedirs(OUT, exist_ok=True)
+    path = os.path.join(OUT, "README.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(chr(10).join(lines) + chr(10))
+    print("  " + path)
+
+
 def main():
     S = load_summary()
     if not S:
@@ -213,13 +373,17 @@ def main():
         print("  MATLAB 에서 `verify_worstcase` 를 먼저 돌릴 것.")
         return 1
     print("극한 상황 그림:")
-    made = [f for f in (fig_timeseries(S), fig_recover(S), fig_energy(S)) if f]
+    made = [f for f in (fig_timeseries(S), fig_recover(S), fig_energy(S),
+                        fig_altitude(S)) if f]
 
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "summary.json"), "w", encoding="utf-8") as fh:
-        json.dump({"source": "diagnose/verify_worstcase.m", "cases": S},
+        lc = {k: alt_limit_cycle(k) for k in S}
+        json.dump({"source": "diagnose/verify_worstcase.m", "cases": S,
+                   "altitude_limit_cycle": {k: v for k, v in lc.items() if v}},
                   fh, ensure_ascii=False, indent=2)
     print("  %s/summary.json" % OUT)
+    write_readme(S)
     print("그림 %d장" % len(made))
     return 0
 

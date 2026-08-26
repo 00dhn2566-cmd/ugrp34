@@ -75,6 +75,20 @@ Simulink 는 `cmd -> Alt Cmd Sat -> Bias Chassis` (bake_tuned_model.m (3)) 이�
 12.48 N). 0 kg 월드는 `<massLerpOn>true</massLerpOn>` 를 기본으로 켰고, 플러그인은
 "고도 권한을 다 써도 무게 미달"이면 시작을 거절한다.
 
+### 추가 — 외란 작용점 + 사용 전력량 (같은 날 늦게)
+
+사용자 요구로 둘을 더 넣었다.
+
+- **외란에 작용점이 생겼다.** 무게중심에 순수 힘을 걸면 평행이동만 하는데, 실제
+  돌풍은 기체의 어느 지점에 걸려 힘과 모멘트를 같이 만든다. `QC_DISTPOINT*` 로
+  작용점을 주면 `tau = r x F` 를 자동으로 더한다. 토크·힘 각각 축 지정형과 3축
+  벡터형을 다 받는다. Gazebo 자체 API 경로도 열었다 — 월드에 `ApplyLinkWrench` 를
+  붙여 두고 `scripts/poke.sh` 로 돌고 있는 시뮬을 손으로 찌를 수 있다 (밖에서 넣은
+  렌치는 플러그인 것과 합산된다). 속도 의존 바람은 `gen_worlds.py --wind-effects`.
+- **사용 전력량을 로그에 남긴다** (`P_est_W`, `E_est_Wh`). `control_seoungjin/energy.py`
+  와 **같은 식**이라 Gazebo / MATLAB / 계획기 셋이 같은 수를 낸다. Gazebo 는 총 추력을
+  정확히 알므로 여기서는 사실상 모델 내 실측이다 (효율 상수만 여전히 미측정).
+
 ### 미해결 — 모멘트 암 두 값
 
 기하 0.1125 m (FX450 45° X) vs 골든 트레이스 유효값 0.0930 m. CAD 암이 −11.7°
