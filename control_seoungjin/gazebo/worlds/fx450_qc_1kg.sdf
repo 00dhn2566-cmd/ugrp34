@@ -1,0 +1,149 @@
+<?xml version="1.0" ?>
+<!--
+  fx450_qc_1kg - control_seoungjin/gazebo/worlds/gen_worlds.py 가 생성. 손으로 고치지 말 것.
+
+  플랜트는 강체 1개 (base_link) 다. 로터를 별도 링크/조인트로 두지 않는 이유:
+    - 관성이 qc_phys() 합성값과 정확히 같아야 하는데, 로터를 링크로 두면
+      Gazebo 가 관성을 다시 합산해 이중 계상된다.
+    - Simulink 쪽도 로터 회전 관성을 자세 플랜트에 넣지 않는다 (추력/반토크만).
+  추력/반토크는 qc_gz_controller 플러그인이 AddWorldWrench 로 직접 인가한다.
+
+  m_pkg = 1.000 kg (용접 강체 - 진자 조인트 아님)
+  m_tot = 2.272600 kg   z_cg = -0.031754 m (섀시 원점 기준)
+  I_att = 1.713451e-02   I_yaw = 2.123617e-02 kg*m^2
+  로터 |x|=|y| = 0.112500 m  (믹서 부호표에서 유도 - gen_worlds.mixer_geometry)
+    모터  (   x   ,    y   )   회전
+      1   (-0.1125, -0.1125)   CCW
+      2   (-0.1125, +0.1125)   CW
+      3   (+0.1125, -0.1125)   CW
+      4   (+0.1125, +0.1125)   CCW
+-->
+<sdf version="1.9">
+  <world name="fx450_qc_1kg">
+
+    <!-- 1 kHz 고정 스텝: 골든 트레이스 기준. 가변 스텝 금지 (PID 이산화가 후방차분). -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <!-- Gazebo 자체 외란 주입 API. 시뮬이 도는 중에 밖에서 링크에 렌치를 찔러
+         넣을 수 있다 (scripts/poke.sh). 플러그인이 스스로 거는 외란과 **합산**된다.
+           gz topic -t /world/fx450_qc_1kg/wrench -m gz.msgs.EntityWrench ...
+         힘은 무게중심에 걸리므로, '어디에 맞았나'를 표현하려면 등가 토크를 같이
+         줘야 한다. 작용점을 그대로 주고 싶으면 플러그인의 distPoint* 를 쓸 것. -->
+    <plugin filename="gz-sim-apply-link-wrench-system" name="gz::sim::systems::ApplyLinkWrench"/>
+
+    <gravity>0 0 -9.81</gravity>
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows><pose>0 0 10 0 0 0</pose>
+      <diffuse>1 1 1 1</diffuse><specular>0.4 0.4 0.4 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>80 80</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>80 80</size></plane></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="fx450">
+      <pose>0 0 0.12 0 0 0</pose>
+      <link name="base_link">
+        <inertial>
+          <pose>0 0 -0.0317540 0 0 0</pose>
+          <mass>2.2726000</mass>
+          <inertia>
+            <ixx>1.7109513e-02</ixx><iyy>1.7159513e-02</iyy><izz>2.1236165e-02</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="body_col">
+          <geometry><box><size>0.20 0.20 0.06</size></box></geometry>
+        </collision>
+        <visual name="body">
+          <geometry><box><size>0.20 0.20 0.06</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.16 0.16 0.16 1</diffuse></material>
+        </visual>
+        <visual name="package">
+          <pose>0 0 -0.0820 0 0 0</pose>
+          <geometry><box><size>0.140 0.140 0.140</size></box></geometry>
+          <material><ambient>0.55 0.4 0.2 1</ambient><diffuse>0.75 0.55 0.3 1</diffuse></material>
+        </visual>
+        <collision name="package_col">
+          <pose>0 0 -0.0820 0 0 0</pose>
+          <geometry><box><size>0.140 0.140 0.140</size></box></geometry>
+        </collision>
+        <visual name="arm_1">
+          <pose>-0.0562 -0.0562 0.0100 0 1.5708 -2.3562</pose>
+          <geometry><cylinder><radius>0.009</radius><length>0.1591</length></cylinder></geometry>
+          <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+        </visual>
+        <visual name="rotor_1">
+          <pose>-0.1125 -0.1125 0.0200 0 0 0</pose>
+          <geometry><cylinder><radius>0.127</radius><length>0.006</length></cylinder></geometry>
+          <material><ambient>0.85 0.2 0.2 1</ambient><diffuse>0.85 0.2 0.2 1</diffuse></material>
+        </visual>
+        <visual name="arm_2">
+          <pose>-0.0562 0.0562 0.0100 0 1.5708 2.3562</pose>
+          <geometry><cylinder><radius>0.009</radius><length>0.1591</length></cylinder></geometry>
+          <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+        </visual>
+        <visual name="rotor_2">
+          <pose>-0.1125 0.1125 0.0200 0 0 0</pose>
+          <geometry><cylinder><radius>0.127</radius><length>0.006</length></cylinder></geometry>
+          <material><ambient>0.2 0.35 0.9 1</ambient><diffuse>0.2 0.35 0.9 1</diffuse></material>
+        </visual>
+        <visual name="arm_3">
+          <pose>0.0562 -0.0562 0.0100 0 1.5708 -0.7854</pose>
+          <geometry><cylinder><radius>0.009</radius><length>0.1591</length></cylinder></geometry>
+          <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+        </visual>
+        <visual name="rotor_3">
+          <pose>0.1125 -0.1125 0.0200 0 0 0</pose>
+          <geometry><cylinder><radius>0.127</radius><length>0.006</length></cylinder></geometry>
+          <material><ambient>0.2 0.35 0.9 1</ambient><diffuse>0.2 0.35 0.9 1</diffuse></material>
+        </visual>
+        <visual name="arm_4">
+          <pose>0.0562 0.0562 0.0100 0 1.5708 0.7854</pose>
+          <geometry><cylinder><radius>0.009</radius><length>0.1591</length></cylinder></geometry>
+          <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+        </visual>
+        <visual name="rotor_4">
+          <pose>0.1125 0.1125 0.0200 0 0 0</pose>
+          <geometry><cylinder><radius>0.127</radius><length>0.006</length></cylinder></geometry>
+          <material><ambient>0.85 0.2 0.2 1</ambient><diffuse>0.85 0.2 0.2 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- 제어기 + 플랜트 접합. 모든 값은 QC_* 환경변수로 덮어쓸 수 있다
+           (scripts/run_case.sh 가 그렇게 쓴다 - 월드 파일은 안 건드림). -->
+      <plugin filename="qc_gz_controller" name="qc::QcGzController">
+        <link>base_link</link>
+        <mode>hover</mode>
+        <pkgMass>1.0000</pkgMass>
+        <profile>precision</profile>
+        <armXY>0.112500</armXY>
+        <rotorZ>0.020000</rotorZ>
+        <comZ>-0.0317540</comZ>
+        <mixerTable>measured</mixerTable>
+        <hoverZ>1.0</hoverZ>
+        <controlRateHz>1000</controlRateHz>
+        <logRateHz>200</logRateHz>
+        <log>gz_run.csv</log>
+      </plugin>
+    </model>
+
+  </world>
+</sdf>

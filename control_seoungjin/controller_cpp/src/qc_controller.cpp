@@ -155,9 +155,21 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     const double uA = st.pidAlt.step(in.refPos[2] - measZ, dt);
 
     // ---- 추력 바이어스 + 2단 클램프 + 믹서 ----
-    // 2π 스케일·바이어스 구조는 실비행 재생으로 실증. Alt Cmd Sat ±30 (덤프 확정)
-    const double base = clamp(uA + c.biasChassis + c.biasLoadGain * c.pkgMass,
-                              -c.altCmdSat, c.altCmdSat);
+    // 2π 스케일·바이어스 구조는 실비행 재생으로 실증.
+    //
+    // [2026-08-26 정정] Alt Cmd Sat(±30)은 **바이어스를 더하기 전**, 고도 PID 출력에만
+    // 걸린다. Simulink 배선이 `cmd -> Alt Cmd Sat -> Bias Chassis` 이다
+    // (diagnose/bake_tuned_model.m (3) 고도 클램프: sat 출력이 Bias Chassis 의 입력).
+    // 이전 코드는 바이어스를 합산한 뒤 클램프해서 base 가 항상 30 rev/s 로 잘렸고,
+    // 그러면 추력이 1.97 N 밖에 안 나와 22.29 N 인 1 kg 기체는 **뜰 수가 없었다**.
+    // 고친 뒤: base = 100.9 rev/s -> 추력 22.26 N (필요 22.29 N, 0.1% 일치) =
+    // SESSIONS_BOARD 가 기록한 호버 평형 634 rad/s 와 일치.
+    // 교차 확인: 0 kg 에서 필요한 base 75.6 rev/s 가 qc_mass_lerp 의 0 kg 앵커
+    // biasChassis=75.5 와 0.1% 로 맞는다 (독립 유도인데 같은 값).
+    // ⚠ 이 정정은 motorRef/motorCmd 채널의 골든 트레이스를 바꾼다 (cmd_pitch/cmd_roll
+    //   위치 체인은 불변). 모터 채널 대조는 다시 떠야 한다.
+    const double base = clamp(uA, -c.altCmdSat, c.altCmdSat)
+                        + c.biasChassis + c.biasLoadGain * c.pkgMass;
     for (int i = 0; i < 4; ++i) {
         // mixDir: 모터 2·3 내장 역회전 (실측 w 음수) — 크기 성분에 방향 부호를 입힘
         out.motorRef[i] = c.mixDir[i] * 2.0 * kPi *

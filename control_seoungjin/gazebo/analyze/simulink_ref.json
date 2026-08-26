@@ -1,0 +1,85 @@
+{
+  "_comment": [
+    "Simulink(Simscape) 쪽 기록값. compare_plants.py 가 Gazebo 결과와 나란히 놓는 근거표.",
+    "각 항목의 condition 은 '그 숫자가 어떤 조건에서 나온 것인가' 다. comparable=false 는",
+    "조건이 Gazebo 케이스와 같지 않아 숫자 자체를 맞대면 안 된다는 뜻 — 참고만 한다.",
+    "새 Simulink 측정이 나오면 여기만 고치면 된다."
+  ],
+  "base": {
+    "hover_att_rms_deg": {
+      "value": 0.56,
+      "condition": "구운 모델 무외란 호버 10 s (diagnose/verify_hover.m), 1 kg, precision",
+      "comparable": true,
+      "case": "hover10"
+    },
+    "hover_jitter_deg": {
+      "value": 0.002,
+      "condition": "r8 호버 지터 (precision 8/3.2) — 정착 후 잔류만. 위 0.56 과 구간 정의가 다르다",
+      "comparable": false,
+      "case": "hover10"
+    },
+    "move_track_rms_cm": {
+      "value": 4.1,
+      "condition": "1 m 이동 추종 RMS, precision 프로파일 (balanced 2.7 / agile 1.25)",
+      "comparable": true,
+      "case": "traj_clean"
+    },
+    "pulse_recover_s": {
+      "value": 0.44,
+      "condition": "토크 펄스 외란 복귀 (18차 관문, agile). precision 계열 기록은 0.73 s",
+      "comparable": true,
+      "case": "pulse_y"
+    },
+    "pulse_tilt_deg": {
+      "value": 1.65,
+      "condition": "같은 펄스의 자세 이탈 최대",
+      "comparable": true,
+      "case": "pulse_y"
+    },
+    "recover_baseline_1kg_s": {
+      "value": 1.73,
+      "condition": "1 kg 무지연 회복 기준선 (SPEC_GATE_REC 기본 3 s 의 근거 = 약 2배)",
+      "comparable": true,
+      "case": "tau0_pulse"
+    }
+  },
+  "lat_pos_anchors": {
+    "_comment": "capability.py::_LAT_POS_ANCHORS — 위치(VIO) 경로 지연 tau[s] -> 허용 배율 s",
+    "0.000": 1.0,
+    "0.020": 1.0,
+    "0.040": 0.88,
+    "0.060": 0.75,
+    "0.080": 0.37,
+    "0.120": 0.0,
+    "0.160": 0.0
+  },
+  "lat_pos_anchors_gust": {
+    "_comment": "capability.py::_LAT_POS_ANCHORS_GUST — 돌풍(정상 외란) 중의 위치 지연 표. 무외란표보다 훨씬 가파르다. rho/GUST_RHO_REF(0.90) 로 두 표 사이를 보간한다.",
+    "0.000": 1.0,
+    "0.020": 1.0,
+    "0.030": 1.0,
+    "0.040": 0.55,
+    "0.060": 0.28,
+    "0.080": 0.0
+  },
+  "lat_att_gate": {
+    "_comment": "자세 경로 지연은 감쇄가 아니라 관문 (capability.py). 단위 s",
+    "clean_s": 0.012,
+    "max_s": 0.016,
+    "margin_scale": 0.6
+  },
+  "plant_gain": {
+    "b_pitch_simulink": {
+      "value": -0.0296,
+      "condition": "u -> pitch 각가속도. 단위 규약이 확정되지 않았다 (rpm/rad-per-s 혼선 의심 — SESSIONS_BOARD 08-18 '(30/pi)^2' 항목). 부호만 신뢰할 것.",
+      "comparable": false,
+      "case": "probe_pitch"
+    },
+    "moment_arm_eff_m": {
+      "value": 0.093,
+      "condition": "골든 트레이스 유효 모멘트 암 (roll 0.0932 / pitch 0.0929). 기하 X쿼드 값 0.1125 와 다르다 — 어느 쪽이 맞는지는 probe 가 판정한다.",
+      "comparable": false,
+      "case": "probe_pitch"
+    }
+  }
+}
