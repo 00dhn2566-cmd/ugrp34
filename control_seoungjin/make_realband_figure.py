@@ -57,6 +57,11 @@ CASES = [("A", "지연 없음", "#1f77b4"),
          ("J", "위치 지연 10 ms", "#ff7f0e"),
          ("K", "위치 지연 20 ms", "#d62728")]
 Z_REF = 1.0        # 이 임무의 고도 기준 (verify_worstcase.m 의 Z0)
+# s=1.00 일 때의 펄스 시각 — T0 + TM/2, TM = 3 m / v_ref(1.6) 의 사다리꼴 시간.
+# summary.csv 는 마지막 실행분만 남기므로 (WC_ONLY 로 골라 돌리면 그 케이스만),
+# A/J/K 가 거기 없을 때 쓰는 폴백이다. verify_worstcase.m 의 정의와 같아야 한다.
+T_PULSE_S1 = 3.0 + (3.0 * math.pi / (2 * 1.6)) / 2.0
+DUR = 0.3
 
 
 def load_ts(label):
@@ -109,7 +114,9 @@ def main():
         if tp is not None:
             break
     if tp is None:
-        print("주의 — summary.csv 에서 펄스 시각을 못 찾았다. 복귀 시간을 못 낸다.")
+        tp = T_PULSE_S1
+        print("주의 — summary.csv 에 A/J/K 가 없다 (다른 케이스가 덮어씀). "
+              "s=1.00 공식값 t=%.3f s 로 대체한다." % tp)
 
     fig, ax = plt.subplots(6, 1, figsize=(9.5, 12.5), sharex=True)
     panels = [("x", "x [m]", 1.0), ("y", "y [cm]", 100.0), ("z", "z [m]", 1.0),
@@ -124,24 +131,35 @@ def main():
     ax[2].axhline(Z_REF, color=C_REF, lw=1.2, ls="--", zorder=1)
     ax[5].axhline(0.0, color=C_REF, lw=1.2, ls="--", zorder=1)
 
+    # 세 곡선은 거의 포개진다 (roll 은 진폭 2.4 deg 에 0/20 ms 차이가 최대 1.2 deg).
+    # 그냥 같은 굵기로 순서대로 그리면 나중에 그린 색이 앞의 색을 통째로 덮어
+    # "파란 선이 안 보인다" 가 된다. 지연이 큰 쪽을 굵게 깔고 작은 쪽을 가늘게
+    # 위에 얹어, 겹치는 구간에서도 세 색이 다 남게 한다.
+    order = list(reversed(have))
+    lws = [3.0, 1.9, 1.1][-len(order):]
     for i, (key, ylab, scale) in enumerate(panels):
-        for lab, ttl, col, d in have:
-            ax[i].plot(d["t"], scale * d[key], color=col, lw=1.5, zorder=2,
+        for (lab, ttl, col, d), lw in zip(order, lws):
+            ax[i].plot(d["t"], scale * d[key], color=col, lw=lw, zorder=2,
                        label=ttl if i == 0 else None)
         ax[i].set_ylabel(ylab)
         ax[i].grid(alpha=0.3)
         if tp is not None:
-            ax[i].axvspan(tp, tp + 0.3, color=C_GRAY, alpha=0.20, lw=0, zorder=0)
+            ax[i].axvspan(tp, tp + DUR, color=C_GRAY, alpha=0.20, lw=0, zorder=0)
 
     ax[0].set_title("현실 대역 지연 비교 — 위치 경로 0 / 10 / 20 ms (자세 5 ms 고정)\n"
                     "3 m 이동 한복판에 roll 축 토크 0.3 N·m × 0.3 s (회색 띠)",
                     fontsize=11)
-    ax[0].legend(loc="lower right", fontsize=8.5)
+    # 위에서 역순으로 그렸으므로 범례는 다시 지연 오름차순으로 돌려 놓는다
+    hs, ls = ax[0].get_legend_handles_labels()
+    idx = [0] + list(range(len(hs) - 1, 0, -1))
+    ax[0].legend([hs[i] for i in idx], [ls[i] for i in idx],
+                 loc="lower right", fontsize=8.5)
     ax[1].axhline(2, color=C_GRAY, lw=0.7, ls=":")
     ax[1].axhline(-2, color=C_GRAY, lw=0.7, ls=":")
     ax[1].text(0.012, 0.90, "점선 = 복귀 판정 밴드 ±2 cm", transform=ax[1].transAxes,
                fontsize=8, color=C_GRAY, va="top")
-    ax[3].text(0.012, 0.90, "자세에는 임무 수준 기준이 없다 (위치 루프의 내부 명령)",
+    ax[3].text(0.012, 0.90, "자세에는 임무 수준 기준이 없다 (위치 루프의 내부 명령)\n"
+                            "선이 굵을수록 큰 지연 — 겹치면 얇은 선(작은 지연)이 위",
                transform=ax[3].transAxes, fontsize=8, color=C_GRAY, va="top")
     ax[5].set_xlabel("시간 [s]")
     fig.tight_layout()
@@ -162,11 +180,11 @@ def main():
         settled = d["t"] > 6.0
         rec = None
         if tp is not None:
-            idx = np.where(d["t"] > tp + 0.3)[0]
+            idx = np.where(d["t"] > tp + DUR)[0]
             ok = np.abs(d["y"]) < 0.02
             for j, k in enumerate(idx):
                 if ok[idx[j:]].all():
-                    rec = d["t"][k] - (tp + 0.3)
+                    rec = d["t"][k] - (tp + DUR)
                     break
         zr = 100.0 * (d["z"][settled].max() - d["z"][settled].min()) if settled.any() else float("nan")
         print("%-16s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %8s"
