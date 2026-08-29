@@ -666,31 +666,6 @@ struct QcConfig {
 // 질량 의존이라 pkgMass 변경 후엔 qc_apply_profile 재호출 필요 (qc_bind 전).
 enum class Profile { Precision, Balanced, Agile };
 
-inline void qc_apply_profile(QcConfig& c, Profile p) {
-    switch (p) {
-        case Profile::Precision:
-            c.kpPos = 8;  c.kdPos = 3.2;   break;  // 호버 0.002도/이동 4.1cm (기본)
-        case Profile::Balanced:
-            c.kpPos = 12; c.kdPos = 4.8;   break;  // 0.10도/2.7cm
-        case Profile::Agile: {
-            const double d = c.pkgMass < 1.0 ? 1.0 - c.pkgMass : c.pkgMass - 1.0;
-            const double tri = d > 1.0 ? 0.0 : 1.0 - d;
-            c.kpPos = 8 + 16 * tri;  c.kdPos = 3.2 + 7.6 * tri;  // 1kg: 24/10.8 (1.25cm)
-            c.kpPosZ = 8; c.kdPosZ = 3.2;
-            return;
-        }
-    }
-    c.kpPosZ = c.kpPos; c.kdPosZ = c.kdPos;   // precision/balanced: z = xy 동일 (기존 거동)
-    // posErrSat = 1.2/kpPos (z는 1.2/kpPosZ) 곱 불변식은 qc_scales()가 자동 연동
-}
-
-// 스케일 적용된 실효 게인 계산 (parameters.m 로직 대응)
-// 18차: 자세/고도의 질량 의존은 물성비(sIa/sM)가 아니라 질량 1차식(sAMass/sZMass)을 쓴다
-// — 물성비는 0kg 레짐 붕괴로 반증(refine_mass_probe), 1차식은 0~2kg 6점 검증 통과
-// (refine_linear_law: 전 질량 무발산, 1kg 회귀 무결, 0.5 내삽 비열등, 2kg 외삽 우세).
-// sIa/sIz/sM은 진단/비교용으로만 유지. yaw는 질량 동결(sQ만 적용, 검증 구성 그대로).
-struct QcScales { double sT, sQ, sIa, sIz, sM, sAMass, sZMass, posErrSat, posErrSatZ; };
-
 // 질량 1차식 — 두 실측 앵커를 잇는다. MATLAB `Scripts_Data/qc_mass_lerp_apply.m` 의 짝.
 //
 // 왜 두 법칙이 있나: 07-19 18차가 0 kg 앵커를 sA=0.75 로 잡았는데, 08-18 성능 세션이
@@ -718,6 +693,62 @@ inline MassLerp qc_mass_lerp(double pkgMass) {
     m.kdPos = 0.4 * m.kpPos;          // 두 앵커 모두 비가 0.4 (2.0/5 == 3.2/8)
     return m;                         // posErrSat = 1.2/kpPos 는 qc_scales 가 계산
 }
+
+// 질량 1차식을 **설정에 실제로 반영**한다.
+//
+// 왜 따로 필요한가: `qc_scales` 는 const 참조라 설정을 못 고친다. 그래서 지금까지
+// `qc_mass_lerp` 가 계산한 여덟 값 중 **셋만**(sAMass/sZMass/posErrSat) 소비됐고,
+// 나머지는 `main_spec_trace` 가 찍기만 했다. 그 결과 0 kg 비행에서
+//   biasChassis 56.5 (실측 앵커 **75.5**) — 호버 추력 바이어스 25% 부족
+//   limAtt 800 (0 kg 채택 **100**) / kpPos 8 (채택 **5**)
+// 이 그대로 남았다. MATLAB 쪽(`qc_mass_lerp_apply.m`)은 이미 다 넣고 있어서
+// 두 구현이 0 kg 에서 다른 기체가 돼 있었다.
+//
+// 1 kg 에서는 1차식이 현행 기본값과 정확히 일치하므로 **골든 트레이스는 불변**이다
+//   limAtt 800 / kdAtt = kpAtt·1.5 = -127.5 / biasChassis 56.5 / kpPos 8 / kdPos 3.2.
+//
+// kpPos/kdPos 는 **precision 에서만** 덮는다 — MATLAB 1차식도 precision 전제로
+// 쓰여 있고(qc_mass_lerp_apply.m 주석), agile 은 프로파일이 삼각식으로 따로 정한다.
+// filtPz / nlGmax 는 C++ 에 해당 필드가 없다 (기능 미구현) — 여기서 지어내지 않는다.
+inline void qc_apply_mass_lerp(QcConfig& c, Profile p) {
+    if (!c.massLerpOn) return;
+    const MassLerp m = qc_mass_lerp(c.pkgMass);
+    c.limAtt      = m.limAtt;
+    c.kdAtt       = c.kpAtt * m.rAtt;     // 부호는 kpAtt 가 갖는다 (음수 필수)
+    c.biasChassis = m.biasChassis;
+    if (p == Profile::Precision) {
+        c.kpPos  = m.kpPos;  c.kdPos  = m.kdPos;
+        c.kpPosZ = c.kpPos;  c.kdPosZ = c.kdPos;
+    }
+}
+
+inline void qc_apply_profile(QcConfig& c, Profile p) {
+    switch (p) {
+        case Profile::Precision:
+            c.kpPos = 8;  c.kdPos = 3.2;   break;  // 호버 0.002도/이동 4.1cm (기본)
+        case Profile::Balanced:
+            c.kpPos = 12; c.kdPos = 4.8;   break;  // 0.10도/2.7cm
+        case Profile::Agile: {
+            const double d = c.pkgMass < 1.0 ? 1.0 - c.pkgMass : c.pkgMass - 1.0;
+            const double tri = d > 1.0 ? 0.0 : 1.0 - d;
+            c.kpPos = 8 + 16 * tri;  c.kdPos = 3.2 + 7.6 * tri;  // 1kg: 24/10.8 (1.25cm)
+            c.kpPosZ = 8; c.kdPosZ = 3.2;
+            qc_apply_mass_lerp(c, p);
+            return;
+        }
+    }
+    c.kpPosZ = c.kpPos; c.kdPosZ = c.kdPos;   // precision/balanced: z = xy 동일 (기존 거동)
+    // posErrSat = 1.2/kpPos (z는 1.2/kpPosZ) 곱 불변식은 qc_scales()가 자동 연동
+    qc_apply_mass_lerp(c, p);
+}
+
+// 스케일 적용된 실효 게인 계산 (parameters.m 로직 대응)
+// 18차: 자세/고도의 질량 의존은 물성비(sIa/sM)가 아니라 질량 1차식(sAMass/sZMass)을 쓴다
+// — 물성비는 0kg 레짐 붕괴로 반증(refine_mass_probe), 1차식은 0~2kg 6점 검증 통과
+// (refine_linear_law: 전 질량 무발산, 1kg 회귀 무결, 0.5 내삽 비열등, 2kg 외삽 우세).
+// sIa/sIz/sM은 진단/비교용으로만 유지. yaw는 질량 동결(sQ만 적용, 검증 구성 그대로).
+struct QcScales { double sT, sQ, sIa, sIz, sM, sAMass, sZMass, posErrSat, posErrSatZ; };
+
 
 inline QcScales qc_scales(const QcConfig& c) {
     PhysOut now = qc_phys(c.droneMass, c.pkgMass, c.pkgSize);
