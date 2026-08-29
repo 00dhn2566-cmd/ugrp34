@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-08-29 — 2학기 개강 직전 현황 정리 + 회의 안건 (길남)
+
+**TL;DR**: 방학 checkpoint("Isaac 시뮬 + RL 훈련 완료")는 원래 정의대로는 미달 — Isaac 렌더러 6주째 차단. 대신 윤호 PyBullet 프로토타입으로 파이프라인 전 구간은 뚫렸고, 성진은 08-18~23에 동역학 문서화·0kg 재튜닝·지연 강건화를 마쳤다. **시뮬레이터 후보가 Isaac/PyBullet/Gazebo 3개**가 된 상태라 2학기 마일스톤·역할 분담을 첫 안건으로 올렸다. 안건 전체: [meeting_agenda_2026-08-29](overall_gilnam/docs/meeting_agenda_2026-08-29.md) (08-11 브리핑의 A1~A7을 잇는 문서). Isaac 전환 시 필요 요소 표: [ISAAC_MIGRATION_CHECKLIST](reinforcement_yunho/docs/ISAAC_MIGRATION_CHECKLIST.md).
+
+- **윤호**: `rl/state_window_adapter.py` normal 부호가 아직 `cross(c1−c0, c3−c0)` (08-11 요청 미반영 — 확정 부호는 `cross(c3−c0, c1−c0)`) / 로터 인덱스·CW/CCW 매핑 확정 (성진 C++ 믹서표 대조가 이것 때문에 보류) / 2차 데이터셋 생성기에 잠정 확정 ①②⑤ 반영 여부 회신
+- **태민**: 08-11 액션 5건 회신 대기 중 — 7월 이후 기록이 없어 근황·블로킹 여부부터 확인 필요
+- **성진**: `capability.json`을 계획기(길남)가 읽도록 연동 — 착수 시점 회의에서 / `measAgeS` 생산자 지정 필요 / rpm↔rad/s 단위 결착은 Isaac·Gazebo 이식 시 주의 사항으로 체크리스트에 반영해 둠
+- **전원**: 잠정 확정 6건 일괄 추인 예정 (안건 2-2) / 최종보고서 12/12, 9월 연구노트 9/30
+
+---
+
 ## 2026-08-18 — 윤호 PyBullet 프로토타입 + 안건 격상 (길남 정리)
 
 **TL;DR**: 윤호가 `feat/pybullet-prototype-pipeline`(미병합)에서 **진짜 이미지 → 실추론 → 복원 → 계획 E2E를 최초 달성**. 그 과정에서 "창문을 채우면 앞 창문이 뒤를 가려 색 판정·삼각측량이 깨진다"를 실증 → 회의 안건 A2(창문 시각 정의)를 **테두리 기준 확정 제안**으로 격상, intrinsics 후보(fx=763, HFOV 80°) 확정 안건 A2-b 추가. [meeting_brief](overall_gilnam/docs/meeting_brief_2026-08-11.md) 갱신됨.
