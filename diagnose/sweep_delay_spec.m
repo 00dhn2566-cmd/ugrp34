@@ -94,9 +94,24 @@ GATE_REC_S = str2double(getenv_str('SPEC_GATE_REC', '3.0'));
 % (기준 궤적을 얼마나 벗어나며 따라갔나). 지연이 크면 여기부터 무너진다.
 GATE_TRK_CM = str2double(getenv_str('SPEC_GATE_TRK', '10.0'));
 
+% 실제 쓴 게이트를 산출물에 남긴다. 이 표는 질량마다 **다른 절대 기준**으로 재므로
+% (위 주석: 그 질량의 tau=0 복귀의 2배), 어떤 기준으로 OK 를 준 표인지 나중에
+% 복원할 수 없으면 서로 다른 기준의 표를 나란히 놓고 비교하는 사고가 난다.
+if HAS_PULSE
+    recNote = sprintf('복귀 %.1f s', GATE_REC_S);
+else
+    recNote = '복귀 미적용(무외란)';
+end
+GATESTR = sprintf('종단 %.1f cm / 추종 %.1f cm / 이탈 %.1f m / 외란 %.2f N*m / %s', ...
+                  GATE_END_CM, GATE_TRK_CM, GATE_DEV_M, TAU_D, recNote);
+
 % 진행 상황 파일 — -batch 의 stdout 은 리다이렉트되면 블록 버퍼링돼 끝까지 안 보인다.
 % 한 줄마다 열고 닫아 즉시 디스크에 남긴다 (긴 스윕을 밖에서 지켜볼 수 있게).
 PROG = fullfile(modelDir, 'diagnose', 'results', 'sweep_delay_spec_progress.txt');
+% 실행마다 새로 시작한다. logrow 는 append 라, 이게 없으면 옛 실행 뒤에 이어 붙어
+% sync_delay_anchors.py 가 서로 다른 질량/조건의 행을 한 표로 읽는 사고가 난다
+% (실제로 08-23 1 kg 표 뒤에 0 kg 실행이 붙은 채로 발견됐다).
+if exist(PROG, 'file'); delete(PROG); end
 prog = @(fmt, varargin) logrow(PROG, fmt, varargin{:});
 
 hdr = sprintf('%7s %6s %7s %9s %9s %9s %9s %8s', ...
@@ -105,7 +120,8 @@ fprintf('\n===== B상 지연x스펙 (짐 %g kg, 자세 %g ms 고정, 위치 지�
 fprintf('기저: %g m 이동, s=1 -> v %.2f m/s (TM %.2f s), 외란 %.1f N*m x %.1f s @ 이동 중간\n\n', ...
         DX, V_REF, TM0, TAU_D, T_DUR);
 fprintf('%s\n', hdr);
-prog('==== 시작: 짐 %g kg, 자세 %g ms, tau %s ms ====\n%s\n', PKG, ATT_MS, num2str(TAU), hdr);
+prog(['==== 시작: 짐 %g kg, 자세 %g ms, tau %s ms ====\n' ...
+      '==== 게이트: %s ====\n%s\n'], PKG, ATT_MS, num2str(TAU), GATESTR, hdr);
 
 ROWS = [];
 for ti = 1:numel(TAU)
@@ -114,10 +130,11 @@ for ti = 1:numel(TAU)
     for si = 1:numel(SLIST)
         s = SLIST(si);
         r = run_case(mdl, tau, ATT_MS, s, DX, Z0, T0, TM0, TAU_D, T_DUR, PKG);
-        pass = verdict(r, GATE_END_CM, GATE_REC_S, GATE_DEV_M, GATE_TRK_CM, HAS_PULSE);
+        [pass, why] = verdict(r, GATE_END_CM, GATE_REC_S, GATE_DEV_M, GATE_TRK_CM, HAS_PULSE);
         row = sprintf('%7g %6.2f %7.3f %9.2f %9.2f %9.2f %9s %8s  (%.0fs)', ...
                       tau, s, r.vpk, r.end_cm, r.over_cm, 100*r.devy_m, ...
                       num2str(r.rec_s, '%.2f'), tf(pass), r.sec);
+        row = [row '  [' why ']'];
         fprintf('%s\n', row);
         prog('%s\n', row);
         r.tau = tau; r.s = s; r.pass = pass;
@@ -135,10 +152,11 @@ for ti = 1:numel(TAU)
         for ci = 1:numel(cand)
             s = cand(ci);
             r = run_case(mdl, tau, ATT_MS, s, DX, Z0, T0, TM0, TAU_D, T_DUR, PKG);
-            pass = verdict(r, GATE_END_CM, GATE_REC_S, GATE_DEV_M, GATE_TRK_CM, HAS_PULSE);
+            [pass, why] = verdict(r, GATE_END_CM, GATE_REC_S, GATE_DEV_M, GATE_TRK_CM, HAS_PULSE);
             row = sprintf('%7g %6.2f %7.3f %9.2f %9.2f %9.2f %9s %8s  (%.0fs) [세밀]', ...
                           tau, s, r.vpk, r.end_cm, r.over_cm, 100*r.devy_m, ...
                           num2str(r.rec_s, '%.2f'), tf(pass), r.sec);
+            row = [row '  [' why ']'];
             fprintf('%s\n', row);
             prog('%s\n', row);
             r.tau = tau; r.s = s; r.pass = pass;
@@ -170,10 +188,19 @@ for ti = 1:numel(TAU)
     fprintf('%s\n', line);
     prog('%s\n', line);
 end
-outp = fullfile(modelDir, 'diagnose', 'results', sprintf('sweep_delay_spec_%gkg.mat', PKG));
-save(outp, 'ROWS', 'TAU', 'SLIST', 'ATT_MS', 'V_REF', 'A_REF', 'TM0', 'PKG');
+if HAS_PULSE; cond = 'gust'; else; cond = 'nominal'; end
+outp = fullfile(modelDir, 'diagnose', 'results', ...
+                sprintf('sweep_delay_spec_%gkg_%s.mat', PKG, cond));
+save(outp, 'ROWS', 'TAU', 'SLIST', 'ATT_MS', 'V_REF', 'A_REF', 'TM0', 'PKG', ...
+     'GATE_END_CM', 'GATE_TRK_CM', 'GATE_REC_S', 'GATE_DEV_M', 'TAU_D', 'HAS_PULSE');
 fprintf('\n결과 저장: %s\n', outp);
 prog('결과 저장: %s\n', outp);
+% progress 의 일반 이름은 그대로 둔다 (sync_delay_anchors.py 가 그걸 읽는다).
+% 다음 실행이 덮어쓰기 전에 조건별 사본을 자동으로 남긴다 — 지금까지는 손으로
+% 이름을 바꿔 보관했고, 그래서 어느 표가 어느 조건인지 헷갈렸다.
+tagged = fullfile(modelDir, 'diagnose', 'results', ...
+                  sprintf('sweep_delay_spec_progress_%gkg_%s.txt', PKG, cond));
+try; copyfile(PROG, tagged); fprintf('사본: %s\n', tagged); catch; end
 
 %% ================= 로컬 =================
 function logrow(path, fmt, varargin)
@@ -191,12 +218,28 @@ s = getenv(name);
 if isempty(s); v = dflt; else; v = sscanf(s, '%f')'; end
 end
 
-function ok = verdict(r, gEnd, gRec, gDev, gTrk, hasPulse)
+function [ok, why] = verdict(r, gEnd, gRec, gDev, gTrk, hasPulse)
 % 무외란: 종단 오차 + 추종 이탈만 본다 (복귀는 정의되지 않는다).
 % 외란 배터리: 거기에 복귀 시간과 횡이탈을 더해 본다.
-ok = (r.end_cm <= gEnd) && (r.trk_cm <= gTrk);
+%
+% why 를 같이 돌려주는 이유: 판정에 쓰는 trk_cm 이 표에 안 찍힌다 (표는 over_cm 을
+% 찍는다). 그래서 '두 열 다 게이트 안인데 FAIL' 로 보이는 행이 생겼다. 열을 늘리면
+% 진행 파일을 읽는 파서 두 곳(sync_delay_anchors / make_delay_figures)의 정규식이
+% 깨지므로, 행 끝에 사유만 덧붙인다 (정규식은 행 앞부분만 보므로 안전하다).
+why = {};
+if r.end_cm > gEnd; why{end+1} = sprintf('종단 %.2f>%.1f', r.end_cm, gEnd); end
+if r.trk_cm > gTrk; why{end+1} = sprintf('추종 %.2f>%.1f', r.trk_cm, gTrk); end
 if hasPulse
-    ok = ok && ~isnan(r.rec_s) && (r.rec_s <= gRec) && (r.devy_m < gDev);
+    if isnan(r.rec_s);        why{end+1} = '복귀 없음';
+    elseif r.rec_s > gRec;    why{end+1} = sprintf('복귀 %.2f>%.1f', r.rec_s, gRec);
+    end
+    if r.devy_m >= gDev;      why{end+1} = sprintf('이탈 %.2f>=%.1f m', r.devy_m, gDev); end
+end
+ok = isempty(why);
+if ok
+    why = sprintf('추종 %.2f', r.trk_cm);      % 통과여도 판정축 값은 남긴다
+else
+    why = strjoin(why, ', ');
 end
 end
 
@@ -237,7 +280,7 @@ r.vpk     = vpk;
 r.end_cm  = 100 * abs(x(end) - DX);                % 종단 도달 오차
 r.over_cm = 100 * max(0, max(x) - DX);             % 폐루프 오버슈트
 xrq = interp1(tr, xr, t, 'linear', 'extrap');
-r.trk_cm  = 100 * max(abs(x - xrq));               % 기준 대비 최대 이탈 (참고)
+r.trk_cm  = 100 * max(abs(x - xrq));               % 기준 대비 최대 이탈 = 무외란 판정축
 mD = t >= tPulse;
 r.devy_m  = max(abs(y(mD)));                       % 외란이 민 옆방향 최대
 % 복귀 = 펄스 종료 후 |y| < 2 cm 를 처음으로 '끝까지' 유지
