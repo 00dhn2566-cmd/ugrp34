@@ -8,18 +8,18 @@
 ## 0. 한 장 요약
 
 - **방학 checkpoint(README §6 "Isaac 시뮬 환경 + RL 훈련 완료")는 원래 정의대로는 미달.** Isaac RTX 렌더러는 07/17부터 드라이버 버그로 차단 상태. 대신 윤호가 **PyBullet 위에서 진짜 이미지→검출→복원→계획→성진 제어기→물리 전 구간을 완주**(10창문, [prototype_demo/README.md](../../prototype_demo/README.md)) — 파이프라인 자체는 뚫렸다.
-- 팀에 시뮬레이터 후보가 **3개** 생겼다: Isaac(차단, 포토리얼 렌더), PyBullet(프로토타입 완주, CF2X 27g — 팀 기체 아님), Gazebo(성진 착수, RTX 5060 머신). **하나로 정하거나 역할을 나눠 명시하지 않으면 2학기 통합이 셋으로 갈라진다.**
+- 팀에 시뮬레이터 후보가 **3개** 생겼다: Isaac(차단, 포토리얼 렌더), PyBullet(프로토타입 완주, CF2X 27g — 팀 기체 아님), Gazebo(성진 SDF 작성 단계, RTX 5060 머신 예정). **하나로 정하거나 역할을 나눠 명시하지 않으면 2학기 통합이 셋으로 갈라진다.**
 - 비전: 1차 모델(mAP 0.927)은 corner 8.87px → margin 역산 v2에서 **50/100mm 모두 FAIL, 100mm는 기체 반경 0.35m 기준 기하적으로 불가능**. 재학습 공식 채택(08-11). 잠정 확정 6건이 추인 대기.
-- 일정: 최종보고서 **12/12(금)**, 9월 연구노트 9/30, 예산은 11월부터 잔액 10% 규칙·장비 구매는 과제 종료 2개월 전까지 ([운영 일정](../../../공지사항/)).
+- 일정: 최종보고서 **12/12(금)**, 9월 연구노트 9/30, 11월에는 신청 예산의 10%만 집행 가능(잔액 회수·재료 구매 불가), 장비 구매는 과제 종료 2개월 전까지 (UGRP 운영 일정 PDF — `UGRP/공지사항/`, 리포 밖).
 
 ## 1. 파트별 현황 (08-29)
 
 | 파트 | 08-18 이후 된 것 | 막힌 것 / 열린 것 |
 |---|---|---|
 | 비전·총괄(길남) | 계획기 v2→v3(`overall_gilnam/planning/`, 짧은 구간 병합·이탈측 가드, 3000씬 스윕 회귀 0), E2E 리허설 통과, 미검출·도메인 갭 진단, margin v2, NEWS.md 운영 시작 | 재학습 실행(GPU·데이터 도메인 미정), A2-b intrinsics·A2-d 검출 클래스 미결, **계획기가 성진 `capability.json`을 아직 안 읽음**(08-23 성진 미완 항목) |
-| 시뮬·RL(윤호) | PyBullet 전 구간 프로토타입 병합(4faa8eb), 3클래스 파인튜닝, 복원단 대안(`prototype_demo/overrides/` conf가중+Huber, center 오차 268→63mm), EuRoC 덤프, RL seam 형식 정합 병합(456fa5b) | Isaac 여전히 차단. **`rl/state_window_adapter.py` normal 부호가 아직 `cross(c1−c0, c3−c0)`(확정 부호의 반대, 08-11 요청 미반영)**. CPU 렌더러 조명 키 수정·2차 데이터셋 생성기 반영 여부 미확인. 로터 인덱스/CW·CCW 매핑 미결 |
+| 시뮬·RL(윤호) | PyBullet 전 구간 프로토타입 병합(4faa8eb), 3클래스 파인튜닝, 복원단 대안(`prototype_demo/overrides/` conf가중+Huber, center 오차 268→63mm), EuRoC 덤프 | Isaac 여전히 차단. **`rl/state_window_adapter.py`의 corner→normal 폴백 부호가 아직 `cross(c1−c0, c3−c0)`(확정 부호의 반대, 08-11 요청 미반영 — 명시 `normal` 필드가 있으면 그걸 쓰므로 GT 스트림에선 무해, 필드 없는 입력에서 뒤집힘)**. CPU 렌더러 조명 키 수정·2차 데이터셋 생성기 반영 여부 미확인. 로터 인덱스/CW·CCW 매핑 미결 |
 | VIO(태민) | — (07-04 이후 커밋 없음) | 걸린 액션 5건 미회신(§4 참조). 윤호 발견: LS 복원이 conf 미가중·아웃라이어 제거 없음(같은 관측에서 center 오차 268mm) — 반영 여부 태민 판단 |
-| 제어(성진) | 동역학 문서화(`docs/DYNAMICS*.md`, 지도교수 요구) — 믹서 부호표·유효 모멘트 암 0.093m 실측 확정, **프로펠러 단위 결착(Simscape 로그는 rpm, C++는 rad/s — 이식 시 주의)**; 0kg 재튜닝(sA 0.40 vs 0.50 판단 지점); 성능 지표 그림 108장(`figure/`); ILC 궤적 보정(`traj_learn.py`); **08-22~23 지연 강건화** — 외란 연동 속도 조속기, `capability.json` 생산자(`spec_governor.py`), 재계획 다리(`traj_bridge.py` — 외란 수단 아님으로 반증), C++ 지연 관측기, 테스트 254 통과; Gazebo 환경 착수 | `measAgeS` 채우는 쪽 없음, 계획기 미연동, C++ 믹서표 대조는 로터 매핑 확정 대기. 남의 영역 파일 침범→회수 사건(08-19~23) |
+| 제어(성진) | 동역학 문서화(`docs/DYNAMICS*.md`, 지도교수 요구) — 믹서 부호표·유효 모멘트 암 0.093m 실측 확정, **프로펠러 단위 결착(Simscape 로그는 rpm, C++는 rad/s — 이식 시 주의)**; 0kg 재튜닝(sA 0.40 vs 0.50 판단 지점); 성능 지표 그림 108장(`figure/`); ILC 궤적 보정(`traj_learn.py`); **08-22~23 지연 강건화** — 외란 연동 속도 조속기, `capability.json` 생산자(`spec_governor.py`), 재계획 다리(`traj_bridge.py` — 외란 수단 아님으로 반증), C++ 지연 관측기, 테스트 254 통과; RL seam 형식 정합(코어/옵션 분리, 456fa5b) `main` 병합; Gazebo 기체 SDF 1건(`gazebo/fx450_test.sdf`, 구동 확인 전) | `measAgeS` 채우는 쪽 없음, 계획기 미연동, C++ 믹서표 대조는 로터 매핑 확정 대기. 남의 영역 파일 침범→회수 사건(08-19~23) |
 
 **문서 불일치 1건(계속)**: 08/03 랩미팅 슬라이드는 "Yunho – Path planning through RL"로 발표됐으나 저장소 문서는 전부 "RL 담당 미정". 아래 §2-7에서 정리.
 
@@ -34,7 +34,7 @@
 
 ### 2-3. A1 — margin 전제 확정 + 재학습 착수 조건
 - margin은 고르는 값이 아니라 **씬 전제(창문 0.8~1.2m) − 기체 유효 반경(0.35m) − 추종 오차**가 상한을 정한다(최악 창문 슬랙 68.9mm). **결정**: 창문 크기 스펙을 키울지 / 기체 반경 가정을 낮출지 / 추종 예산(e_track)을 얼마로 둘지 → 그 뒤에 픽셀 목표치가 따라 나온다.
-- 재학습 실행 조건 **결정**: 데이터 도메인(CPU 절차 렌더러 vs PyBullet 렌더 vs 둘 다 — 윤호 파인튜닝은 이미 PyBullet 도메인), GPU(클러스터 A100 학습은 가능 — 렌더만 차단 / 윤호 로컬), 스펙 순서(가림 정책→증강+조명 버그→imgsz 960).
+- 재학습 실행 조건 **결정**: 데이터 도메인(CPU 절차 렌더러 vs PyBullet 렌더 vs 둘 다 — 윤호 파인튜닝은 이미 PyBullet 도메인), GPU(클러스터 RTX PRO 6000 — 학습은 가능, RTX 렌더만 드라이버 차단 / 윤호 로컬), 스펙 순서(가림 정책→증강+조명 버그→imgsz 960).
 - 근거: [eval_target_derivation.md](eval_target_derivation.md) v2, [miss_tail_diagnosis.md](miss_tail_diagnosis.md)
 
 ### 2-4. A2-b — 카메라 intrinsics 확정 (+ 태민 OpenVINS 입력 묶음)
@@ -67,7 +67,7 @@
 ## 3. 팔로업 (결정 불요)
 
 - 윤호: `state_window_adapter.py` normal 부호 플립(08-11 요청, 미반영 확인), CPU 렌더러 조명 키 수정 여부, 2차 데이터셋 생성기에 ①②⑤ 반영 여부
-- 태민: 근황 확인(07-04 이후 기록 없음). 액션 5건 — `noisy_stream_x1/` 교차검증 회신 / `/window_positions` 필드명 / T_IC body≡camera / §5 center 4점 평균 / 검출 주기 2Hz→상향(scan rate 0.75→1.0 회복)
+- 태민: 근황 확인(07-04 이후 기록 없음). 액션 5건 — `noisy_stream_x1/` 교차검증 회신 / `/window_positions` 필드명 → spec §6.2 / **T_IC: 08-11의 "body≡camera(항등)" 지시는 폐기 — 08-18 잠정 확정 ⑥(루트 spec §6.1)대로 노드의 EuRoC 하드코딩 값을 표준 R_IC=[[0,0,1],[−1,0,0],[0,−1,0]]로 교체, 이 상수가 단일 진실** / §5 center 4점 평균 / 검출 주기 2Hz→상향(scan rate 0.75→1.0 회복)
 - 성진: MATLAB 검증 큐(비상 ①②), Gazebo 첫 월드 구동 시점, PX4 전환 트리거(07-19 구상) 재확인
 - 전원: 서브모듈 워크트리 비었으면 `git submodule update --force`(Simscape 제외 — NEWS 하단), 9월 연구노트(9/30) 정리 담당, 회의록 md화 여부(3월 이후 hwp 회의록 없음)
 

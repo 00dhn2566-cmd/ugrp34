@@ -48,7 +48,7 @@
 |---|---|---|
 | IMU 프림 부착 + 200Hz | ⛔ | |
 | 노이즈 4개(가속/자이로 × density/random walk) | ⛔ | 숫자 미결 + **Isaac IMU 센서 내장 노이즈 유무 불확실** — 없다고 가정하고 `export_vio.py` 단계 후처리 주입, **같은 숫자를 `calib/kalibr_imu_chain.yaml`에 기입**(calib 주석 원칙). PyBullet `export_euroc.py`가 이미 노이즈 주입을 하므로 그 모델을 재사용 |
-| 카메라–IMU extrinsics `T_cam_imu` | ⛔ | 루트 spec §6.1 잠정 확정(전방 카메라 표준 T_IC, 태민 상수 단일 진실). 드론 USD의 두 프림 상대 pose로 채움. Kalibr `T_cam_imu` vs 태민 노드 역행렬 방향 주의 |
+| 카메라–IMU extrinsics `T_cam_imu` | ⚠ | 루트 spec §6.1 잠정 확정: R_IC=[[0,0,1],[−1,0,0],[0,−1,0]], 병진 = 장착 오프셋(시뮬 기본 0), 태민 노드 상수가 단일 진실. 드론 USD의 카메라 프림을 이 값과 일치하게 배치(반대로 USD에서 읽어 채우지 말 것). Kalibr `T_cam_imu` vs 태민 역행렬 방향 주의 |
 | 단일 클럭·int-ns 타임스탬프 | ✅ | 시뮬 시간→ns 변환은 한 곳에서만 |
 
 ## E. 드론 동역학·액추에이션 (가장 큰 신규 작업)
@@ -81,7 +81,7 @@
 |---|---|---|
 | `IsaacSimBackend(PhysicsBackend)`: `reset(start_pos, params)` / `step(waypoint_world, dt)` → `StepPhysics` | ⛔ | 인터페이스 고정 — 환경 코드 무수정 |
 | 벡터화(num_envs) | ⛔ | `window_env.py` 단일 인스턴스 가정. Isaac 병렬은 사실상 **Isaac Lab** 방식(한 스테이지에 N 복제) — 직접 구현 부담 큼. PyBullet은 SubprocVecEnv로 해결 중 |
-| 관측 17차원·GT 치트 금지·노이즈 주입 | ✅ | `state_window_adapter.py` — 단 **normal 부호가 아직 `cross(c1−c0, c3−c0)`**(확정 부호 반대, 08-11 요청) |
+| 관측 17차원·GT 치트 금지·노이즈 주입 | ✅ | `state_window_adapter.py` — 단 corner→normal **폴백** 부호가 아직 `cross(c1−c0, c3−c0)`(확정 부호 반대, 08-11 요청). 명시 `normal` 필드가 있으면 무해 |
 | 정책 `step` 파라미터 기록 | ⚠ | 학습 0.3 vs 기본 0.6 불일치로 성공률 95%→5% 오독 사례 — config에 박을 것 |
 | 보상 가중치 | ⛔ | 스텁(안건 2-7) |
 
@@ -107,7 +107,7 @@
 
 ## J. 선행 결정 (안건 번호는 `overall_gilnam/docs/meeting_agenda_2026-08-29.md`)
 
-- 2-1 시뮬레이터 역할 분담 — **PyBullet을 RL/계획 대리 환경으로 두고 Isaac을 렌더 전용으로 하면 E·F·G가 통째로 빠진다**(작업량 차이가 가장 큰 결정)
+- 2-1 시뮬레이터 역할 분담 — **PyBullet을 RL/계획 대리 환경으로 두고 Isaac을 렌더 전용으로 하면 E·F·G가 통째로 빠진다**(작업량 차이가 가장 큰 결정). 클러스터 GPU는 RTX PRO 6000(Blackwell) — 학습은 지금도 가능, RTX 렌더만 드라이버 차단
 - 2-4 카메라 intrinsics·extrinsics·IMU 노이즈
 - 2-8 로터 인덱스/CW·CCW 매핑, 모터 JSON 스키마 서명, `measAgeS` 생산자
 - 병렬 RL을 Isaac Lab으로 갈지 단일 환경으로 갈지
