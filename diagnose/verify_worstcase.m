@@ -69,6 +69,9 @@ end
 if str2double(getenv_or_num('WC_PRED', '0')) > 0
     TAG = [TAG 'pred_'];
 end
+if ~isempty(getenv('WC_KIPOS'))
+    TAG = [TAG sprintf('ki%s_', strrep(getenv('WC_KIPOS'), '.', 'p'))];
+end
 
 DX = 3.0; Z0 = 1.0; T0 = 3.0;
 TM0   = DX * pi / (2 * V_REF);    % s=1 일 때 피크 속도 = V_REF
@@ -254,6 +257,15 @@ if pkg == 0
 end
 assignin('base', 'dly_att_s', max(tau_att_ms, 0) * 1e-3);
 assignin('base', 'dly_pos_s', max(tau_pos_ms, 0) * 1e-3);
+% WC_KIPOS: 위치 적분 게인을 덮어쓴다 (기본 = 안 건드림).
+% 08-29 가설 시험용 — 외란 뒤 8 s 꼬리가 적분 되감기인가.
+% 오버슈트가 외란 크기에 비례하고 감쇠 시정수는 고정(~8 s)인 것이 되감기 서명이라,
+% ki=0 이면 오버슈트와 꼬리가 함께 사라져야 한다. 안 사라지면 원인은 딴 데다.
+kiEnv = getenv('WC_KIPOS');
+if ~isempty(kiEnv)
+    assignin('base', 'ki_position', str2double(kiEnv));
+    fprintf('[WC_KIPOS] ki_position -> %s\n', kiEnv);
+end
 [tr, xr, vpk] = qctest.raised_cos_move(mdl, T_END, DX, Z0, T0, TM);
 qctest.log_signals(mdl, 'all');   % 자세도 필요하다 — 전력 추정에 경사가 들어간다
 axl = 'xyz';
