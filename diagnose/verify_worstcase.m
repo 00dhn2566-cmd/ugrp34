@@ -65,6 +65,10 @@ else
     V_REF = 1.6;                  % 1 kg 앵커
     TAG = '';
 end
+% 예측기를 켜면 출력이 기준선을 덮지 않게 태그를 나눈다 (같은 케이스 라벨을 쓰므로).
+if str2double(getenv_or_num('WC_PRED', '0')) > 0
+    TAG = [TAG 'pred_'];
+end
 
 DX = 3.0; Z0 = 1.0; T0 = 3.0;
 TM0   = DX * pi / (2 * V_REF);    % s=1 일 때 피크 속도 = V_REF
@@ -103,6 +107,8 @@ C = {
  'O', '20ms + 외란 - s 0.75',                 20,   5, 0.75, AMP, [0 0 0]
  'P', '20ms + 외란 - s 0.55',                 20,   5, 0.55, AMP, [0 0 0]
  'Q', '20ms + 외란 - s 0.37',                 20,   5, 0.37, AMP, [0 0 0]
+ % --- 예측기 시험용: 위치 지연만 크게 (자세는 5 ms 고정) ---
+ 'R', '60ms + 외란 (예측기 시험)',            60,   5, 1.00, AMP, [0 0 0]
 };
 
 only = strtrim(getenv('WC_ONLY'));
@@ -247,6 +253,12 @@ for k = 1:3
 end
 if tau_att_ms > 0 || tau_pos_ms > 0
     qc_delay_apply(mdl);          % 0/0 이면 블록을 아예 안 넣는다 (항등 기준선)
+    % 지연 보상 예측기 (WC_PRED=1). 지연 블록 **뒤에** 리드 보상기를 끼운다.
+    % 목적: delay_compensator.py 가 추정기 단독으로 보인 이득이 폐루프에서도
+    % 나오는지, 특히 roll 11 Hz 한계사이클에도 듣는지를 가른다.
+    if str2double(getenv_or_num('WC_PRED', '0')) > 0
+        qc_predictor_apply(mdl);
+    end
 end
 qc_yawwrap_apply(mdl);
 qc_antiwindup_apply(mdl, 'clamping', {'Control Yaw'});
