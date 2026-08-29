@@ -12,3 +12,9 @@ diagnose/results/*.mat
 diagnose/results/logs/
 diagnose/results/*.png
 run_*.txt
+
+# results/ 하위 폴더(worstcase/ 등)까지 — 위 한 단계 패턴은 하위를 안 잡는다
+diagnose/results/**/*.csv
+diagnose/results/**/*.mat
+diagnose/results/**/*.png
+diagnose/results/*.log

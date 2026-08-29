@@ -34,7 +34,8 @@
 %%   SPEC_TAU_LIST = '0 20 40 60 80'   [ms] 위치(VIO) 경로 지연 — 지배적인 쪽
 %%   SPEC_ATT_MS   = '5'               [ms] 자세(IMU) 경로 지연, 전 조건 고정
 %%   SPEC_S_LIST   = '1.0 0.75 0.55 0.40 0.28 0.20'   내림차순 스펙 배율
-%%   SPEC_PKG      = '1' (기본) | '0'   짐 질량 [kg]. 0 이면 08-18 채택 0 kg 튜닝을 얹는다
+%%   SPEC_PKG      = '1' (기본) | '0' | 사이값   짐 질량 [kg]. 0 이면 08-18 채택 0 kg
+%%                   튜닝, 사이값이면 qc_mass_lerp_apply 의 1차식을 얹는다
 %%   SPEC_PULSE_NM = '0' (기본) | '0.3'  외란 펄스 크기 [N*m]. **0 = 외란 없음**
 %%                                      -> 이게 기본 limits(tau) 를 만드는 조건이다.
 %%   SPEC_REFINE   = '0' (기본) | '2'   1차 통과 뒤 **직전 실패 배율과의 사이**를 이만큼
@@ -69,8 +70,19 @@ if PKG == 0
     pkgDensity = 1e-6 / (pkgSize(1)*pkgSize(2)*pkgSize(3));    %#ok<NASGU>
     m_pkg_now = 0;  wind_speed = 0;                            %#ok<NASGU>
     V_REF = 1.2;  A_REF = 1.0;      % 0 kg 앵커 (capability._ANCHORS)
-else
+elseif PKG == 1
     V_REF = 1.6;  A_REF = 1.6;      % 1 kg 앵커
+else
+    % 중간 질량 — 게인은 qc_mass_lerp_apply 가 두 앵커 사이 1차식으로 넣고(run_case),
+    % 여기서는 **플랜트 질량**과 속도/가속 앵커만 같은 1차식으로 맞춘다.
+    % 목적: 파이썬 쪽 질량 보간(capability._LAT_POS_ANCHORS_BY_PKG)이 실제와 맞는지
+    % 대조할 기준점을 만드는 것. 보간을 검증 없이 믿으면 그게 곧 사고다.
+    pkgSize = [1 1 1] * 0.14;                                  %#ok<NASGU>
+    pkgDensity = PKG / (pkgSize(1)*pkgSize(2)*pkgSize(3));     %#ok<NASGU>
+    m_pkg_now = PKG;                                           %#ok<NASGU>
+    w = min(max(PKG, 0), 1);
+    V_REF = 1.2 + (1.6 - 1.2) * w;
+    A_REF = 1.0 + (1.6 - 1.0) * w;
 end
 
 DX = 3.0; Z0 = 1.0; T0 = 3.0;
@@ -257,6 +269,8 @@ load_system(mdl);
 qctest.disable_drop(mdl);
 if pkg == 0
     qc_0kg_tuned_apply(mdl);      % 08-18 채택 0 kg 구성 (parameters.m 미동기 대체분)
+elseif pkg ~= 1
+    qc_mass_lerp_apply(mdl, pkg); % 0/1 kg 두 앵커를 잇는 1차식 (08-23 검증분)
 end
 assignin('base', 'dly_att_s', max(tau_att_ms, 0) * 1e-3);
 assignin('base', 'dly_pos_s', max(tau_pos_ms, 0) * 1e-3);

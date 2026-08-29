@@ -1,0 +1,8 @@
+==== 시작: 짐 1 kg, 자세 5 ms, tau 20 ms ====
+==== 게이트: 종단 5.0 cm / 추종 10.0 cm / 이탈 1.0 m / 외란 0.60 N*m / 복귀 3.0 s ====
+tau[ms]      s  v[m/s]    종단[cm]    오버[cm]   외란y[cm]     복귀[s]       판정
+     20   1.00   1.600      0.27      6.50      8.97      2.42       OK  (107s)  [추종 6.50]
+  -> tau=20 ms : 허용 스펙 배율 s_max = 1.00  (v 1.600 m/s)
+==== limits(tau) ====
+     20     1.00     1.600     1.600     8.000      64.00
+결과 저장: C:\Users\psjqk\OneDrive\Desktop\디지\프로젝트별\UGRP\workload\control_seoungjin\controller\Quadcopter-Drone-Model-Simscape\diagnose\results\sweep_delay_spec_1kg_gust.mat

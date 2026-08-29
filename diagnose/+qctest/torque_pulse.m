@@ -1,11 +1,18 @@
-function torque_pulse(mdl, amp, tOn, dur)
-% 기체 Body 프레임에 roll 축(x) 외란 토크 펄스를 물린다 — 능력 카드 R1 규약.
-%   amp [N·m], tOn [s], dur [s]
+function torque_pulse(mdl, amp, tOn, dur, axis)
+% 기체 Body 프레임에 외란 토크 펄스를 물린다 — 능력 카드 R1 규약.
+%   amp [N·m], tOn [s], dur [s], axis 'x'(roll, 기본) | 'y'(pitch) | 'z'(yaw)
+%
+% 축을 여는 이유 (2026-08-28): 지금까지 roll 하나만 쟀는데, yaw 는 권한이
+% roll 대비 한 자릿수 약하다 (tau_max 0.317 N*m). 같은 0.3 N*m 라도 roll 에는
+% 여유가 있고 yaw 에는 사실상 포화다 — 진짜 취약점이 거기일 수 있다.
 %
 % 배선: Pulse Generator -> Simulink-PS Converter -> External Force and Torque
 %       -> Body 프레임 (Transform Arm1 의 부모 안 'Body' 서브시스템 conserving 포트)
 % conserving 포트는 방향이 없어 어느 쪽에 무엇을 물릴지 이름으로 알 수 없다.
 % 그래서 두 순서를 다 시도하고 compile 이 통과하는 쪽을 채택한다.
+if nargin < 5 || isempty(axis); axis = 'x'; end
+axis = upper(axis(1));
+if ~any(axis == 'XYZ'); error('qctest.torque_pulse: axis 는 x|y|z'); end
 PER = 1000;   % 펄스 주기 — 시뮬 길이보다 훨씬 크게 두어 '한 번만' 인가되게 한다
 
 armTf1 = '';
@@ -33,21 +40,21 @@ for ci = 1:numel(bconn)
 end
 if attPort == -1; error('qctest.torque_pulse: Body 프레임 주입점 없음'); end
 
-extB = [sys '/Disturb Torque X'];
-if isempty(find_system(sys, 'SearchDepth', 1, 'Name', 'Disturb Torque X'))
+extB = [sys '/Disturb Torque ' axis];
+if isempty(find_system(sys, 'SearchDepth', 1, 'Name', ['Disturb Torque ' axis]))
     add_block('sm_lib/Forces and Torques/External Force and Torque', extB);
 end
-set_param(extB, 'EnableTorqueX', 'on');
+set_param(extB, ['EnableTorque' axis], 'on');
 
-plsB = [sys '/Disturb Pulse X'];
-if isempty(find_system(sys, 'SearchDepth', 1, 'Name', 'Disturb Pulse X'))
+plsB = [sys '/Disturb Pulse ' axis];
+if isempty(find_system(sys, 'SearchDepth', 1, 'Name', ['Disturb Pulse ' axis]))
     add_block('simulink/Sources/Pulse Generator', plsB);
 end
 set_param(plsB, 'Amplitude', num2str(amp), 'Period', num2str(PER), ...
                 'PulseWidth', num2str(100 * dur / PER), 'PhaseDelay', num2str(tOn));
 
-spsB = [sys '/Disturb SPS X'];
-if isempty(find_system(sys, 'SearchDepth', 1, 'Name', 'Disturb SPS X'))
+spsB = [sys '/Disturb SPS ' axis];
+if isempty(find_system(sys, 'SearchDepth', 1, 'Name', ['Disturb SPS ' axis]))
     add_block('nesl_utility/Simulink-PS Converter', spsB);
 end
 try; set_param(spsB, 'Unit', 'N*m'); catch; end
