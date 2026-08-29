@@ -286,3 +286,61 @@ class TestReportShape:
         c = g.tick()["capability"]
         assert c["degraded"]["time_scale"] < 1.0
         assert "disturbance" in c["degraded"]["reasons"]
+
+
+class TestLatencyMassAxis:
+    """위치-지연 표의 질량 축 (0/1 kg 실측, 사이는 선형).
+
+    2026-08-28. 그전까지 표는 1 kg 전용이었고, 0 kg 에 대해서는 보수적으로 틀렸다.
+    0 kg 실측이 들어오면서 두 앵커가 생겼다 — 그런데 두 표가 크게 벌어져 있어
+    (120 ms: 0 kg 0.55 vs 1 kg 운용 불가) 어떻게 잇느냐가 그냥 나오지 않는다.
+    """
+
+    def test_endpoints_reproduce_measured_tables(self):
+        """앵커에서는 실측표를 정확히 재현해야 한다 — 보간이 끝점을 흔들면 안 된다."""
+        for m in (0.0, 1.0):
+            assert cap._lat_table_for_pkg(m) == cap._LAT_POS_ANCHORS_BY_PKG[m]
+
+    def test_one_kg_default_unchanged(self):
+        """호출부가 질량을 안 넘기면 예전과 같은 값 (1 kg 표)."""
+        for tau in (0.0, 0.02, 0.04, 0.06, 0.08):
+            assert (scale_from_latency_pos(tau)
+                    == pytest.approx(cap._LAT_POS_ANCHORS[tau]))
+
+    def test_monotone_in_mass(self):
+        """무거울수록 지연에 약하다 — 80 ms 에서 0 kg 0.75 -> 1 kg 0.37."""
+        ss = [scale_from_latency_pos(0.08, pkg_kg=m)
+              for m in (0.0, 0.25, 0.5, 0.75, 1.0)]
+        assert ss == sorted(ss, reverse=True)
+        assert ss[0] == pytest.approx(0.75)
+        assert ss[-1] == pytest.approx(0.37)
+
+    def test_inoperable_is_absorbed_not_interpolated(self):
+        """0.00 은 '작은 배율이면 된다' 가 아니라 '어떤 배율로도 안 된다' 다.
+
+        1 kg 120 ms 는 실제로 더 깎을수록 나빠졌다 (0.55 에서 종단 6.3 cm 였다가
+        0.40 에서 25 m 발산). 0.55 와 0.00 을 이어 0.275 를 내주면 상위는 그 배율이
+        통과한다고 읽는데, 그 값은 아무도 재지 않았다.
+        """
+        for m in (0.01, 0.25, 0.5, 0.99):
+            for tau in (0.120, 0.160):
+                assert cap._lat_table_for_pkg(m)[tau] == 0.0
+        # 0 kg 자신은 실측이므로 살아 있어야 한다
+        assert cap._lat_table_for_pkg(0.0)[0.120] == pytest.approx(0.55)
+
+    def test_out_of_range_clamps(self):
+        """범위 밖은 외삽하지 않는다 — 안 재본 질량에 값을 지어내면 그게 사고다."""
+        assert cap._lat_table_for_pkg(-1.0) == cap._LAT_POS_ANCHORS_BY_PKG[0.0]
+        assert cap._lat_table_for_pkg(9.0) == cap._LAT_POS_ANCHORS_BY_PKG[1.0]
+
+    def test_only_common_taus_emitted(self):
+        """한쪽 질량에만 있는 지연 점은 내지 않는다 (그 질량에서도 쟀다고 읽힌다)."""
+        common = set(cap._LAT_POS_ANCHORS_BY_PKG[0.0]) & set(cap._LAT_POS_ANCHORS_BY_PKG[1.0])
+        assert set(cap._lat_table_for_pkg(0.5)) == common
+
+    def test_gust_table_has_no_mass_axis_yet(self):
+        """돌풍 표는 질량마다 **다른 복귀 게이트**로 쟀다 — 이으면 기준이 섞인다."""
+        assert not hasattr(cap, "_LAT_POS_ANCHORS_GUST_BY_PKG")
+        a = scale_from_latency_pos(0.06, gust=True, pkg_kg=0.0)
+        b = scale_from_latency_pos(0.06, gust=True, pkg_kg=1.0)
+        assert a == pytest.approx(b)

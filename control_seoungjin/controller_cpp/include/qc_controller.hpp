@@ -293,12 +293,27 @@ struct SpecLatencyRule {
     double posScale[kMaxAnchors]    = {1.00, 1.00, 0.88, 0.75, 0.37, 0.00, 0.00, 0.0};
     int    posN = 7;         // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
 
+    // 0 kg 무외란 표 (2026-08-28 실측). 질량은 지연 내성을 크게 바꾼다 —
+    // 120/160 ms 에서 1 kg 은 운용 불가인데 0 kg 은 0.55/0.40 으로 산다. 원인은
+    // 질량이 아니라 그 질량의 튜닝 강도다 (0 kg 구성이 물러서 위상 여유가 남는다).
+    // 이 표가 없으면 0 kg 비행이 1 kg 표에 묶여 80 ms 에서 0.37 로 간다 (실측 0.75).
+    double posTau0[kMaxAnchors]     = {0.000, 0.020, 0.040, 0.060, 0.080, 0.120, 0.160, 0.0};
+    double posScale0[kMaxAnchors]   = {1.00, 1.00, 1.00, 0.83, 0.75, 0.55, 0.40, 0.0};
+    int    posN0 = 7;        // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
+
+    // 짐 질량 [kg]. 게인 스케줄과 **같은 값**을 이륙 전에 한 번 넣는다.
+    // 이 모델은 비행 중 질량을 추정하지 않는다 (qc_pkg_mass_set 주석과 같은 규약).
+    double pkgKg = 1.0;
+
     // 돌풍 표 (0.3 N*m x 0.3 s 를 이동 중 맞고도 복귀가 사는 배율). sync_delay_anchors.py 생성.
     double gustTau[kMaxAnchors]     = {0.000, 0.020, 0.030, 0.040, 0.060, 0.080, 0.0, 0.0};
     double gustScale[kMaxAnchors]   = {1.00, 1.00, 1.00, 0.55, 0.28, 0.00, 0.0, 0.0};
     int    gustN = 6;        // sync_delay_anchors.py 가 생성 — 손으로 고치지 말 것
     // 돌풍 표를 잰 외란 크기에 대응하는 rho (0.3 N*m = yaw 권한의 94.6%).
     double gustRhoRef = 0.90;
+    // ⚠ 돌풍 표에는 질량 축이 없다. 0 kg 돌풍 표는 **다른 복귀 게이트**로 쟀기
+    //   때문이다 (그 질량의 tau=0 복귀의 2배 = 약 18 s vs 1 kg 3 s). 이으면 서로
+    //   다른 기준이 한 표에 섞인다. 게이트 표기 방식이 정해지면 그때 연다.
 
     static double lookup(const double* tau, const double* sc, int n, double t,
                          bool* extrapolated) {
@@ -316,11 +331,35 @@ struct SpecLatencyRule {
         return sc[n - 1];
     }
 
+    // 무외란 표를 질량으로 보간한다 (파이썬 `capability._lat_table_for_pkg` 대응).
+    //
+    // 순서가 중요하다: **질량 먼저, tau 나중**이다. 파이썬이 그렇게 한다 —
+    // 0.00(운용 불가) 흡수를 앵커 단계에서 하기 때문이다. 순서를 뒤집으면
+    // (tau 먼저 -> 질량) 0.00 이 이미 다른 값과 섞여 흡수가 안 걸리고,
+    // 0.5 kg / 100 ms 에서 0.28 대신 0.42 가 나온다 (더 빠르게 가라는 쪽 = 위험).
+    //
+    // 두 표의 tau 격자가 다르면 질량 보간을 포기하고 1 kg 표로 물러난다 (보수적).
+    double posNominalFor(double t, bool* extrapolated) const {
+        bool sameGrid = (posN0 == posN);
+        for (int i = 0; sameGrid && i < posN; ++i) {
+            const double d = posTau0[i] - posTau[i];
+            if ((d < 0 ? -d : d) > 1e-12) sameGrid = false;
+        }
+        if (!sameGrid) return lookup(posTau, posScale, posN, t, extrapolated);
+        const double w = clamp(pkgKg, 0.0, 1.0);
+        double sc[kMaxAnchors] = {};
+        for (int i = 0; i < posN; ++i) {
+            const double a = posScale0[i], b = posScale[i];
+            sc[i] = (a == 0.0 || b == 0.0) ? 0.0 : a + (b - a) * w;
+        }
+        return lookup(posTau, sc, posN, t, extrapolated);
+    }
+
     // rhoEff = 관측된 유효 외란 점유율 (0 이면 기본표 그대로).
     double posScaleFor(double tauS, double rhoEff = 0.0,
                        bool* extrapolated = nullptr) const {
         const double t = tauS > 0.0 ? tauS : 0.0;
-        const double sNom = lookup(posTau, posScale, posN, t, extrapolated);
+        const double sNom = posNominalFor(t, extrapolated);
         if (rhoEff <= 0.0) return sNom;
         const double sG = lookup(gustTau, gustScale, gustN, t, nullptr);
         double u = rhoEff / (gustRhoRef > 1e-9 ? gustRhoRef : 1e-9);

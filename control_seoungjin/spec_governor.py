@@ -62,7 +62,8 @@ MIN_REPLAN_BUDGET_S = 0.10
 
 
 def scale_from_latency_pos(latency_s: float, gust: bool = False,
-                           rho_eff: float | None = None) -> float:
+                           rho_eff: float | None = None,
+                           pkg_kg: float = 1.0) -> float:
     """위치(VIO) 경로 지연 -> 허용 시계 배율. 실측 앵커 사이 선형 보간.
 
     gust=False (기본) : `capability._LAT_POS_ANCHORS` — **외란 없는** 조건에서 잰 표.
@@ -90,7 +91,9 @@ def scale_from_latency_pos(latency_s: float, gust: bool = False,
         w = 0.0 if hi == lo else (tau - lo) / (hi - lo)
         return tbl[lo] + (tbl[hi] - tbl[lo]) * w
 
-    s_nom = look(cap._LAT_POS_ANCHORS)
+    # 무외란 표는 질량축이 있다 (0/1 kg 실측, 사이는 선형). 기본 1 kg 은 예전과
+    # 같은 표를 준다 — 호출부가 질량을 안 넘겨도 동작이 안 바뀐다.
+    s_nom = look(cap._lat_table_for_pkg(pkg_kg))
     if not gust:
         return s_nom
     s_gust = look(cap._LAT_POS_ANCHORS_GUST)

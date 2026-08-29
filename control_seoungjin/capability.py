@@ -114,9 +114,33 @@ LAT_ATT_MARGIN_SCALE = 0.60  # 청정~한계 사이 구간에서 적용할 배�
 #   0.00 = 그 지연에서는 **어떤 배율로도** 통과 못함 (운용 불가, 임무 거부).
 #   두 표 모두 `sync_delay_anchors.py` 가 MATLAB 결과에서 생성한다 — 손으로 옮기지 말 것.
 #   1 kg 실측 완료 2026-08-23 (`sweep_delay_spec_progress_1kg_nominal.txt`).
-#   ⚠ 0 kg 은 딴판이다 — 60 ms 까지 무감쇄로 통과하고 80 ms 에서 21.9 m 발산한다.
-#     질량별 표를 담을 구조가 아직 없어 이 1 kg 표를 쓰며, 0 kg 에 대해서는
-#     **보수적으로** 틀린다 (느리게 가라고 하는 쪽). [TODO-질량별]
+#   0 kg 실측 완료 2026-08-28 (`sweep_delay_spec_progress_0kg_nominal.txt`).
+#
+#   ── 질량 축 ──────────────────────────────────────────────────────────────
+#   두 질량은 딴판이다. 120/160 ms 에서 1 kg 은 **운용 불가**인데 0 kg 은 0.55/0.40
+#   으로 산다. 이유는 질량 자체가 아니라 **그 질량의 튜닝 강도**다 — 0 kg 구성
+#   (sA 0.35, kp_pos 5)은 이미 물러서 위상 여유가 남고, 1 kg 구성(kp_pos 8)은
+#   뻣뻣해서 지연에 쓸 여유가 없다 (보드 08-23 / 08-28).
+#
+#   사이 질량은 `_lat_table_for_pkg` 가 선형 보간한다. MATLAB 게인 스케줄
+#   (`qc_mass_lerp_apply`) 이 두 앵커 사이를 1차식으로 잇고 있으므로, 그 결과인
+#   지연 내성도 1차로 잇는 것이 같은 가정 위에 서는 것이다.
+#
+#   ⚠ 0.00(운용 불가)은 보간하지 않는다. 한쪽 앵커가 0.00 이면 결과도 0.00 이다.
+#     0.00 은 "작은 배율이면 된다" 가 아니라 "**어떤 배율로도 안 된다**" 는 뜻이고,
+#     실제로 1 kg 120 ms 는 배율을 더 깎을수록 나빠졌다 (0.55 에서 6.3 cm 였다가
+#     0.40 에서 25 m 발산). 0.55 와 0.00 을 이어 0.275 를 내주면 상위는 그 배율이
+#     통과한다고 읽는데, 그건 아무도 재지 않은 값이다.
+_LAT_POS_ANCHORS_0KG = {
+    0.000: 1.00,
+    0.020: 1.00,
+    0.040: 1.00,
+    0.060: 0.83,
+    0.080: 0.75,
+    0.120: 0.55,
+    0.160: 0.40,
+}
+
 _LAT_POS_ANCHORS = {
     0.000: 1.00,
     0.020: 1.00,
@@ -125,6 +149,14 @@ _LAT_POS_ANCHORS = {
     0.080: 0.37,
     0.120: 0.00,
     0.160: 0.00,
+}
+
+# 질량 축은 위 두 표를 **그대로 참조**한다 (사본이 아니다). 사본을 두면
+# `sync_delay_anchors.py --write` 가 `_LAT_POS_ANCHORS` 만 갱신하므로, 1 kg 표를
+# 다시 재도 실제 동작에는 반영되지 않는 채로 조용히 갈라진다.
+_LAT_POS_ANCHORS_BY_PKG = {
+    0.0: _LAT_POS_ANCHORS_0KG,
+    1.0: _LAT_POS_ANCHORS,
 }
 
 _LAT_POS_ANCHORS_GUST = {
@@ -144,6 +176,34 @@ GUST_RHO_REF = 0.90
 
 def _lerp(a, b, w):
     return a + (b - a) * w
+
+
+def _lat_table_for_pkg(pkg_kg: float) -> dict:
+    """질량별 위치-지연 -> 허용 배율 표. 실측 앵커(0/1 kg) 사이는 선형, 밖은 클램프.
+
+    ⚠ 0.00(운용 불가)은 흡수한다 — 한쪽 앵커가 0.00 이면 결과도 0.00. 이유는
+    `_LAT_POS_ANCHORS_BY_PKG` 위 주석 참조 (0.00 은 "작은 배율이면 된다" 가 아니다).
+
+    ⚠ 한쪽 질량에만 있는 지연 점은 내지 않는다. 표 하나에만 있는 값을 그대로 쓰면
+    "그 질량에서도 쟀다" 로 읽힌다.
+
+    돌풍 표에는 이 함수를 쓰지 않는다 — 0 kg 돌풍 표는 **다른 복귀 게이트**로 잰
+    것이라(그 질량의 tau=0 복귀의 2배 = 약 18 s vs 1 kg 3 s) 두 표를 이으면 서로
+    다른 기준을 섞는다. 게이트 표기 방식이 정해지기 전까지 돌풍은 1 kg 표만 쓴다.
+    """
+    tables = _LAT_POS_ANCHORS_BY_PKG
+    keys = sorted(tables)
+    m = min(max(float(pkg_kg), keys[0]), keys[-1])
+    lo = max(k for k in keys if k <= m)
+    hi = min(k for k in keys if k >= m)
+    if lo == hi:
+        return dict(tables[lo])
+    w = (m - lo) / (hi - lo)
+    out = {}
+    for tau in sorted(set(tables[lo]) & set(tables[hi])):
+        a, b = tables[lo][tau], tables[hi][tau]
+        out[tau] = 0.0 if (a == 0.0 or b == 0.0) else _lerp(a, b, w)
+    return out
 
 
 def _interp_anchor(pkg_kg: float) -> dict:

@@ -75,8 +75,31 @@ def read_mass(path=PROG):
     return m, (1.2 if m == 0 else 1.6)      # capability._ANCHORS 의 v 앵커
 
 
-def patch_python(anchors, write, gust=False):
-    name = "_LAT_POS_ANCHORS_GUST" if gust else "_LAT_POS_ANCHORS"
+_TARGETS = {
+    (1.0, False): ("_LAT_POS_ANCHORS",      ("posTau",  "posScale",  "posN")),
+    (1.0, True):  ("_LAT_POS_ANCHORS_GUST", ("gustTau", "gustScale", "gustN")),
+    (0.0, False): ("_LAT_POS_ANCHORS_0KG",  ("posTau0", "posScale0", "posN0")),
+}
+
+
+def target_for(pkg, gust):
+    """질량 x 조건 -> 갱신할 파이썬/C++ 슬롯.
+
+    0 kg 돌풍 자리는 일부러 비워 뒀다 — 1 kg 과 **다른 복귀 게이트**로 재기 때문에
+    (그 질량의 tau=0 복귀의 2배) 같은 표에 넣으면 서로 다른 기준이 섞인다.
+    중간 질량은 실측이 아니라 보간이 담당한다 (capability._lat_table_for_pkg).
+    """
+    key = (float(pkg), bool(gust))
+    if key not in _TARGETS:
+        raise SystemExit(
+            "거부: 짐 %g kg / %s 을 담을 자리가 없다. "
+            "갱신 가능: 1 kg 무외란/돌풍, 0 kg 무외란."
+            % (pkg, "돌풍" if gust else "무외란"))
+    return _TARGETS[key]
+
+
+def patch_python(anchors, write, gust=False, pkg=1.0):
+    name, _ = target_for(pkg, gust)
     src = io.open(PY, encoding="utf-8").read()
     body = "\n".join(f"    {ms / 1000:.3f}: {s:.2f}," for ms, s in anchors.items())
     new_block = name + " = {\n" + body + "\n}"
@@ -92,9 +115,8 @@ def patch_python(anchors, write, gust=False):
     return changed, new_block
 
 
-def patch_cpp(anchors, write, gust=False):
-    tname, sname, nname = (("gustTau", "gustScale", "gustN") if gust
-                           else ("posTau", "posScale", "posN"))
+def patch_cpp(anchors, write, gust=False, pkg=1.0):
+    _, (tname, sname, nname) = target_for(pkg, gust)
     src = io.open(HPP, encoding="utf-8").read()
     taus = list(anchors.keys())
     n = len(taus)
@@ -136,18 +158,14 @@ def main():
         note = "  <- 운용 불가" if s == 0.0 else ""
         print(f"  {ms:>4} ms : {s:.2f}   v {v_ref * s:.3f} m/s{note}")
 
-    # capability.py 의 표는 아직 **1 kg 전용**이다 (질량 축 없음, [TODO-질량별]).
-    # 0 kg 스윕 결과를 그 자리에 쓰면 1 kg 표가 조용히 날아간다 — 실제로 0 kg
-    # 무외란 표는 80 ms 에서 0.75 인데 1 kg 은 0.37 이라, 덮어쓰면 상위 계획기가
-    # 1 kg 임무를 두 배 빠르게 짜도 된다고 읽는다. 질량 축이 생기기 전까지 막는다.
-    if a.write and pkg != 1:
-        raise SystemExit(
-            f"거부: 이 진행 파일은 짐 {pkg:g} kg 인데 capability.py 의 표는 1 kg 전용이다.\n"
-            "  질량별 표 구조가 생긴 뒤에 쓸 것 (capability.py 의 [TODO-질량별]).\n"
-            "  지금은 --write 없이 미리보기로만 확인한다.")
+    # 질량별로 **다른 자리**에 쓴다. 예전에는 어느 질량이든 1 kg 자리에 썼고,
+    # 그러면 0 kg 표(80 ms = 0.75)가 1 kg 표(0.37)를 덮어 상위가 1 kg 임무를
+    # 두 배 빠르게 짜도 된다고 읽는다. 담을 자리가 없는 조합은 target_for 가 막는다.
+    name, _ = target_for(pkg, a.gust)
+    print(f"  -> 갱신 대상: {name}")
 
-    cpy, blk_py = patch_python(anchors, a.write, a.gust)
-    ccc, blk_c = patch_cpp(anchors, a.write, a.gust)
+    cpy, blk_py = patch_python(anchors, a.write, a.gust, pkg)
+    ccc, blk_c = patch_cpp(anchors, a.write, a.gust, pkg)
     print(f"\ncapability.py           : {'갱신' if cpy else '변화 없음'}")
     print(f"controller_cpp/...hpp   : {'갱신' if ccc else '변화 없음'}")
     if not a.write and (cpy or ccc):
