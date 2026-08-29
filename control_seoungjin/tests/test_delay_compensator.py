@@ -96,7 +96,12 @@ class TestLagRemoval:
         on, _ = simulate(tau, True, lambda t: 0.0, v0=v)
         expect = v * (tau + 0.5 / MEAS_HZ)
         assert off == pytest.approx(expect, rel=0.15)
-        assert on < off * 0.2                               # 최소 5 배 개선
+        # 보상은 **일부러 부분적**이다 (age_trust=0.7 — 과대보상은 불안정이라).
+        # 그래서 남는 오차가 "안 믿기로 한 몫" 과 맞아야 한다: (1-age_trust)·v·τ.
+        cfg = PredictorConfig()
+        residual = (1.0 - cfg.age_trust) * v * tau
+        assert on == pytest.approx(residual, rel=0.35)
+        assert on < off * 0.3
 
     def test_accelerating_motion(self):
         """가속 구간에서도 이득이 있어야 한다 (여기서는 모델이 도와준다)."""
@@ -239,3 +244,87 @@ class TestDecimation:
         for _ in range(60):
             pred.tick(0.0, None, 0.0, DT)
         assert pred.position == pytest.approx(0.3, abs=0.2)
+
+
+class TestSafety:
+    """센서가 닻이고 모델은 사이를 메우는 도구다.
+
+    사용자 지적 2026-08-28: "센서값이 틀렸다 간주하는 것이라 많이 조심해야 한다",
+    "스펙 깎는 것은 성능 좀 떨어진다 수준인데 이거는 안정성과 관련된 문제라."
+    그래서 여기 시험들은 "얼마나 잘 맞히나" 가 아니라 **"틀렸을 때 어떻게 지나"** 를 본다.
+    """
+
+    def test_dropout_stops_dead_reckoning(self):
+        """측정이 끊기면 추측항법을 멈춘다.
+
+        이게 없으면 VIO 가 죽어도 예측기가 혼자 계속 적분하며 제어기에 그럴듯한
+        거짓말을 먹인다. 실기에서 제일 위험한 실패 모드다.
+        """
+        cfg = PredictorConfig(dt=DT, enabled=True, every_n=1, dropout_s=0.05)
+        pred = AxisPredictor(cfg=cfg)
+        pred.reset(0.0)
+        pred.tick(0.0, 0.0, 0.0, DT)
+        for _ in range(500):                  # 0.5 s 동안 측정 없음
+            pred.tick(2.0, None, 0.0, DT)     # 계속 가속 중이라고 알려 준다
+        assert pred.healthy is False
+        assert "dropout" in pred.fault
+        assert abs(pred.position) < 0.01      # 마지막 측정에 눌러앉았다
+
+    def test_innovation_gate_trusts_sensor(self):
+        """측정과 예측이 크게 벌어지면 **센서가 이긴다**."""
+        cfg = PredictorConfig(dt=DT, enabled=True, every_n=1, innov_max_m=0.2)
+        pred = AxisPredictor(cfg=cfg)
+        pred.reset(0.0)
+        pred.tick(0.0, 0.0, 0.0, DT)
+        for _ in range(50):
+            pred.tick(0.0, None, 0.0, DT)
+        pred.tick(0.0, 5.0, 0.03, DT)         # 5 m 점프 (VIO 재초기화 같은 상황)
+        assert pred.n_gate == 1
+        assert pred.healthy is False
+        assert pred.position == pytest.approx(5.0)
+
+    def test_deviation_clamp_is_physical(self):
+        """예측이 v_max·τ 보다 멀리 갈 수는 없다 — 그건 물리가 아니라 드리프트다."""
+        cfg = PredictorConfig(dt=DT, enabled=True, every_n=1,
+                              v_max=0.5, dev_margin_m=0.0, innov_max_m=10.0)
+        pred = AxisPredictor(cfg=cfg)
+        pred.reset(0.0)
+        pred.tick(0.0, 0.0, 0.0, DT)
+        for _ in range(60):
+            pred.tick(50.0, None, 0.0, DT)    # 말도 안 되는 가속도 (모델 폭주)
+        pred.tick(50.0, 0.0, 0.06, DT)
+        assert pred.n_clamp >= 1
+        assert abs(pred.position) <= 0.5 * 0.06 * 0.7 + 1e-6   # v_max·age_eff
+
+    def test_health_recovers(self):
+        """이상이 해소되면 건강 신호도 돌아와야 한다 (한 번 나쁘면 영영 나쁨은 곤란)."""
+        cfg = PredictorConfig(dt=DT, enabled=True, every_n=1, innov_max_m=0.2)
+        pred = AxisPredictor(cfg=cfg)
+        pred.reset(0.0)
+        pred.tick(0.0, 0.0, 0.0, DT)
+        for _ in range(50):
+            pred.tick(0.0, None, 0.0, DT)
+        pred.tick(0.0, 5.0, 0.03, DT)         # 게이트 발동
+        assert pred.healthy is False
+        for _ in range(50):
+            pred.tick(0.0, None, 0.0, DT)
+        pred.tick(0.0, 5.0, 0.03, DT)         # 이제 예측과 맞는 측정
+        assert pred.healthy is True
+
+    def test_age_trust_never_exceeds_one(self):
+        """보고된 나이보다 **더** 밀어 보상하는 일은 없어야 한다."""
+        cfg = PredictorConfig(age_trust=5.0)
+        pred = AxisPredictor(cfg=cfg)
+        assert min(max(cfg.age_trust, 0.0), 1.0) == 1.0
+
+    def test_three_axis_health_is_conjunctive(self):
+        """한 축이라도 이상하면 전체가 이상하다."""
+        comp = DelayCompensator(cfg=PredictorConfig(dt=DT, enabled=True,
+                                                    every_n=1, innov_max_m=0.2))
+        comp.reset((0.0, 0.0, 0.0))
+        comp.tick((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0, DT)
+        for _ in range(50):
+            comp.tick((0.0, 0.0, 0.0), None, 0.0, DT)
+        comp.tick((0.0, 0.0, 0.0), (0.0, 9.0, 0.0), 0.03, DT)   # y 만 점프
+        assert comp.healthy is False
+        assert comp.fault.startswith("y:")

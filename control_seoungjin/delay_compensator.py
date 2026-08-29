@@ -31,6 +31,30 @@ MPC 가 아니다. MPC 는 매 스텝 최적화를 푸는 물건이라 1 kHz 자
 여기서 또 하면 **이중 보상**이다. 그 경우 오차가 두 배로 들어간다.
 `enabled` 기본값이 False 인 이유다.
 
+## 안전 원칙 — 센서가 닻이고 모델은 그 사이를 메우는 도구다
+
+사용자 지적 2026-08-28: "센서값이 틀렸다 간주하는 것이라 많이 조심해야 한다."
+
+맞는 걱정이라 원칙을 코드 수준에서 못박는다. 이 모듈은 **센서가 틀렸다고 보지
+않는다** — "맞는데 낡았다" 고 본다. 값은 그대로 믿고 시각만 보정하며, 보정은 늘
+측정 쪽으로 당기는 방향이다. 둘이 물리적으로 말이 안 되게 어긋나면 **언제나 센서가
+이긴다.** 모델이 이기는 경우는 없다.
+
+그 원칙을 강제하는 장치 넷:
+
+  ① 드롭아웃 시한 (`dropout_s`)
+     측정이 이만큼 안 오면 추측항법을 **멈춘다**. 이게 없으면 VIO 가 죽어도
+     예측기가 혼자 계속 적분하며 제어기에 그럴듯한 거짓말을 먹인다.
+  ② 혁신 게이트 (`innov_max_m`)
+     측정과 예측이 이 이상 벌어지면 그 보정을 통째로 적용하지 않고 센서로 스냅한다.
+     원인이 무엇이든(VIO 점프든 모델 드리프트든) **더 믿을 만한 쪽은 센서**다.
+  ③ 이탈 한계 (`dev_max_m` = v_max·나이 + 여유)
+     예측이 마지막 측정에서 물리적으로 불가능한 거리만큼 떨어지지 못하게 자른다.
+     지연 τ 동안 갈 수 있는 거리는 v_max·τ 를 넘을 수 없다.
+  ④ 건강 신호 (`healthy` / `fault`)
+     위 셋 중 하나라도 걸리면 밖에서 볼 수 있게 남긴다. 감독자가 이걸 보고
+     예측기를 끄고 원 측정으로 되돌릴 수 있어야 한다. **말없이 이상해지면 안 된다.**
+
 ## 정직한 한계
 
 - 모델 오차가 **새로운 오차로 들어온다.** 위치 오차는 가속도 오차 × τ²/2 로 커진다.
@@ -98,6 +122,20 @@ class PredictorConfig:
     obs_w: float = 12.0               # 관측기 대역 [rad/s]
     blend: float = 1.0                # 0=보상 안 함, 1=완전 보상 (모델 신뢰도)
     hist_s: float = 0.25              # 과거 예측 이력 보관 길이 [s] (≥ max_age_s)
+    # ── 지연을 보수적으로 (사용자 지적 2026-08-28) ────────────────────────
+    # "스펙 깎는 것은 성능 좀 떨어진다 수준인데 이거는 안정성과 관련된 문제라."
+    # 비대칭이 있다:
+    #   과소보상 -> 원래 지연이 일부 남는다. 손해는 **성능**이고 이미 아는 값이다.
+    #   과대보상 -> 추정을 실제보다 **앞에** 놓는다. 제어기가 이미 지나갔다고
+    #               착각하고 반대로 밀기 시작한다 = 양의 되먹임 = **불안정**.
+    # 그래서 나이를 곧이곧대로 안 쓰고 이 비율만 쓴다. 1.0 을 넘지 못하게 막는다 —
+    # 보고된 나이보다 더 밀어 보상하는 일은 어떤 경우에도 없어야 한다.
+    age_trust: float = 0.7
+    # ── 안전 장치 (모듈 주석 '안전 원칙' 참조) ────────────────────────────
+    dropout_s: float = 0.25           # 측정이 이만큼 없으면 추측항법 중단
+    innov_max_m: float = 0.50         # 혁신이 이 이상이면 보정 대신 센서로 스냅
+    v_max: float = 3.0                # 이탈 한계 계산용 최대 속도 [m/s]
+    dev_margin_m: float = 0.05        # 이탈 한계 여유 [m]
 
     def alpha_beta(self, meas_dt: float):
         """측정 간격 -> (alpha, beta/T). 위 주석의 유도 그대로."""
@@ -164,8 +202,14 @@ class AxisPredictor:
     n_fallback: int = 0                                # 보상을 포기한 횟수 (진단)
     n_replay: int = 0                                  # 재적분 스텝 누계 (부하 진단)
     every_n_now: int = 1                               # 현재 적용 중인 N (진단)
+    healthy: bool = True                               # 밖에서 보는 건강 신호
+    fault: str = ""                                    # 마지막 이상 사유
+    n_gate: int = 0                                    # 혁신 게이트에 걸린 횟수
+    n_clamp: int = 0                                   # 이탈 한계에 걸린 횟수
+    _t_last_meas: float | None = None                  # 마지막 측정 도착 시각
     _k: int = 0                                        # 데시메이션 카운터
     _pending: tuple | None = None                      # 아직 안 쓴 최신 측정
+    _last_meas: float | None = None                    # 마지막으로 받은 측정값
 
     def reset(self, position: float = 0.0, velocity: float = 0.0) -> None:
         self.position, self.velocity = float(position), float(velocity)
@@ -173,8 +217,11 @@ class AxisPredictor:
         self._hist = [(0.0, self.position, self.velocity, 0.0)]
         self._primed = False
         self._t_last_corr = None
-        self.n_fallback = self.n_replay = 0
+        self.n_fallback = self.n_replay = self.n_gate = self.n_clamp = 0
         self.every_n_now = 1
+        self.healthy, self.fault = True, ""
+        self._t_last_meas = None
+        self._last_meas = None
         self._k = 0
         self._pending = None
 
@@ -223,14 +270,25 @@ class AxisPredictor:
             self.n_fallback += 1
             return
 
-        i = self._index_at(self._t - age)
+        # 보수적으로: 보고된 나이보다 **덜** 되감는다 (위 age_trust 주석).
+        age_eff = age * min(max(self.cfg.age_trust, 0.0), 1.0)
+        i = self._index_at(self._t - age_eff)
         if i is None:
             self._snap(m)
             self.n_fallback += 1
             return
 
         t_i, p_i, v_i, a_i = self._hist[i]
-        innov = (m - p_i) * self.cfg.blend
+        raw_innov = m - p_i
+        if abs(raw_innov) > self.cfg.innov_max_m:
+            # 측정과 예측이 이만큼 벌어졌다면 둘 중 하나가 망가진 것이다. 원인이
+            # 무엇이든 더 믿을 만한 쪽은 센서다 — 모델이 이기게 두면 안 된다.
+            self._snap(m)
+            self.n_gate += 1
+            self.healthy = False
+            self.fault = "innovation %.2f m > %.2f" % (abs(raw_innov), self.cfg.innov_max_m)
+            return
+        innov = raw_innov * self.cfg.blend
         meas_dt = (self._t - self._t_last_corr) if self._t_last_corr is not None else self.cfg.dt
         alpha, beta_over_T = self.cfg.alpha_beta(meas_dt)
         p_i += alpha * innov
@@ -247,6 +305,19 @@ class AxisPredictor:
             self._hist[j] = (t_j, p, v, a_j)
             t_prev = t_j
         self.n_replay += len(self._hist) - i - 1
+
+        # 이탈 한계 — 지연 τ 동안 갈 수 있는 거리는 v_max·τ 를 넘을 수 없다.
+        # 예측이 그보다 멀리 가 있으면 그건 물리가 아니라 모델 드리프트다.
+        dev_max = self.cfg.v_max * age_eff + self.cfg.dev_margin_m
+        if abs(p - m) > dev_max:
+            p = m + math.copysign(dev_max, p - m)
+            v = 0.0
+            self.n_clamp += 1
+            self.healthy = False
+            self.fault = "deviation > %.3f m" % dev_max
+        else:
+            self.healthy = True
+            self.fault = ""
         self.position, self.velocity = p, v
         self._t_last_corr = self._t
 
@@ -266,7 +337,18 @@ class AxisPredictor:
         self.step(accel, dt)
         if meas_pos is not None:
             self._pending = (float(meas_pos), float(meas_age_s), self._t)
+            self._t_last_meas = self._t
+            self._last_meas = float(meas_pos)
             self.every_n_now = self.cfg.every_n_for(meas_age_s)
+        elif (self._t_last_meas is not None
+              and self._t - self._t_last_meas > self.cfg.dropout_s):
+            # 측정이 끊겼다. 여기서 계속 적분하면 추측항법이 되고, 제어기는
+            # 점점 더 그럴듯한 거짓말 위에서 난다. 마지막 측정에 눌러 앉힌다.
+            if self._last_meas is not None:
+                self._snap(self._last_meas)
+            self.healthy = False
+            self.fault = "measurement dropout > %.2f s" % self.cfg.dropout_s
+            return self.position
         self._k += 1
         if self._k >= self.every_n_now:
             self._k = 0
@@ -354,3 +436,15 @@ class DelayCompensator:
     @property
     def n_replay(self) -> int:
         return sum(a.n_replay for a in self.axes)
+
+    @property
+    def healthy(self) -> bool:
+        """한 축이라도 이상하면 전체가 이상하다 — 감독자는 이걸 보고 예측기를 끈다."""
+        return all(a.healthy for a in self.axes)
+
+    @property
+    def fault(self) -> str:
+        for ax, a in zip("xyz", self.axes):
+            if not a.healthy:
+                return "%s: %s" % (ax, a.fault)
+        return ""
