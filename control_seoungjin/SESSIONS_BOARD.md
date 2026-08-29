@@ -145,6 +145,7 @@
 - 08-22 — 관측: `qc_controller.hpp` `mixYaw={-1,+1,-1,+1}` × `mixDir={+1,-1,-1,+1}` 조합은 반토크 1차항이 상쇄됨(Σ mixYaw=0). 08-18 골든 확정은 x/y런 roll/pitch 상관이라 yaw 열은 미검정 → 대기/예약의 yaw 실비행 1편에서 같이 판정
 
 ## 대기/예약 (세션 무관)
+- [설계] **지연 보상 MHE 판** — `docs/HANDOFF_DELAY_COMPENSATION.md` (사용자 설계 08-28: "지연시간 동안만 MPC 돌려서 센서값 보정, 나머지는 그거 기반 외삽"). 이름은 MHE(이동 지평 추정) = MPC 의 추정 쌍둥이. 되감기-재적분 대비 이득은 **가속도 바이어스 동시 추정** — 그게 다음 N 스텝 외삽을 정확하게 만든다. 두 속도 구조와 자동 N 은 `delay_compensator.py` 에 이미 있음. **착수 전 확인 2건**: OpenVINS IMU 전파 여부(태민 — 이미 하면 이중 보상), `a_y↔roll` 부호 실측(y 이동 미션 필요, x 는 +9.63·pitch 로 완료)
 - [MATLAB] 지연 세션: **0 kg 위치 지연표** (`SPEC_PKG=0 sweep_delay_spec`) — 1 kg 만 쟀다. 0 kg 은 과민 구간이라 외삽 금지. 담을 자리(질량별 지연표)도 아직 없음
 - [MATLAB] 지연 세션: **다리 플랜트 검증** (`export_bridge_case.py` -> `verify_bridge_sim.m`) — 다리는 아직 파이썬 안에서만 확인됨. A 전속유지 vs B 다리 비교
 - [MATLAB] 튜닝 세션: **전체 파이프라인 스텝응답** (`diagnose/verify_step_pipeline.m`, 성형기 포함 rise/정착/오버슈트/SSE, 4심 ~8분, 사용자 요청) — path_time 큐 종료 대기 자동 실행 걸어둠 (감시 스크립트). agile 전용 1차식·관문은 07-19 완결
