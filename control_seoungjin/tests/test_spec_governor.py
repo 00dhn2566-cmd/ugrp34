@@ -344,3 +344,68 @@ class TestLatencyMassAxis:
         a = scale_from_latency_pos(0.06, gust=True, pkg_kg=0.0)
         b = scale_from_latency_pos(0.06, gust=True, pkg_kg=1.0)
         assert a == pytest.approx(b)
+
+
+class TestDerateIneffective:
+    """깎아도 안 나아지면 멈추고 알린다 (2026-08-28).
+
+    이 감시기는 지금까지 "더디면 깎는다" 만 했고 **깎아서 나아졌는지는 안 봤다.**
+    감쇄가 듣는 영역에서는 문제가 없지만, 실측에서 안 듣는 영역이 나왔다 —
+    0 kg / 토크 0.3 N*m / 20 ms 에서 배율 1.00 -> 0.37 로 순항을 2.7배 낮췄는데
+    복귀가 9.87 -> 9.79 s 로 꿈쩍도 안 했다 (이탈은 위치오차 클램프 포화가 정하므로
+    속도와 무관하다). 그 영역에서 계속 깎으면 에너지만 1/s 로 늘고 회복은 그대로다.
+    """
+
+    @staticmethod
+    def _watcher(**kw):
+        from recovery_watcher import RecoveryWatcher
+        return RecoveryWatcher(**kw)
+
+    def _run(self, w, err, seconds, dt=0.01):
+        for _ in range(int(seconds / dt)):
+            w.observe(err, True, dt)
+            w.decide(2.0)
+
+    def test_stops_cutting_when_it_does_not_help(self):
+        """오차가 배율과 무관하게 고정이면 = 깎아도 안 나아지는 경우."""
+        w = self._watcher()
+        self._run(w, 0.09, 120.0)            # 밴드(0.04) 위로 계속
+        assert w.derate_ineffective is True
+        assert w.futile_cuts >= w.futile_n
+        # 바닥까지 안 갔다 — 동결됐다는 뜻
+        from recovery_watcher import S_FLOOR
+        assert w.s > S_FLOOR + 1e-9
+
+    def test_reports_it_outward(self):
+        """말없이 멈추면 안 된다 — 상위가 재계획/축소/착륙을 고를 수 있어야 한다."""
+        w = self._watcher()
+        self._run(w, 0.09, 120.0)
+        snap = w.snapshot()
+        assert snap["derate_ineffective"] is True
+        assert snap["futile_cuts"] >= w.futile_n
+
+    def test_keeps_cutting_while_it_helps(self):
+        """나아지고 있는 동안에는 계속 깎아야 한다 (가드가 정상 동작을 막으면 안 된다).
+
+        "깎기가 듣는다" 를 모사하려면 오차가 **배율에 연동**돼야 한다. 오차를 그냥
+        조금씩 줄이면 밴드 위에 머무는 한 초과 시간이 계속 쌓여 ratio 가 오히려
+        커진다 — 그건 듣는 상황이 아니라 안 듣는 상황이다.
+        """
+        w = self._watcher()
+        dt = 0.01
+        for _ in range(12000):
+            err = 0.20 * w.s          # 깎으면 오차가 준다 = 감쇄가 듣는 영역
+            w.observe(err, True, dt)
+            w.decide(2.0)
+        assert w.derate_ineffective is False
+        assert w.cuts >= 3
+        assert w.s < 1.0              # 실제로 깎았다
+
+    def test_clears_after_recovery(self):
+        """회복되면 무효 판정도 없던 일로 — 다음 에피소드는 다를 수 있다."""
+        w = self._watcher()
+        self._run(w, 0.09, 120.0)
+        assert w.derate_ineffective is True
+        self._run(w, 0.001, 60.0)            # 밴드 아래로 충분히
+        assert w.derate_ineffective is False
+        assert w.futile_cuts == 0

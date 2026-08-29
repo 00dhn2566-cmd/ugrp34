@@ -454,6 +454,18 @@ struct RecoveryWatcher {
     double settleS     = 2.2;    // capability.budget.settle
     double cutGain     = 0.5;
     double maxCut      = 0.25;   // 한 판단당 최대 감쇄. 없으면 두세 번에 바닥을 친다
+    // 깎아도 안 나아진 판단이 이만큼 연속되면 깎기를 멈춘다 (파이썬과 1:1).
+    // 근거: 0 kg / 토크 0.3 N*m / 20 ms 에서 배율을 1.00 -> 0.37 로 내려 순항을
+    // 2.7배 낮췄는데 복귀가 9.87 -> 9.79 s 로 꿈쩍도 안 했다 (PERFORMANCE 8g).
+    // 이탈은 위치오차 클램프 포화가 정하므로 속도와 무관하기 때문이다. 그 영역에서
+    // 계속 깎으면 에너지만 1/s 로 늘고(바닥에서 10배) 회복은 그대로다. 멈추고 알린다 —
+    // 다음 수는 감쇄가 아니라 재계획/임무축소/착륙이고 그건 상위가 고를 일이다.
+    // ★ 효과 판정에 lastRatio(밴드 초과 **지속시간**)를 쓰면 안 된다. 오차가 밴드 위에
+    //   머무는 한 그 값은 계속 커지기만 해서, 깎기가 잘 듣고 있어도 무효로 오판한다
+    //   (파이썬 시험에서 오차 0.20 -> 0.05 로 4배 줄었는데 ratio 는 3.65 -> 7.29 로 올랐다).
+    //   그래서 **평균 오차 크기**의 상대 변화를 본다.
+    int    futileN     = 3;
+    double futileEps   = 0.05;   // 상대 개선폭 (5% 미만이면 '안 나아졌다')
     double minPeriodS  = 4.0;
     double cleanHoldS  = 3.0;
     double restoreTauS = 6.0;
@@ -461,12 +473,22 @@ struct RecoveryWatcher {
     double s = 1.0;
     double tAbove = 0, worstAbove = 0, tClean = 0, tSince = 0;
     double lastRatio = 0;
+    double errSum = 0;               // 이번 판단 창의 |오차| 합
+    long   errN = 0;
+    double meanErr = 0;              // 직전 판단의 평균 |오차|
+    double prevMeanErr = 0;
+    bool   havePrev = false;
+    int    futileCuts = 0;           // 연속 무효 깎기
+    bool   derateIneffective = false;
     long   nObs = 0, nSkipped = 0, cuts = 0;
     bool   restoring = false;
 
     void reset() {
         s = 1.0;
         tAbove = worstAbove = tClean = tSince = lastRatio = 0.0;
+        errSum = 0.0; errN = 0; meanErr = 0.0;
+        prevMeanErr = 0.0; havePrev = false; futileCuts = 0;
+        derateIneffective = false;
         nObs = nSkipped = cuts = 0;
         restoring = false;
     }
@@ -477,7 +499,10 @@ struct RecoveryWatcher {
         tSince += dt;                     // 판단 주기는 실제 시간으로 센다 (버린 표본도 포함)
         if (!refOk) { ++nSkipped; return; }
         ++nObs;
-        if (std::fabs(errM) > trackBandM) {
+        const double e = std::fabs(errM);
+        errSum += e;
+        ++errN;
+        if (e > trackBandM) {
             tAbove += dt;
             tClean = 0.0;
             if (tAbove > worstAbove) worstAbove = tAbove;
@@ -505,15 +530,30 @@ struct RecoveryWatcher {
 
         lastRatio = worstAbove / (settleS > 1e-9 ? settleS : 1e-9);
         worstAbove = tAbove;              // 아직 넘고 있으면 그 시간은 이월
+        meanErr = errN > 0 ? errSum / static_cast<double>(errN) : 0.0;
+        errSum = 0.0; errN = 0;
 
         if (lastRatio > 1.0) {
-            double step = cutGain * (lastRatio - 1.0);
-            if (step > maxCut) step = maxCut;
-            s -= step;
-            if (s < kRecFloor) s = kRecFloor;
-            ++cuts;
-            restoring = false;
+            if (havePrev && cuts > 0) {
+                const double base = prevMeanErr > 1e-9 ? prevMeanErr : 1e-9;
+                const double gain = (prevMeanErr - meanErr) / base;   // 상대 개선
+                if (gain < futileEps) ++futileCuts;
+                else                  futileCuts = 0;
+            }
+            if (futileCuts >= futileN) {
+                derateIneffective = true;   // 배율 동결 + 밖에 알림
+                restoring = false;
+            } else {
+                double step = cutGain * (lastRatio - 1.0);
+                if (step > maxCut) step = maxCut;
+                s -= step;
+                if (s < kRecFloor) s = kRecFloor;
+                ++cuts;
+                restoring = false;
+            }
+            prevMeanErr = meanErr; havePrev = true;
         } else if (tClean >= cleanHoldS && s < 1.0) {
+            futileCuts = 0; derateIneffective = false; havePrev = false;
             double a = elapsed / (restoreTauS > 1e-9 ? restoreTauS : 1e-9);
             a = clamp(a, 0.0, 1.0);
             s += a * (1.0 - s);

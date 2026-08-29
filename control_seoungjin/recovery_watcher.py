@@ -72,6 +72,30 @@ class RecoveryWatcher:
     min_period_s : 판단 주기 하한 [s] — 다리 수렴 시간과 함께 max 로 쓴다
     clean_hold_s : 복귀 시작 전 밴드 아래로 유지돼야 하는 시간
     restore_tau_s: 복귀 지수 시정수
+    futile_n     : **깎아도 안 나아진 판단이 이만큼 연속되면 깎기를 멈춘다.**
+    futile_eps   : '나아졌다' 로 볼 최소 **상대 개선폭** (평균 오차 감소 비율)
+
+    ## 왜 '깎아도 안 되는' 경우를 따로 봐야 하나 (2026-08-28)
+
+    이 감시기는 지금까지 "더디면 깎는다" 만 했고 **깎아서 나아졌는지는 안 봤다.**
+    감쇄가 듣는 경우에는 문제가 없다. 그런데 실측에서 **안 듣는 영역**이 나왔다:
+
+      0 kg / 토크 0.3 N*m / 위치 20 ms 에서 배율을 1.00 -> 0.37 로 내려
+      순항을 2.7배 낮췄는데 복귀가 9.87 -> 9.79 s 로 **꿈쩍도 안 했다**
+      (PERFORMANCE 8g). 이탈은 클램프 포화가 정하므로 속도와 무관하기 때문이다.
+
+    그 영역에서 이 감시기는 바닥(S_FLOOR)까지 계속 깎는다. 에너지는 1/s 로 늘어
+    바닥에서 10배 가까이 쓰는데 **회복은 그대로**고, 게다가 "깎아도 안 된다" 를
+    아무에게도 알리지 않는다. 상위는 '감쇄 중' 으로만 보여 계속 기다리게 된다.
+
+    ★ 효과 판정에 `ratio`(밴드 초과 **지속시간**)를 쓰면 안 된다. 오차가 밴드 위에
+    머무는 한 그 값은 계속 커지기만 해서, 깎기가 잘 듣고 있어도(시험에서 오차 0.20 ->
+    0.05 로 4배 감소) ratio 는 3.65 -> 7.29 로 **올랐다**. 그걸로 판정하면 정상 동작을
+    무효로 오판해 배율을 조기에 얼린다. 그래서 **평균 오차 크기**의 상대 변화를 본다.
+
+    그래서 깎은 뒤 평균 오차가 실제로 줄었는지 보고, 연속 `futile_n` 번 안 줄면
+    **깎기를 멈추고 `derate_ineffective` 를 세운다.** 그러면 상위가 재계획/임무
+    축소/착륙 중에서 고를 수 있다 — 감쇄는 그 판단을 대신해 주지 못한다.
     """
 
     track_band_m: float = 0.04
@@ -81,6 +105,8 @@ class RecoveryWatcher:
     min_period_s: float = 4.0
     clean_hold_s: float = 3.0
     restore_tau_s: float = 6.0
+    futile_n: int = 3
+    futile_eps: float = 0.05      # 상대 개선폭 (5% 미만이면 '안 나아졌다')
 
     # ── 상태 ──
     s: float = field(default=1.0, init=False)          # 현재 교정 배율
@@ -93,6 +119,12 @@ class RecoveryWatcher:
     cuts: int = field(default=0, init=False)
     restoring: bool = field(default=False, init=False)
     last_ratio: float = field(default=0.0, init=False)
+    err_sum: float = field(default=0.0, init=False)     # 이번 판단 창의 |오차| 합
+    err_n: int = field(default=0, init=False)
+    mean_err: float = field(default=0.0, init=False)    # 직전 판단의 평균 |오차|
+    prev_mean_err: float | None = field(default=None, init=False)
+    futile_cuts: int = field(default=0, init=False)   # 연속 무효 깎기
+    derate_ineffective: bool = field(default=False, init=False)
 
     def reset(self) -> None:
         self.s = 1.0
@@ -100,6 +132,12 @@ class RecoveryWatcher:
         self.n_obs = self.n_skipped = self.cuts = 0
         self.restoring = False
         self.last_ratio = 0.0
+        self.err_sum = 0.0
+        self.err_n = 0
+        self.mean_err = 0.0
+        self.prev_mean_err = None
+        self.futile_cuts = 0
+        self.derate_ineffective = False
 
     # ── 제어 주기 ────────────────────────────────────────────────────────
     def observe(self, err_m: float, ref_ok: bool, dt: float) -> None:
@@ -115,7 +153,10 @@ class RecoveryWatcher:
             self.n_skipped += 1
             return
         self.n_obs += 1
-        if abs(float(err_m)) > self.track_band_m:
+        e = abs(float(err_m))
+        self.err_sum += e
+        self.err_n += 1
+        if e > self.track_band_m:
             self.t_above += dt
             self.t_clean = 0.0
             if self.t_above > self.worst_above:
@@ -150,14 +191,37 @@ class RecoveryWatcher:
         ratio = self.worst_above / max(self.settle_s, 1e-9)
         self.last_ratio = ratio
         self.worst_above = self.t_above      # 아직 넘고 있으면 그 시간은 이월한다
+        self.mean_err = self.err_sum / self.err_n if self.err_n else 0.0
+        self.err_sum = 0.0
+        self.err_n = 0
 
         if ratio > 1.0:
-            # 더디다 -> 즉시 깎는다. 초과분에 비례하되 한 걸음 폭은 제한한다.
-            step = min(self.cut_gain * (ratio - 1.0), self.max_cut)
-            self.s = max(S_FLOOR, self.s - step)
-            self.cuts += 1
-            self.restoring = False
+            # 직전 깎기가 효과가 있었나. 없으면 무효 카운트를 올린다.
+            if self.prev_mean_err is not None and self.cuts > 0:
+                base = max(self.prev_mean_err, 1e-9)
+                gain = (self.prev_mean_err - self.mean_err) / base    # 상대 개선
+                if gain < self.futile_eps:
+                    self.futile_cuts += 1
+                else:
+                    self.futile_cuts = 0          # 나아졌다 -> 다시 센다
+            if self.futile_cuts >= self.futile_n:
+                # 깎아도 안 되는 영역이다. 더 깎아 봐야 에너지만 쓴다 (E ~ 1/s).
+                # 배율은 지금 값으로 **동결**하고 밖에 알린다 — 다음 수는 감쇄가
+                # 아니라 재계획/임무축소/착륙이고, 그건 상위가 고를 일이다.
+                self.derate_ineffective = True
+                self.restoring = False
+            else:
+                # 더디다 -> 즉시 깎는다. 초과분에 비례하되 한 걸음 폭은 제한한다.
+                step = min(self.cut_gain * (ratio - 1.0), self.max_cut)
+                self.s = max(S_FLOOR, self.s - step)
+                self.cuts += 1
+                self.restoring = False
+            self.prev_mean_err = self.mean_err
         elif self.t_clean >= self.clean_hold_s and self.s < 1.0:
+            # 회복됐다 -> 무효 판정도 없던 일로 (다음 에피소드는 다를 수 있다)
+            self.futile_cuts = 0
+            self.derate_ineffective = False
+            self.prev_mean_err = None
             a = min(max(elapsed / max(self.restore_tau_s, 1e-9), 0.0), 1.0)
             self.s += a * (1.0 - self.s)
             self.restoring = True
@@ -176,6 +240,8 @@ class RecoveryWatcher:
             "last_ratio": round(self.last_ratio, 3),
             "cuts": self.cuts,
             "restoring": self.restoring,
+            "derate_ineffective": self.derate_ineffective,
+            "futile_cuts": self.futile_cuts,
             "samples": self.n_obs,
             "skipped_ref_over_limits": self.n_skipped,
         }
