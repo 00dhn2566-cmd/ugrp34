@@ -58,6 +58,23 @@ def read_anchors(path=PROG):
     return {ms: best.get(ms, 0.0) for ms in sorted(seen)}
 
 
+def read_mass(path=PROG):
+    """진행 파일 헤더에서 짐 질량과 그 질량의 속도 앵커를 읽는다.
+
+    표가 어느 질량의 것인지는 파일 안에만 있다. 이걸 안 보면 0 kg 표를 1 kg 자리에
+    쓰는 사고가 난다 (배율은 무차원이라 숫자만 봐서는 구분이 안 된다).
+    """
+    m = None
+    with io.open(path, encoding="utf-8", errors="replace") as f:
+        for ln in f:
+            g = re.search(r"==== 시작: 짐 ([\d.]+) kg", ln)
+            if g:
+                m = float(g.group(1))       # 여러 실행이 이어 붙었으면 마지막 것
+    if m is None:
+        raise SystemExit(f"진행 파일에서 '==== 시작: 짐 N kg' 헤더를 못 찾음: {path}")
+    return m, (1.2 if m == 0 else 1.6)      # capability._ANCHORS 의 v 앵커
+
+
 def patch_python(anchors, write, gust=False):
     name = "_LAT_POS_ANCHORS_GUST" if gust else "_LAT_POS_ANCHORS"
     src = io.open(PY, encoding="utf-8").read()
@@ -112,11 +129,22 @@ def main():
     a = ap.parse_args()
 
     anchors = read_anchors(a.progress)
+    pkg, v_ref = read_mass(a.progress)
     label = "돌풍" if a.gust else "기본(무외란)"
-    print(f"실측 앵커 [{label}] (지연[ms] -> 허용 배율):")
+    print(f"실측 앵커 [{label}, 짐 {pkg:g} kg] (지연[ms] -> 허용 배율):")
     for ms, s in anchors.items():
         note = "  <- 운용 불가" if s == 0.0 else ""
-        print(f"  {ms:>4} ms : {s:.2f}   v {1.6 * s:.3f} m/s{note}")
+        print(f"  {ms:>4} ms : {s:.2f}   v {v_ref * s:.3f} m/s{note}")
+
+    # capability.py 의 표는 아직 **1 kg 전용**이다 (질량 축 없음, [TODO-질량별]).
+    # 0 kg 스윕 결과를 그 자리에 쓰면 1 kg 표가 조용히 날아간다 — 실제로 0 kg
+    # 무외란 표는 80 ms 에서 0.75 인데 1 kg 은 0.37 이라, 덮어쓰면 상위 계획기가
+    # 1 kg 임무를 두 배 빠르게 짜도 된다고 읽는다. 질량 축이 생기기 전까지 막는다.
+    if a.write and pkg != 1:
+        raise SystemExit(
+            f"거부: 이 진행 파일은 짐 {pkg:g} kg 인데 capability.py 의 표는 1 kg 전용이다.\n"
+            "  질량별 표 구조가 생긴 뒤에 쓸 것 (capability.py 의 [TODO-질량별]).\n"
+            "  지금은 --write 없이 미리보기로만 확인한다.")
 
     cpy, blk_py = patch_python(anchors, a.write, a.gust)
     ccc, blk_c = patch_cpp(anchors, a.write, a.gust)
