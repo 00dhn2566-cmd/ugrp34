@@ -368,10 +368,47 @@ class AxisMhe:
         self._snaps += 1
         self._fault = "innov"
 
+    def anchored_output(self) -> float:
+        """★ 출력은 **최신 측정에 얹어** 만든다 (사용자 설계, 2026-08-29 구조 수정).
+
+        원래 설계는 "센서값 + 그 지연 동안의 변화" 였는데, 처음 구현은 창 시작점
+        상태를 전파했다 (`predict_at`). 차이가 결정적이다:
+
+            설계 : 출력 = 최신_측정 + (그 측정의 나이만큼의 변화)   닻 = 센서
+            구판 : 출력 = 재구성된 창 시작 상태 + 창 전체 적분      닻 = 적합 결과
+
+        구판은 (a) 모델 오차를 창 길이(0.25 s)만큼 적분하고 — 지연(0.06 s)의 4배 —
+        (b) 해가 갱신될 때마다 시작점이 통째로 바뀌어 출력이 **점프**한다. 그 점프는
+        RMS 로는 안 보이지만(RMS 는 '정확하지만 튀는' 신호를 잘 친다) 폐루프에서는
+        위치 제어기의 D 항이 미분해 스파이크가 된다.
+
+        역할을 가른다: **긴 창은 바이어스 관측 전용**(H >~ sqrt(2σ/b) 때문에 길어야
+        한다), 그 바이어스를 **최신 센서에 얹어 나이만큼만** 적분한다. b 는
+        0.5*b*age^2 로만 들어오므로 해가 바뀌어도 출력이 거의 안 움직인다.
+        """
+        if not self._have_meas:
+            return self.predict_at(self._t)
+        age = max(0.0, self._t - self._last_meas_vt)
+        v = self.velocity_at(self._last_meas_vt)
+        s = 0.0
+        i0 = self._index_at(self._last_meas_vt)
+        for k in range(i0, len(self._hist) - 1):
+            h = self._hist[k + 1].t - self._hist[k].t
+            a = self._hist[k].accel + self._b
+            s += v * h + 0.5 * a * h * h
+            v += a * h
+        return self._last_meas + s
+
+    def _index_at(self, t: float) -> int:
+        for i, smp in enumerate(self._hist):
+            if smp.t >= t:
+                return i
+        return max(0, len(self._hist) - 1)
+
     def _guarded_output(self) -> float:
         """추정을 내보내기 전에 두 가지를 더 본다 — 드롭아웃과 이탈 한계."""
         cfg = self.cfg
-        p = self.predict_at(self._t)
+        p = self.anchored_output()
         if not self._have_meas:
             return p
         gap = self._t - self._last_meas_t          # 마지막 **도착** 이후
