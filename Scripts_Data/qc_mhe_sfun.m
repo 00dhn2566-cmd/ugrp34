@@ -244,7 +244,10 @@ c.n_max      = gv('mhe_n_max',      200);
 end
 
 function v = getb(name, dflt)
-if evalin('base', sprintf('exist(%s,var)', name))
+% 중첩 따옴표는 생성 과정에서 잘 깨진다 (실제로 깨져서 MATLAB 의 var 함수가
+% 불렸다 — 08-29). char(39) 로 조립하면 그 위험이 없다.
+Q = char(39);
+if evalin('base', ['exist(' Q name Q ',' Q 'var' Q ')'])
     v = evalin('base', name);
 else
     v = dflt;
