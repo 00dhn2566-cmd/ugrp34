@@ -11,7 +11,7 @@ function verify_mhe_parity()
 
 here = fileparts(mfilename('fullpath'));
 addpath(fullfile(here, '..', 'Scripts_Data'));
-f = fullfile(here, '..', '..', '..', 'scratch_mhe_case.json');
+f = fullfile(here, 'results', 'mhe_parity_case.json');
 if ~exist(f, 'file')
     error('verify_mhe_parity: 대조 케이스 %s 없음 (파이썬에서 먼저 덤프할 것)', f);
 end
@@ -20,11 +20,8 @@ c = jsondecode(fileread(f));
 [p0, v0, b, dbstd, ok] = qc_mhe_solve(c.trel(:), c.acc(:), c.meas(:), ...
                                       c.mvalid(:), c.prior(:), c.w(:));
 
-fprintf('
-===== MHE 이식 대조 =====
-');
-fprintf('           %14s %14s %12s
-', 'MATLAB', '파이썬', '차이');
+fprintf('\n===== MHE 이식 대조 =====\n');
+fprintf('           %14s %14s %12s\n', 'MATLAB', '파이썬', '차이');
 nm = {'p0', 'v0', 'b', 'dbstd'};
 gm = [p0, v0, b, dbstd];
 gp = [c.py.p0, c.py.v0, c.py.b, c.py.dbstd];
@@ -32,16 +29,12 @@ worst = 0;
 for k = 1:4
     d = abs(gm(k) - gp(k));
     worst = max(worst, d);
-    fprintf('  %-6s %14.9f %14.9f %12.2e
-', nm{k}, gm(k), gp(k), d);
+    fprintf('  %-6s %14.9f %14.9f %12.2e\n', nm{k}, gm(k), gp(k), d);
 end
-fprintf('  ok = %d,  최대 차이 %.2e
-', ok, worst);
+fprintf('  ok = %d,  최대 차이 %.2e\n', ok, worst);
 if worst < 1e-9
-    fprintf('  판정: **일치** (1e-9 이내)
-');
+    fprintf('  판정: **일치** (1e-9 이내)\n');
 else
-    fprintf(2, '  판정: 불일치 — 폐루프에 심기 전에 고칠 것
-');
+    fprintf(2, '  판정: 불일치 — 폐루프에 심기 전에 고칠 것\n');
 end
 end
