@@ -69,6 +69,15 @@ end
 if str2double(getenv_or_num('WC_PRED', '0')) > 0
     TAG = [TAG 'pred_'];
 end
+if ~isempty(getenv('WC_KPPOS'))
+    TAG = [TAG sprintf('kp%s_', strrep(getenv('WC_KPPOS'), '.', 'p'))];
+end
+if ~isempty(getenv('WC_NLE0'))
+    TAG = [TAG sprintf('e0%s_', strrep(getenv('WC_NLE0'), '.', 'p'))];
+end
+if ~isempty(getenv('WC_NLGMAX'))
+    TAG = [TAG sprintf('gm%s_', strrep(getenv('WC_NLGMAX'), '.', 'p'))];
+end
 if ~isempty(getenv('WC_KIPOS'))
     TAG = [TAG sprintf('ki%s_', strrep(getenv('WC_KIPOS'), '.', 'p'))];
 end
@@ -261,6 +270,37 @@ assignin('base', 'dly_pos_s', max(tau_pos_ms, 0) * 1e-3);
 % 08-29 가설 시험용 — 외란 뒤 8 s 꼬리가 적분 되감기인가.
 % 오버슈트가 외란 크기에 비례하고 감쇠 시정수는 고정(~8 s)인 것이 되감기 서명이라,
 % ki=0 이면 오버슈트와 꼬리가 함께 사라져야 한다. 안 사라지면 원인은 딴 데다.
+% WC_NLE0 / WC_NLGMAX: 비선형 자세 게인의 문턱과 배율을 덮어쓴다 (기본 = 안 건드림).
+% 08-29 발견 — 부스트가 자세오차 3도 밑에서 꺼지고, 그 순간 위치 복귀 속도가
+% 10 cm/s -> 0.1 cm/s 로 죽는다 (부스트 꺼짐 t=7.09 = 경로 0교차 t=7.07). 남은
+% 위치 오차 3.5 cm 는 그 뒤 8 s 꼬리로 기어온다. 문턱을 낮춰 부스트를 더 오래
+% 켜면 꼬리가 짧아져야 한다 — 대신 한계사이클(진폭 0.35도)이 문턱에 가까워지므로
+% 호버 지터가 오른다. 그 맞교환이 원래 이 설계가 고른 것이라(주석: '호버 정밀은
+% 유지하되 이탈 크기를 가둔다'), 다르게 고를 값이 있는지를 재는 것이다.
+% qc_0kg_tuned_apply 가 이미 nl_e0/nl_e1 을 rad 로 넣은 뒤라 여기서 덮어쓴다.
+% WC_KPPOS: 위치 비례 게인. **posErrSat 을 같이 바꾼다** — 15차 설계의 불변식
+%   posErrSat * kp_pos = 1.2 (최대 복원 명령을 질량과 무관하게 고정) 를 깨지 않기
+%   위해서다. 한쪽만 바꾸면 그 불변식이 조용히 깨져 다른 질량과 비교가 안 된다.
+% 08-18 채택이 kp_pos 를 8 -> 5 로 깎은 근거는 '이동 오버슈트 확대' 였고 외란 복귀는
+% 그 목적함수에 없었다. 여기서 그 교환의 반대쪽을 잰다.
+kpEnv = getenv('WC_KPPOS');
+if ~isempty(kpEnv)
+    kpv = str2double(kpEnv);
+    assignin('base', 'kp_position', kpv);
+    assignin('base', 'posErrSat',  1.2 / kpv);
+    assignin('base', 'posErrSatZ', 1.2 / kpv);
+    fprintf('[WC_KPPOS] kp_position -> %g, posErrSat -> %.4f (곱 1.2 유지)\n', kpv, 1.2/kpv);
+end
+nlEnv = getenv('WC_NLE0');
+if ~isempty(nlEnv)
+    assignin('base', 'nl_e0', deg2rad(str2double(nlEnv)));
+    fprintf('[WC_NLE0] nl_e0 -> %s deg\n', nlEnv);
+end
+gmEnv = getenv('WC_NLGMAX');
+if ~isempty(gmEnv)
+    assignin('base', 'nl_gmax', str2double(gmEnv));
+    fprintf('[WC_NLGMAX] nl_gmax -> %s\n', gmEnv);
+end
 kiEnv = getenv('WC_KIPOS');
 if ~isempty(kiEnv)
     assignin('base', 'ki_position', str2double(kiEnv));
