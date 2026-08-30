@@ -1,0 +1,1 @@
+    시나리오                               tauP   tauA      s   종단[cm]   추종[cm]   외란y[cm]    복귀[s]   est[Wh]   act[Wh]       비

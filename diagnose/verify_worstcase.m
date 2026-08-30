@@ -69,6 +69,15 @@ end
 if str2double(getenv_or_num('WC_PRED', '0')) > 0
     TAG = [TAG 'pred_'];
 end
+if ~isempty(getenv('WC_WIND'))
+    TAG = [TAG sprintf('w%s_', strrep(getenv('WC_WIND'), '.', 'p'))];
+end
+if ~isempty(getenv('WC_TMOVE'))
+    TAG = [TAG sprintf('tm%s_', strrep(getenv('WC_TMOVE'), '.', 'p'))];
+end
+if ~isempty(getenv('WC_DX'))
+    TAG = [TAG sprintf('dx%s_', strrep(getenv('WC_DX'), '.', 'p'))];
+end
 if ~isempty(getenv('WC_S'))
     TAG = [TAG sprintf('s%s_', strrep(getenv('WC_S'), '.', 'p'))];
 end
@@ -88,8 +97,15 @@ if ~isempty(getenv('WC_KIPOS'))
     TAG = [TAG sprintf('ki%s_', strrep(getenv('WC_KIPOS'), '.', 'p'))];
 end
 
-DX = 3.0; Z0 = 1.0; T0 = 3.0;
+% WC_DX / WC_TMOVE: 이동 거리와 이동 시간. 기본은 3 m / 배율 1 기준 시간이다.
+% 08-18 이 kp_pos 를 8->5 로 깎은 근거가 '이동 오버슈트 확대' 인데, 기본 조건(3 m
+% 레이즈드 코사인)에서는 오히려 **줄어든다**(8.19 -> 5.29 -> 3.61 cm, 08-29 실측).
+% 그렇다면 그 근거는 더 계단에 가까운 입력에서 나왔을 것이다 — 이동 시간을 줄이면
+% 같은 거리를 더 급하게 가므로 계단에 가까워진다. 그 축을 열어둔다.
+DX = getenv_num2('WC_DX', 3.0); Z0 = 1.0; T0 = 3.0;
 TM0   = DX * pi / (2 * V_REF);    % s=1 일 때 피크 속도 = V_REF
+TM_OV = getenv_num2('WC_TMOVE', 0);   % >0 이면 이동 시간을 이 값으로 강제
+if TM_OV > 0; TM0 = TM_OV; end
 AMP = 0.3; DUR = 0.3;             % 능력 카드 R1
 
 PROG = fullfile(outDir, [TAG 'progress.txt']);
@@ -172,6 +188,15 @@ for i = 1:size(C,1)
     % 8->5 로 깎은 근거가 '이동 오버슈트 확대' 인데, 그 축을 이 하네스로 잰 적이 없다).
     if ~isempty(getenv('WC_S'));      s = str2double(getenv('WC_S'));        end
     if ~isempty(getenv('WC_NODIST')); amp = [0 0 0]; fvec = [0 0 0];         end
+    % WC_WIND: 지속 바람 [m/s]. 펄스 외란과 성질이 다르다 — 펄스는 때리고 사라지지만
+    % 바람은 계속 민다. `capability.scale_from_rho` 가 겨냥한 것이 어느 쪽인지가
+    % 안 적혀 있는데, 08-29 실측은 **펄스 토크에는 깎기가 무효**임을 보였다
+    % (s 1.00/0.75/0.55 -> 복귀 8.55/8.52/8.39 s, 에너지 +0/+7/+17%).
+    % 지속 바람에서는 순항을 늦추면 겪는 시간이 늘어 오히려 불리할 수도, 항력이
+    % 줄어 유리할 수도 있다 — 재봐야 안다. 그 축을 연다.
+    if ~isempty(getenv('WC_WIND'))
+        assignin('base', 'wind_speed', str2double(getenv('WC_WIND')));
+    end
     r = wc_run(mdl, tauP, tauA, s, DX, Z0, T0, TM0, amp, DUR, fvec, PKG);
 
     % 시계열 저장 (그림용). 500 Hz 로 솎는다 (WC_TSDT 로 조절).
@@ -479,4 +504,10 @@ if fid > 0
     fprintf(fid, fmt, varargin{:});
     fclose(fid);
 end
+end
+
+function v = getenv_num2(name, dflt)
+% getenv_or_num 은 문자열을 내므로 숫자 기본값에는 이쪽을 쓴다.
+e = getenv(name);
+if isempty(e); v = dflt; else; v = str2double(e); end
 end
