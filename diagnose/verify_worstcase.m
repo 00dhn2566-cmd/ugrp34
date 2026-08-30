@@ -69,6 +69,9 @@ end
 if str2double(getenv_or_num('WC_PRED', '0')) > 0
     TAG = [TAG 'pred_'];
 end
+if str2double(getenv_or_num('WC_MHE', '0')) > 0
+    TAG = [TAG 'mhe_'];
+end
 if ~isempty(getenv('WC_WIND'))
     TAG = [TAG sprintf('w%s_', strrep(getenv('WC_WIND'), '.', 'p'))];
 end
@@ -371,6 +374,12 @@ if tau_att_ms > 0 || tau_pos_ms > 0
     % 나오는지, 특히 roll 11 Hz 한계사이클에도 듣는지를 가른다.
     if str2double(getenv_or_num('WC_PRED', '0')) > 0
         qc_predictor_apply(mdl);
+    end
+    % WC_MHE: 지연 보상 MHE (이동 지평 추정). 리드 보상기(WC_PRED)와 배타적이다 —
+    % 둘 다 같은 지점에 끼므로 같이 켜면 이중 보상이 된다.
+    % 게인은 **안 건드린다**. MHE 는 측정 경로에만 끼는 물건이라 A/B 가 깨끗하다.
+    if str2double(getenv_or_num('WC_MHE', '0')) > 0
+        qc_mhe_apply(mdl);
     end
 end
 qc_yawwrap_apply(mdl);
