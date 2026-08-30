@@ -55,7 +55,7 @@ function DoPostPropSetup(block)
 nb = mhe_nbuf();
 block.NumDworks = 6;
 names = {'acc', 'meas', 'mvalid', 'state', 'aux', 'out'};
-sizes = [3*nb, 3*nb, 3*nb, 9, 12, 3];
+sizes = [3*nb, 3*nb, 3*nb, 9, 15, 3];
 for k = 1:6
     block.Dwork(k).Name            = names{k};
     block.Dwork(k).Dimensions      = sizes(k);
@@ -81,8 +81,9 @@ block.Dwork(2).Data = zeros(3*nb,1);      % meas
 block.Dwork(3).Data = zeros(3*nb,1);      % mvalid
 block.Dwork(4).Data = zeros(9,1);         % state: [p0 v0 b] x 3축
 % aux: 1 head, 2 nfill, 3 since_solve, 4 N, 5 t_since_meas,
-%      6..8 last_meas xyz, 9 last_meas_vt(상대), 10 have_meas, 11 solves, 12 fault
-aux = zeros(12,1); aux(4) = 1;
+%      6..8 last_meas xyz, 9 last_meas_vt(상대), 10 have_meas, 11 solves, 12 fault,
+% 13..15 닻 시점 속도 xyz (측정 도착 때만 갱신 — 매 스텝 창을 안 훑기 위해)
+aux = zeros(15,1); aux(4) = 1;
 block.Dwork(5).Data = aux;
 block.Dwork(6).Data = zeros(3,1);         % 출력 (direct feedthrough 꺼짐)
 end
@@ -158,6 +159,19 @@ if newmeas
         mv((k-1)*nb + slot)   = 1;
     end
     aux(6:8) = mpos; aux(5) = 0; aux(10) = 1; aux(9) = back*dt;
+    % 닻 시점(= 방금 꽂은 슬롯)의 속도를 여기서 한 번만 구한다. 이 계산만 창
+    % 앞쪽을 훑고, 매 스텝 출력은 이 값에서 이어 간다.
+    nn = aux(2);
+    ii = mod(head - nn + (0:nn-1), nb) + 1;
+    upto = max(0, nn - 1 - back);
+    for k = 1:3
+        o = (k-1)*nb; b = st((k-1)*3+3);
+        vv = st((k-1)*3+2) + b*upto*dt;
+        for j = 1:upto
+            vv = vv + acc(o+ii(j))*dt;
+        end
+        aux(12+k) = vv;
+    end
 end
 
 % ── 무거운 해: N 스텝마다
@@ -189,20 +203,55 @@ if aux(3) >= aux(4)
 end
 
 % ── 현재 시각으로 전파 + 안전장치
+%
+% ★ 2026-08-29 구조 수정 (사용자 지적: "센서 + 지연시간 동안의 변화 이거 넣은 거
+%   아니었어?"). 맞다. 원래 설계는 **최신 센서값을 닻으로 두고 지연 구간만 모델로
+%   메우는** 것인데, 처음 구현은 창 시작점(250 ms 전) 상태를 최소제곱으로 재구성해
+%   거기서 250 ms 를 적분했다. 차이가 결정적이다:
+%
+%     설계 : 출력 = 최신_측정 + (그 측정의 나이만큼의 변화)     닻 = 센서
+%     구판 : 출력 = 재구성된 250 ms 전 상태 + 250 ms 적분        닻 = 적합 결과
+%
+%   구판의 대가 두 가지 —
+%     ① 모델 오차가 60 ms 가 아니라 **250 ms** 동안 열린 채로 적분된다 (4배)
+%     ② 무거운 해가 돌 때마다 시작점이 통째로 바뀌어 출력이 **점프**한다. 그 점프를
+%        위치 제어기의 D 항이 미분하면 스파이크가 되고, 그게 기체를 흔든다.
+%        파이썬에서 RMS 오차로만 평가해 이걸 못 봤다 — RMS 는 '정확하지만 튀는'
+%        신호를 잘 나온 것으로 친다.
+%
+%   그래서 역할을 가른다: **긴 창은 바이어스를 보는 데만** 쓰고(관측 가능성 때문에
+%   250 ms 가 필요하다), 그 바이어스를 **최신 센서값에 얹어 나이만큼만** 적분한다.
+%   b 는 0.5*b*age^2 로만 들어오므로(age 60 ms 면 0.0018*b) 해가 바뀌어도 출력이
+%   거의 안 움직인다. 센서가 닻이라는 원칙이 이렇게 코드에 남는다.
 n = aux(2);
-tnow = (n-1)*dt;                      % 창 시작 기준 현재 시각
 out = zeros(3,1);
 fault = 0;
-for k = 1:3
-    o = (k-1)*nb;
-    p0 = st((k-1)*3+1); v0 = st((k-1)*3+2); b = st((k-1)*3+3);
+if aux(10) == 1
+    % 최신 측정이 꽂힌 슬롯부터 지금까지의 스텝 수 = 그 측정의 나이
+    % ★ 2026-08-29 (사용자 지적: "쭉 돌리는 게 아니라 지연 시간 동안만 해석하면
+    %   안 되나"). 맞다. 앞선 수정으로 **적분 구간**은 이미 나이(60 ms)로 줄였는데,
+    %   그 닻 시점의 **속도**를 구하려고 창 앞쪽 190 스텝을 매 스텝 다시 훑고 있었다.
+    %   그 속도는 측정이 도착할 때 한 번만 구하면 된다 (30 Hz 면 33 스텝에 한 번).
+    %   매 스텝 비용이 251 -> 60 스텝(축당)으로 줄고, 구조도 '지연 구간만 해석' 이라는
+    %   원래 뜻에 맞는다. aux(13:15) 에 축별 닻 속도를 들고 다닌다.
+    ageN = max(0, min(round(aux(9)/dt) + round(aux(5)/dt), n-1));
     idx = mod(head - n + (0:n-1), nb) + 1;
-    S = 0; vv = 0;
-    for j = 1:n-1
-        S  = S + vv*dt + 0.5*acc(o+idx(j))*dt*dt;
-        vv = vv + acc(o+idx(j))*dt;
+    for k = 1:3
+        o = (k-1)*nb;
+        b = st((k-1)*3+3);
+        vv = aux(12+k);                 % 닻 시점 속도 (측정 도착 때 갱신됨)
+        S = 0;
+        for j = (n-ageN):(n-1)
+            S  = S + vv*dt + 0.5*(acc(o+idx(j)) + b)*dt*dt;
+            vv = vv + (acc(o+idx(j)) + b)*dt;
+        end
+        out(k) = aux(5+k) + S;
     end
-    out(k) = p0 + v0*tnow + 0.5*b*tnow*tnow + S;
+else
+    % 측정이 아직 없다 — 닻이 없으므로 보정하지 않는다 (센서 우선 원칙)
+    for k = 1:3
+        out(k) = mpos(k);
+    end
 end
 
 if aux(10) == 1

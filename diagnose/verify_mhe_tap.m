@@ -101,8 +101,6 @@ t  = linspace(1.0, 7.5, 3000);
 getsig = @(n) evalin('base', n);
 rs = @(v) interp1(v.time(:), v.signals.values(:), t, 'linear', 'extrap');
 gv = @(n) rs(getsig(n));
-tr = gv('tap_roll');  tp = gv('tap_pitch');  ty = gv('tap_yaw');
-rr = gv('real_roll'); rp = gv('real_pitch'); ry = gv('real_yaw');
 
 cc = @(a,b) sum((a-mean(a)).*(b-mean(b))) / sqrt(sum((a-mean(a)).^2)*sum((b-mean(b)).^2));
 % ── 스윙 지표는 MHE 유무와 무관하게 항상 낸다 (범인 특정용)
@@ -120,6 +118,10 @@ fprintf('  y 이탈 최대 %.2f cm / RMS %.2f cm\n', 100*max(abs(ry0)), 100*sqrt
 if isempty(tapNames)
     return;    % MHE 없으면 탭 대조는 할 게 없다
 end
+
+% 자세 탭 대조용 신호는 MHE 가 있을 때만 존재한다 (위 가드 뒤에서 꺼낸다)
+tr = gv('tap_roll');  tp = gv('tap_pitch');  ty = gv('tap_yaw');
+rr = gv('real_roll'); rp = gv('real_pitch'); ry = gv('real_yaw');
 
 fprintf('\n===== MHE 자세 탭 대조 =====\n');
 fprintf('  %-22s %8s %10s\n', '쌍', '상관', '기울기');
