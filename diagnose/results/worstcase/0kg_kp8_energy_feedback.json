@@ -1,0 +1,6 @@
+{
+  "source": "simscape_worstcase",
+  "n_samples": 1,
+  "ratio_act_over_est": 0.288211,
+  "note": "energy.py 의 FM*eta 를 이 비로 나눠 교정. 가드레일은 INTERFACE_SPEC 6절과 같다."
+}

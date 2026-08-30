@@ -69,6 +69,12 @@ end
 if str2double(getenv_or_num('WC_PRED', '0')) > 0
     TAG = [TAG 'pred_'];
 end
+if ~isempty(getenv('WC_S'))
+    TAG = [TAG sprintf('s%s_', strrep(getenv('WC_S'), '.', 'p'))];
+end
+if ~isempty(getenv('WC_NODIST'))
+    TAG = [TAG 'nd_'];
+end
 if ~isempty(getenv('WC_KPPOS'))
     TAG = [TAG sprintf('kp%s_', strrep(getenv('WC_KPPOS'), '.', 'p'))];
 end
@@ -160,6 +166,12 @@ R = [];
 for i = 1:size(C,1)
     lab = C{i,1}; desc = C{i,2};
     tauP = C{i,3}; tauA = C{i,4}; s = C{i,5}; amp = C{i,6}; fvec = C{i,7};
+    % WC_S / WC_NODIST: 표의 배율·외란을 케이스 선택 뒤에 덮어쓴다. 손잡이(kp_pos 등)와
+    % 조합해 재려면 케이스를 새로 만드는 것보다 이쪽이 낫다 — 같은 케이스의 다른 조건임이
+    % 라벨로 남기 때문이다. WC_NODIST 는 이동 오버슈트를 재려고 넣었다 (08-18 이 kp_pos 를
+    % 8->5 로 깎은 근거가 '이동 오버슈트 확대' 인데, 그 축을 이 하네스로 잰 적이 없다).
+    if ~isempty(getenv('WC_S'));      s = str2double(getenv('WC_S'));        end
+    if ~isempty(getenv('WC_NODIST')); amp = [0 0 0]; fvec = [0 0 0];         end
     r = wc_run(mdl, tauP, tauA, s, DX, Z0, T0, TM0, amp, DUR, fvec, PKG);
 
     % 시계열 저장 (그림용). 500 Hz 로 솎는다 (WC_TSDT 로 조절).
