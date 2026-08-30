@@ -115,8 +115,22 @@ a  = [ g*(att(2)*cy + att(1)*sy); ...
        0 ];
 
 % ── 링 버퍼 전진
+% ★ 창이 꽉 차 있으면 t0 가 한 스텝 밀린다 = **이동 지평의 이동**. 그때 사전(prior)도
+%   새 t0 로 전파해야 한다 — 파이썬 판은 predict_at/velocity_at 으로 그렇게 한다.
+%   안 하면 한 스텝 낡은 상태를 사전으로 쓰게 되고, 사전 가중이 약해 치명적이진
+%   않아도 명백한 이식 누락이다 (08-29 발견).
 head = mod(aux(1), nb) + 1;
 aux(1) = head;
+if aux(2) >= nb
+    % t0 가 dt 만큼 앞으로 간다: p0 <- p0 + v0*dt + 0.5*b*dt^2 + (그 구간 가속 적분)
+    oldest = mod(head - nb, nb) + 1;          % 곧 버려질 슬롯 = 옛 t0
+    for k = 1:3
+        p0 = st((k-1)*3+1); v0 = st((k-1)*3+2); b = st((k-1)*3+3);
+        a0 = acc((k-1)*nb + oldest);
+        st((k-1)*3+1) = p0 + v0*dt + 0.5*(b + a0)*dt*dt;
+        st((k-1)*3+2) = v0 + (b + a0)*dt;
+    end
+end
 aux(2) = min(aux(2) + 1, nb);
 for k = 1:3
     acc((k-1)*nb + head) = a(k);
