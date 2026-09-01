@@ -1,0 +1,161 @@
+<?xml version="1.0" ?>
+<!--
+  FX450 검증용 드론 + 테스트 월드 (Gazebo Harmonic / gz-sim8)
+  목적: 성진 컨트롤러(추후 C로 추출)를 폐루프로 검증하기 위한 "독립 플랜트".
+
+  실행:  gz sim -r control_seoungjin/gazebo/fx450_test.sdf   (WSL, ROS source 후)
+
+  ── 값 출처 ──────────────────────────────────────────────
+  [실측/파일]  질량 1.2726 kg, 모터 시정수 0.02 s, 프로펠러 지름 0.254 m
+               (Scripts_Data/quadcopter_package_parameters.m)
+  [FX450 기하] 대각 450 mm → 로터 반경 0.225 m, X배치 → (±0.159, ±0.159) m
+  [검증됨]  (2) motorConstant=6.37e-6 → 호버 ω≈700 rad/s(=최대 1000의 70%),
+             추력/무게비≈2.0. 헤드리스 호버 테스트로 확인(3s간 +0.14m = 사실상 호버).
+  [추정 → 성진 MATLAB 머신 숫자로 정밀화 필요]:
+     (1) 링크 질량 분배(바디 1.0 + 로터 4×0.068) → 관성 자동합산은 물리적으로 합당하나
+         CAD 실제 분포/정확한 Ixx·Iyy·Izz로 교체 가능
+     (3) momentConstant(K_drag 비) — Simscape Aerodynamic Propeller 규약 변환 (yaw 미검증)
+  ⚠️ turningDirection + 로터 위치 = 믹싱행렬. 컨트롤러 믹서와 반드시 대조.
+  ─────────────────────────────────────────────────────────
+-->
+<sdf version="1.9">
+  <world name="fx450_test">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>1 1 1 1</diffuse>
+      <specular>0.5 0.5 0.5 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>50 50</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>50 50</size></plane></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============ FX450 드론 ============ -->
+    <model name="fx450">
+      <pose>0 0 0.15 0 0 0</pose>
+      <self_collide>false</self_collide>
+
+      <!-- 바디: 질량 대부분(1.0 kg). 나머지는 로터 4개에 분배 → 합 1.2726 kg.
+           로터가 팔끝 위치에서 조립관성을 자동으로 만들어줌(Gazebo가 합산). -->
+      <link name="base_link">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>0.003633</ixx><iyy>0.003633</iyy><izz>0.006667</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <visual name="body">
+          <geometry><box><size>0.2 0.2 0.06</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <collision name="body_col">
+          <geometry><box><size>0.2 0.2 0.06</size></box></geometry>
+        </collision>
+        <visual name="arm_fr"><pose>0.08 0.08 0 0 1.5708 0.7854</pose><geometry><cylinder><radius>0.008</radius><length>0.225</length></cylinder></geometry><material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
+        <visual name="arm_rl"><pose>-0.08 -0.08 0 0 1.5708 0.7854</pose><geometry><cylinder><radius>0.008</radius><length>0.225</length></cylinder></geometry><material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
+        <visual name="arm_fl"><pose>-0.08 0.08 0 0 1.5708 -0.7854</pose><geometry><cylinder><radius>0.008</radius><length>0.225</length></cylinder></geometry><material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
+        <visual name="arm_rr"><pose>0.08 -0.08 0 0 1.5708 -0.7854</pose><geometry><cylinder><radius>0.008</radius><length>0.225</length></cylinder></geometry><material><diffuse>0.2 0.2 0.2 1</diffuse></material></visual>
+      </link>
+
+      <!-- 로터 4개: 각 0.068 kg, 얇은 디스크(prop 반경 0.127). 위치가 곧 팔길이(±0.159).
+           배치(위에서): 0=전우(FR) 1=후좌(RL) 2=전좌(FL) 3=후우(RR) -->
+      <link name="rotor_0">
+        <pose>0.159 0.159 0.03 0 0 0</pose>
+        <inertial><mass>0.068</mass><inertia><ixx>0.000274</ixx><iyy>0.000274</iyy><izz>0.000548</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <visual name="v"><geometry><cylinder><radius>0.127</radius><length>0.008</length></cylinder></geometry><material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.2 0.2 1</diffuse></material></visual>
+      </link>
+      <link name="rotor_1">
+        <pose>-0.159 -0.159 0.03 0 0 0</pose>
+        <inertial><mass>0.068</mass><inertia><ixx>0.000274</ixx><iyy>0.000274</iyy><izz>0.000548</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <visual name="v"><geometry><cylinder><radius>0.127</radius><length>0.008</length></cylinder></geometry><material><ambient>0.8 0.2 0.2 1</ambient><diffuse>0.9 0.2 0.2 1</diffuse></material></visual>
+      </link>
+      <link name="rotor_2">
+        <pose>-0.159 0.159 0.03 0 0 0</pose>
+        <inertial><mass>0.068</mass><inertia><ixx>0.000274</ixx><iyy>0.000274</iyy><izz>0.000548</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <visual name="v"><geometry><cylinder><radius>0.127</radius><length>0.008</length></cylinder></geometry><material><ambient>0.2 0.2 0.8 1</ambient><diffuse>0.2 0.2 0.9 1</diffuse></material></visual>
+      </link>
+      <link name="rotor_3">
+        <pose>0.159 -0.159 0.03 0 0 0</pose>
+        <inertial><mass>0.068</mass><inertia><ixx>0.000274</ixx><iyy>0.000274</iyy><izz>0.000548</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+        <visual name="v"><geometry><cylinder><radius>0.127</radius><length>0.008</length></cylinder></geometry><material><ambient>0.2 0.2 0.8 1</ambient><diffuse>0.2 0.2 0.9 1</diffuse></material></visual>
+      </link>
+
+      <joint name="rotor_0_joint" type="revolute"><parent>base_link</parent><child>rotor_0</child><axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis></joint>
+      <joint name="rotor_1_joint" type="revolute"><parent>base_link</parent><child>rotor_1</child><axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis></joint>
+      <joint name="rotor_2_joint" type="revolute"><parent>base_link</parent><child>rotor_2</child><axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis></joint>
+      <joint name="rotor_3_joint" type="revolute"><parent>base_link</parent><child>rotor_3</child><axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis></joint>
+
+      <!-- ===== 모터 모델 4개 (K_thrust=motorConstant, K_drag=momentConstant) =====
+           CW/CCW 교차: 0(CCW) 1(CCW) 2(CW) 3(CW) ← 컨트롤러 믹서와 대조 필수
+           명령 토픽: /fx450/command/motor_speed  (gz.msgs.Actuators, velocity[4]) -->
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>fx450</robotNamespace><jointName>rotor_0_joint</jointName><linkName>rotor_0</linkName>
+        <turningDirection>ccw</turningDirection>
+        <timeConstantUp>0.02</timeConstantUp><timeConstantDown>0.02</timeConstantDown>
+        <maxRotVelocity>1000.0</maxRotVelocity>
+        <motorConstant>6.37e-06</motorConstant>
+        <momentConstant>0.016</momentConstant>
+        <commandSubTopic>command/motor_speed</commandSubTopic>
+        <actuator_number>0</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient><rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorType>velocity</motorType>
+      </plugin>
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>fx450</robotNamespace><jointName>rotor_1_joint</jointName><linkName>rotor_1</linkName>
+        <turningDirection>ccw</turningDirection>
+        <timeConstantUp>0.02</timeConstantUp><timeConstantDown>0.02</timeConstantDown>
+        <maxRotVelocity>1000.0</maxRotVelocity>
+        <motorConstant>6.37e-06</motorConstant><momentConstant>0.016</momentConstant>
+        <commandSubTopic>command/motor_speed</commandSubTopic>
+        <actuator_number>1</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient><rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorType>velocity</motorType>
+      </plugin>
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>fx450</robotNamespace><jointName>rotor_2_joint</jointName><linkName>rotor_2</linkName>
+        <turningDirection>cw</turningDirection>
+        <timeConstantUp>0.02</timeConstantUp><timeConstantDown>0.02</timeConstantDown>
+        <maxRotVelocity>1000.0</maxRotVelocity>
+        <motorConstant>6.37e-06</motorConstant><momentConstant>0.016</momentConstant>
+        <commandSubTopic>command/motor_speed</commandSubTopic>
+        <actuator_number>2</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient><rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorType>velocity</motorType>
+      </plugin>
+      <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
+        <robotNamespace>fx450</robotNamespace><jointName>rotor_3_joint</jointName><linkName>rotor_3</linkName>
+        <turningDirection>cw</turningDirection>
+        <timeConstantUp>0.02</timeConstantUp><timeConstantDown>0.02</timeConstantDown>
+        <maxRotVelocity>1000.0</maxRotVelocity>
+        <motorConstant>6.37e-06</motorConstant><momentConstant>0.016</momentConstant>
+        <commandSubTopic>command/motor_speed</commandSubTopic>
+        <actuator_number>3</actuator_number>
+        <rotorDragCoefficient>8.06e-05</rotorDragCoefficient><rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+        <motorType>velocity</motorType>
+      </plugin>
+    </model>
+
+  </world>
+</sdf>

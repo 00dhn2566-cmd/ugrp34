@@ -1,0 +1,7 @@
+{
+  "_comment": "A/B 검증의 B: A(셰이퍼 off)와 동일 미션 + ZVD 켬. f0은 attitude_feedback(used:false) 소비로 실측치 자동 반영됨.",
+  "shaper": {
+    "mode": "zvd",
+    "f_mode_hz": 1.8
+  }
+}

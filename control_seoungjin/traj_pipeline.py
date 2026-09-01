@@ -48,6 +48,8 @@ from scipy.io import savemat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from path_time import (                         # noqa: E402
+    _find_min_time_bc,
+    _poly7_coeffs_bc,
     plan_waypoints,
     plan_waypoints_flythrough,
 )
@@ -153,22 +155,89 @@ def _atomic_write_json(path, obj):
     os.replace(tmp, path)
 
 
+# --- 코어/옵션 분리 (RL→control seam 형식 정합, 2026-08-01) -----------------
+# 코어 파일은 윤호 reinforcement_yunho/interface/waypoints_config.schema.json과
+# **바이트 호환**이어야 한다. 그 스키마는 additionalProperties:false라 확장 키를
+# 한 개라도 섞으면 RL 측 validate()에서 거부된다 → 성진 확장은 전부 사이드카
+# 파일 <mission>.options.json으로 분리한다.
+MISSION_CORE_KEYS = ("waypoints", "limits", "dt")
+MISSION_OPTION_KEYS = ("trajectory", "waypoint_mode", "waypoint_prep", "shaper",
+                       "controller_profile", "yaw", "strict", "_comment")
+
+
+def mission_options_path(path):
+    """<mission>.json → <mission>.options.json (성진 확장 사이드카 경로)."""
+    stem = path[:-5] if path.endswith(".json") else path
+    return stem + ".options.json"
+
+
+def load_mission_options(path):
+    """확장 사이드카 로드. 파일 없으면 {} (옵션은 전부 선택 항목).
+
+    코어 키(waypoints/limits/dt)가 사이드카에 있으면 즉사 — 계획 스펙이 두
+    파일에 흩어지면 어느 쪽이 진실인지 알 수 없다 (저장소 규칙: 조용한 병합 금지).
+    """
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        opts = json.load(f)
+    if not isinstance(opts, dict):
+        raise ValueError(f"옵션 JSON은 object여야 함: {path}")
+    stray = sorted(k for k in opts if k in MISSION_CORE_KEYS)
+    if stray:
+        raise KeyError(
+            f"코어 키 {stray}는 옵션 파일에 두면 안 됨: {path} "
+            "(waypoints/limits/dt는 코어 미션 JSON에만)")
+    return opts
+
+
 def load_mission(path):
     """input/ 경로 JSON 로드 + 스키마 검증 (누락 시 즉사 — 저장소 규칙).
 
-    스키마 (sample/INPUT_FORMAT.md 확장) — 두 입구 중 하나 필수:
+    **코어** (`<mission>.json`, sample/INPUT_FORMAT.md == 윤호 waypoints_config
+    스키마) — 두 입구 중 하나 필수:
         waypoints  : [[x,y,z], ...]  (N>=2) — plan_waypoints가 최소시간 부여
-        trajectory : {"t": [...], "pos": [[x,y,z], ...]} — 이미 시간 붙은
-                     원시 궤적 (스텝/거친 프로파일 허용 — 스무더가 물리
-                     추종 가능한 S-커브로 재성형 후 게이트 검증)
         limits     : {v_max, a_max, j_max, snap_max}  (필수, 숫자 또는 [x,y,z])
         dt         : 샘플 간격 [s] (선택, 기본 0.01)
-        shaper     : {mode: 'zv'|'zvd'|'none', f_mode_hz} (선택)
+
+    **옵션** (`<mission>.options.json`, 성진 확장 v0.2 — 전부 선택):
+        waypoint_mode      : 'stop'(기본) | 'fly_through'
+        waypoint_prep      : {merge_dist, collinear_tol, max_seg_len}
+        shaper             : {mode: 'zv'|'zvd'|'none', f_mode_hz}
+        controller_profile : 'precision'(기본) | 'balanced' | 'agile'
+        yaw                : {mode, ...} (INTERFACE_SPEC §1 yaw 절)
+        strict             : true면 클램프 대신 거부
+        trajectory         : {"t": [...], "pos": [[x,y,z], ...]} — 이미 시간
+                             붙은 원시 궤적 입구 (waypoints 대신). RL seam이
+                             아니므로 코어 스키마 적용 대상 외 — 이 입구를 쓰는
+                             미션은 코어 파일에 그대로 둬도 된다.
+
+    하위 호환: 확장 키가 코어 파일에 인라인으로 있어도 그대로 동작한다
+    (`_legacy_inline_options`로 표시 + 통지). 새 미션은 분리해서 쓸 것.
     """
     if not os.path.isfile(path):
         raise FileNotFoundError(f"경로 JSON 없음: {path}")
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
+
+    opt_path = mission_options_path(path)
+    opts = load_mission_options(opt_path)
+    if opts:
+        dup = sorted(set(opts) & set(cfg))
+        if dup:
+            raise KeyError(
+                f"코어/옵션 양쪽에 중복 정의된 키 {dup}: {path} vs {opt_path} "
+                "(조용한 병합 금지 — 한쪽에서 지울 것)")
+        cfg.update(opts)
+        cfg["_options_src"] = opt_path
+
+    inline = sorted(k for k in cfg
+                    if k in MISSION_OPTION_KEYS and k not in opts
+                    and k != "trajectory")
+    if inline:
+        cfg["_legacy_inline_options"] = inline
+        print(f"[호환] 코어 미션에 확장 키 인라인: {inline} — "
+              f"{os.path.basename(opt_path)}로 분리하면 RL(윤호) 스키마 통과")
 
     if "limits" not in cfg:
         raise KeyError(f"경로 JSON에 필수 키 'limits' 없음: {path}")
@@ -293,14 +362,92 @@ def normalize_yaw_cfg(ycfg, src=""):
     rmax = ycfg.get("rate_max")
     if rmax is not None:
         out["rate_max"] = min(float(rmax), YAW_RATE_MAX)
+    # 시작 방위 (기본 0 = 시뮬 부팅 방위). 스플라이스/실기에서는 current_state
+    # 방위를 넣을 것 — 기준 yaw[0]가 이 값에서 시작 (시작 정렬 원칙).
+    out["yaw0_rad"] = float(ycfg.get("yaw0_rad", 0.0))
     return out
 
 
-def _scan_duration_s(sc):
-    """스캔 소요시간 = 구간각/rate (back_and_forth는 왕복 1회 = 2배)."""
-    sweep_angle = abs(sc["to_rad"] - sc["from_rad"])
-    mult = 2.0 if sc["sweep"] == "back_and_forth" else 1.0
-    return mult * sweep_angle / sc["rate_rad_s"]
+def _yaw_strap(a, b, rate):
+    """1-D yaw 점대점 S-사다리꼴 (rest→rest): 스무스스텝 속도 램프 + 등속 순항.
+
+    단일 7차 다항식은 순항 불가(속도가 혹 모양 — 피크=rate로 d를 가는 데
+    2.19·d/rate 소요, 실측)라 긴 스윕에 2배 낭비. 램프 시간 T_r는 가속 한계
+    에서: 피크 가속 = 1.875·rate/T_r ≤ YAW_ACC. 저크 피크 5.78·rate/T_r²도
+    한계 이내 확인식. 짧은 이동(순항 구간 없음)은 대칭 삼각(스케일 램프).
+
+    Returns (T_seg, fn(tau)->angle) — |Δ|<1e-6이면 (0.0, None).
+    """
+    d = abs(b - a)
+    if d < 1e-6:
+        return 0.0, None
+    s = 1.0 if b >= a else -1.0
+    # 0.8x 마진: 기준 피크 가속이 성형기 한계에 정확히 앉으면 이산
+    # 후방차분이 살짝 초과 측정 -> 개입 -> 헌팅 (hold 실측 3차 사건)
+    T_r = 1.875 * rate / (0.8 * YAW_ACC_MAX)
+
+    def ramp_pos(u):
+        """스무스스텝 속도 램프의 변위 적분 (0..1) — 끝값 0.5."""
+        return 2.5 * u**4 - 3.0 * u**5 + u**6
+
+    d_ramp = rate * T_r                      # 램프 2개 합산 변위 (= 2 × 절반)
+    if d >= d_ramp:                          # 순항 있음
+        T_c = (d - d_ramp) / rate
+        T_seg = 2 * T_r + T_c
+
+        def fn(tau):
+            tau = np.asarray(tau, float)
+            x = np.empty_like(tau)
+            u1 = np.clip(tau / T_r, 0, 1)
+            x = rate * T_r * ramp_pos(u1)                      # 가속 램프
+            mid = tau > T_r
+            x[mid] = 0.5 * rate * T_r + rate * np.minimum(
+                tau[mid] - T_r, T_c)                           # 순항
+            u3 = np.clip((tau - T_r - T_c) / T_r, 0, 1)
+            dec = tau > T_r + T_c
+            x[dec] += rate * T_r * (ramp_pos(1.0)
+                                    - ramp_pos(1.0 - u3[dec])) # 감속 램프
+            return a + s * x
+        return T_seg, fn
+
+    # 순항 없는 짧은 이동: 대칭 이중 램프 (가속 한계에서 피크 속도 산정)
+    v_p = min(float(np.sqrt(d * 0.8 * YAW_ACC_MAX / 1.875)), rate)
+    T_h = d / v_p                            # 램프 1개 길이 (변위 v_p·T_h/2 × 2)
+
+    def fn_s(tau):
+        tau = np.asarray(tau, float)
+        u1 = np.clip(tau / T_h, 0, 1)
+        x = v_p * T_h * ramp_pos(u1)
+        u2 = np.clip((tau - T_h) / T_h, 0, 1)
+        dec = tau > T_h
+        x[dec] = 0.5 * v_p * T_h + v_p * T_h * (
+            ramp_pos(1.0) - ramp_pos(1.0 - u2[dec]))
+        return a + s * x
+    return 2 * T_h, fn_s
+
+
+def _plan_scan_yaw(sc, yaw0):
+    """스캔 yaw = S-사다리꼴 세그먼트 체인: 정렬(yaw0→from) → 스윕(from→to[→from]).
+
+    사전 정렬 (08-01 실비행 적발): 기준이 t=0에 from_rad로 점프하면 위치에서
+    금지한 '날것 스텝 참조'의 yaw판 — 실측 ±180° 요청이 -84°~211°로 유실.
+    이음새는 전부 v=0 (rest-to-rest 체인)이라 스무더 무개입·헌팅 없음.
+    rate는 비전의 '상한'이라 램프 테이퍼는 계약 무해.
+
+    Returns (knots, fns, T_total).
+    """
+    rate = sc["rate_rad_s"]
+    pts = [yaw0, sc["from_rad"], sc["to_rad"]]
+    if sc["sweep"] == "back_and_forth":
+        pts.append(sc["from_rad"])
+    knots, fns = [0.0], []
+    for a, b in zip(pts[:-1], pts[1:]):
+        T, fn = _yaw_strap(a, b, rate)
+        if fn is None:
+            continue
+        fns.append(fn)
+        knots.append(knots[-1] + T)
+    return knots, fns, knots[-1]
 
 
 def current_jitter_margin():
@@ -673,7 +820,9 @@ def _apply_scan_time_coupling(t, base, dt, ycfg):
     if ycfg.get("mode") != "scan":
         return t, base, None
     sc = ycfg["scan"]
-    T_scan = _scan_duration_s(sc)
+    plan = _plan_scan_yaw(sc, ycfg.get("yaw0_rad", 0.0))
+    ycfg["_scan_plan"] = plan               # _make_yaw 재계획 방지 캐시
+    T_scan = plan[2]
     T_move = float(t[-1])
     meta = {"policy": sc["priority"], "T_scan_s": round(T_scan, 3),
             "T_move_s": round(T_move, 3), "coverage_at_arrival": 1.0,
@@ -730,10 +879,51 @@ def _make_yaw(ycfg, t, pos):
     짐 스윙과 사실상 비결합 (§1).
     """
     mode = ycfg.get("mode", "heading")
+    # 시작 정렬 (08-01 실비행 적발): 기준 yaw[0]는 드론 초기 방위(yaw0)와
+    # 일치해야 한다 — 아니면 위치에서 금지한 '날것 스텝 참조'의 yaw판
+    # (실측: scan ±180° 요청이 -84°~211°로 유실, look_at 주시 RMS 27°).
+    # 정렬은 **명시적 rate 램프**로 기준에 넣는다 — raw[0]만 바꿔 스무더
+    # 백스톱에 맡기면 종점 헌팅 리밋사이클(±0.03rad 배회 실측)이 yaw에서
+    # 재현됨 (스무더의 알려진 스텝 특성).
+    yaw0 = float(ycfg.get("yaw0_rad", 0.0))
+    rate_al = (ycfg["scan"]["rate_rad_s"] if mode == "scan"
+               else ycfg.get("rate_max", YAW_RATE_MAX))
+
+    def _prepend_align(raw_target):
+        """yaw0에서 S 테이퍼(poly7)로 목표 프로파일에 합류하는 정렬 구간.
+
+        상수-rate 캐치업은 합류 순간 속도 불연속(1.0→목표 기울기) →
+        스무더 종점 헌팅(±0.03rad 배회 실측). 합류점의 값·기울기를 경계조건
+        으로 하는 poly7이면 C¹ 합류라 무개입.
+        """
+        d0 = raw_target[0] - yaw0
+        if abs(d0) < 1e-6:
+            return raw_target
+        dt_g = max(float(t[1] - t[0]), 1e-9)
+        # 가속 하한 필수: poly7 rest-rest 피크 가속 ~7.5·d/T² — 빠뜨리면
+        # 한계 2.0을 스치고 스무더 개입 → 비행 내내 헌팅 (hold 실측 사건)
+        T1 = max(2.2 * abs(d0) / rate_al,
+                 float(np.sqrt(7.6 * abs(d0) / (0.8 * YAW_ACC_MAX))),
+                 2.0 * rate_al / YAW_ACC_MAX, 0.3)
+        k1 = min(max(int(np.round(T1 / dt_g)), 1), len(t) - 1)
+        T1 = float(t[k1])
+        slope = float(np.gradient(raw_target, t)[k1])
+        c = _poly7_coeffs_bc(yaw0, 0.0, 0.0, 0.0,
+                             float(raw_target[k1]), slope, 0.0, 0.0, T1)
+        out = raw_target.copy()
+        out[:k1] = np.poly1d(c[::-1])(t[:k1])
+        return out
+
     if mode == "heading":
-        raw = _heading_yaw(t, pos)
+        raw = _prepend_align(_heading_yaw(t, pos))
     elif mode == "hold":
-        raw = np.full(len(t), ycfg["angle_rad"])
+        # 고정 목표는 S-사다리꼴이 정답 (가속 한계 구조 보장 — poly7 정렬은
+        # 피크 가속이 한계를 스쳐 스무더 헌팅 유발 실측)
+        T_h, fn_h = _yaw_strap(yaw0, float(ycfg["angle_rad"]), rate_al)
+        raw = np.full(len(t), float(ycfg["angle_rad"]))
+        if fn_h is not None:
+            m = t < T_h
+            raw[m] = fn_h(t[m])
     elif mode == "look_at":
         tgt = np.asarray(ycfg["target"], float)
         dx = tgt[0] - pos[:, 0]
@@ -749,18 +939,19 @@ def _make_yaw(ycfg, t, pos):
             first_ok = int(np.argmax(~frozen)) if (~frozen).any() else 0
             idx[idx < 0] = first_ok
             raw = raw[idx]
+        raw = _prepend_align(raw)
     elif mode == "scan":
         sc = ycfg["scan"]
-        a0, a1, rate = sc["from_rad"], sc["to_rad"], sc["rate_rad_s"]
-        sweep = abs(a1 - a0)
-        sgn = np.sign(a1 - a0) if sweep > 0 else 1.0
-        prog = rate * t
-        if sc["sweep"] == "once":
-            raw = a0 + sgn * np.minimum(prog, sweep)
-        else:                                # back_and_forth: 왕복 1회 후 유지
-            prog2 = np.minimum(prog, 2 * sweep)
-            raw = a0 + sgn * np.where(prog2 <= sweep, prog2,
-                                      2 * sweep - prog2)
+        knots, fns, T_tot = (ycfg.get("_scan_plan")
+                             or _plan_scan_yaw(sc, yaw0))
+        if not fns:                          # 전 세그먼트 생략 (제자리)
+            raw = np.full(len(t), yaw0)
+        else:
+            end_val = float(fns[-1](np.array([knots[-1] - knots[-2]]))[0])
+            raw = np.full(len(t), end_val)
+            for i, fn in enumerate(fns):
+                m = (t >= knots[i]) & (t < knots[i + 1])
+                raw[m] = fn(t[m] - knots[i])
     else:                                    # 방어 (normalize가 걸렀어야 함)
         raise ValueError(f"yaw.mode='{mode}' 미지원")
 

@@ -30,6 +30,22 @@ void qc_bind(QcState& st, const QcConfig& c) {
 
     st.pidYaw = Pid{c.kpYaw * s.sQ, c.kiYaw * s.sQ,
                     c.kdYaw * s.sQ, c.filtDYaw, c.limYaw};
+    st.pidYaw.antiWindup = c.yawAntiWindup;    // Simulink qc_antiwindup_apply('clamping') 과 동기
+    st.gov.on      = c.govOn;                  // Simulink qc_clock_gov_apply 와 동기
+    st.gov.rf      = c.govRf;
+    st.gov.rs      = c.govRs;
+    st.gov.sMin    = c.govSmin;
+    st.gov.ws      = c.govWs;
+    st.gov.tauRho  = c.govTauRho;
+    st.gov.tauPsi  = c.govTauPsi;
+    st.gov.psiStop = c.govPsiStop;
+    st.gov.bind();
+    st.yawDistI.gmax     = c.yawDistGmax;      // 1.0 이면 항등 (기존 동작)
+    st.yawDistI.e0       = c.yawDistE0;
+    st.yawDistI.e1       = c.yawDistE1;
+    st.yawDistI.tau      = c.yawDistTau;
+    st.yawDistI.rateGate = c.yawDistRateGate;
+    st.yawDistI.relax    = c.yawDistRelax;
     st.pidAlt = Pid{c.kpAlt * s.sT * s.sZMass, c.kiAlt * s.sT * s.sZMass,
                     c.kdAlt * s.sT * s.sZMass, c.filtDAlt, c.limAlt};
 
@@ -81,13 +97,79 @@ QcOutput qc_step(QcState& st, const QcConfig& c, const QcInput& in, double dt) {
     // ---- yaw / 고도 (측정 필터: 덤프 확정 배선) ----
     const double measY = st.fMeasY.step(in.measRpy[2], dt);   // Filter Yaw (0.01)
     const double measZ = st.fMeasZ.step(in.measAlt, dt);      // Filter pz (0.01)
-    const double uY = st.pidYaw.step(wrapPi(in.refYaw - measY), dt);   // yaw 오차 랩 (18차: yaw 입력 지원)
+    // yaw 외란 적응 적분: 참조 각속도로 슬루 여부를 가른 뒤, 지속 오차에만 적분률을 올린다.
+    // (gmax=1 기본값이면 refRate 계산만 돌고 kiScale 은 항상 1 -> 골든 트레이스 불변)
+    const double eYaw = wrapPi(in.refYaw - measY);                     // yaw 오차 랩 (18차: yaw 입력 지원)
+    const double refRate = st.refYawFirst ? 0.0 : wrapPi(in.refYaw - st.refYawPrev) / dt;
+    st.refYawPrev = in.refYaw; st.refYawFirst = false;
+    st.pidYaw.kiScale = st.yawDistI.step(eYaw, refRate, dt);
+    const double uY = st.pidYaw.step(eYaw, dt);
+
+    // ---- 속도 조속기 + 진단 (상위 capability 입력) ----
+    // govOn=false 면 s≡1 이라 여기 계산은 출력에 영향을 주지 않는다 (진단만).
+    out.uYaw   = uY;
+    out.eYaw   = eYaw;
+    const double rhoYaw = (c.limYaw > 0.0) ? std::fabs(uY) / c.limYaw : 0.0;
+    const double uAttMax = std::fabs(uP) > std::fabs(uR) ? std::fabs(uP) : std::fabs(uR);
+    const double rhoAtt = (c.limAtt > 0.0) ? uAttMax / c.limAtt : 0.0;
+    out.rho    = rhoYaw > rhoAtt ? rhoYaw : rhoAtt;   // INTERFACE_SPEC §5b 정의
+    out.sClock = st.gov.step(uY, c.limYaw, eYaw, dt);
+    out.rhoEff = st.gov.rhoEff;
+    st.tauClock += out.sClock * dt;
+
+    // ── 지연 -> 상위 보고 스펙 (관측 전용; 제어 출력에 영향 없음) ──────────
+    // 지연 추적은 조속기와 **분리**되어 있다. 조속기는 외란(권한 점유)에 반응하는
+    // 즉시 반사이고, 지연 감쇄는 계획을 다시 짜야 하는 느린 판단이라 성격이 다르다.
+    // 여기서는 재기만 하고, 실제로 느리게 갈지는 상위가 새 궤적으로 결정한다.
+    // 보고는 ~5 Hz 로 데시메이션한다 (QcConfig::specRateHz 주석 참조 — 제어 주기로
+    // 돌리면 EMA 시정수가 표본수 기준이라 의미가 달라진다).
+    if (c.specOn) {
+        // 회복 감시는 **제어 주기마다** 관측한다. 지연 추적기와 달리 시정수가
+        // 표본수가 아니라 **시간**(dt)으로 정의돼 있어 주기가 달라져도 뜻이 같다.
+        // 판단은 아래 데시메이션 지점에서 한 번만.
+        if (c.recOn) {
+            st.rec.trackBandM = c.recTrackBandM;
+            st.rec.settleS    = c.recSettleS;
+            double e = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                const double d = in.refPos[i] - in.measPos[i];
+                e += d * d;
+            }
+            st.rec.observe(std::sqrt(e), in.refWithinLimits, dt);
+        }
+        if (in.measAgeS > st.specAgeMax) st.specAgeMax = in.measAgeS;
+        st.specAcc += dt;
+        const double period = (c.specRateHz > 1e-9) ? (1.0 / c.specRateHz) : dt;
+        if (st.specAcc >= period) {
+            st.specAcc -= period;
+            const double tauPos = st.lat.update(st.specAgeMax);
+            st.specAgeMax = 0.0;
+            const double sRec = c.recOn ? st.rec.decide(c.bridgeLeadS) : 1.0;
+            st.specLast = qc_spec_report(st.specRule,
+                                         c.specBaseV, c.specBaseA, c.specBaseJ,
+                                         c.specBaseSnap, c.specLimitScale,
+                                         out.sClock, tauPos, c.latencyAttS, sRec);
+        }
+        out.spec = st.specLast;
+    }
     const double uA = st.pidAlt.step(in.refPos[2] - measZ, dt);
 
     // ---- 추력 바이어스 + 2단 클램프 + 믹서 ----
-    // 2π 스케일·바이어스 구조는 실비행 재생으로 실증. Alt Cmd Sat ±30 (덤프 확정)
-    const double base = clamp(uA + c.biasChassis + c.biasLoadGain * c.pkgMass,
-                              -c.altCmdSat, c.altCmdSat);
+    // 2π 스케일·바이어스 구조는 실비행 재생으로 실증.
+    //
+    // [2026-08-26 정정] Alt Cmd Sat(±30)은 **바이어스를 더하기 전**, 고도 PID 출력에만
+    // 걸린다. Simulink 배선이 `cmd -> Alt Cmd Sat -> Bias Chassis` 이다
+    // (diagnose/bake_tuned_model.m (3) 고도 클램프: sat 출력이 Bias Chassis 의 입력).
+    // 이전 코드는 바이어스를 합산한 뒤 클램프해서 base 가 항상 30 rev/s 로 잘렸고,
+    // 그러면 추력이 1.97 N 밖에 안 나와 22.29 N 인 1 kg 기체는 **뜰 수가 없었다**.
+    // 고친 뒤: base = 100.9 rev/s -> 추력 22.26 N (필요 22.29 N, 0.1% 일치) =
+    // SESSIONS_BOARD 가 기록한 호버 평형 634 rad/s 와 일치.
+    // 교차 확인: 0 kg 에서 필요한 base 75.6 rev/s 가 qc_mass_lerp 의 0 kg 앵커
+    // biasChassis=75.5 와 0.1% 로 맞는다 (독립 유도인데 같은 값).
+    // ⚠ 이 정정은 motorRef/motorCmd 채널의 골든 트레이스를 바꾼다 (cmd_pitch/cmd_roll
+    //   위치 체인은 불변). 모터 채널 대조는 다시 떠야 한다.
+    const double base = clamp(uA, -c.altCmdSat, c.altCmdSat)
+                        + c.biasChassis + c.biasLoadGain * c.pkgMass;
     for (int i = 0; i < 4; ++i) {
         // mixDir: 모터 2·3 내장 역회전 (실측 w 음수) — 크기 성분에 방향 부호를 입힘
         out.motorRef[i] = c.mixDir[i] * 2.0 * kPi *
