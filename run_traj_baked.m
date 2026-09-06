@@ -133,8 +133,44 @@ if isempty(find_system(mdl, 'SearchDepth', 1, 'Name', 'Sim Time Clock'))
     add_line(mdl, clockPh.Outport(1), twPh.Inport(1), 'autorouting', 'on');
 end
 
+% --- 외란 펄스 (선택, 2026-09-06) ---
+% 왜 여기 붙이나: 지금까지 외란은 `diagnose/verify_worstcase.m` 에서만 걸었는데
+% 그쪽은 궤적을 MATLAB 안에서 만든다(`raised_cos_move`). 즉 **인터페이스 경로로 들어온
+% 진짜 임무 궤적 위에서 외란을 맞아 본 적이 없다.** 창을 연달아 지나는 임무에서
+% 중요한 것은 직선 복귀가 아니라 '외란을 맞고도 창을 제때 지나는가' 이므로 그 축을 연다.
+%
+% env (전부 미설정이면 아무것도 안 붙는다 = 기존 사용에 항등):
+%   TRAJ_DIST     'tx:0.3'  토크 x(roll) 0.3 N*m. tx/ty/tz = 토크, fx/fy/fz = 힘 [N].
+%                 쉼표로 여러 개: 'tx:0.3,fy:2'
+%   TRAJ_DIST_T   펄스 시각 [s] (기본 = 궤적 중간 T/2)
+%   TRAJ_DIST_DUR 펄스 길이 [s] (기본 0.3 — 능력 카드 R1 규약)
+distSpec = getenv('TRAJ_DIST');
+if ~isempty(distSpec)
+    % 펄스 함수는 diagnose/+qctest 에 있다 (평소엔 이 스크립트의 경로에 없다)
+    addpath(fullfile(modelDir, 'diagnose'));
+    dEnvT = getenv('TRAJ_DIST_T');
+    if isempty(dEnvT); tPulse = T / 2; else; tPulse = str2double(dEnvT); end
+    dEnvD = getenv('TRAJ_DIST_DUR');
+    if isempty(dEnvD); dDur = 0.3; else; dDur = str2double(dEnvD); end
+    parts = strsplit(distSpec, ',');
+    for pi_ = 1:numel(parts)
+        kv = strsplit(strtrim(parts{pi_}), ':');
+        if numel(kv) ~= 2; error('TRAJ_DIST 형식: tx:0.3 (본 것: %s)', parts{pi_}); end
+        key = lower(strtrim(kv{1})); val = str2double(kv{2});
+        ax = key(2);
+        if ~any(ax == 'xyz'); error('TRAJ_DIST 축은 x/y/z: %s', key); end
+        switch key(1)
+            case 't'; qctest.torque_pulse(mdl, val, tPulse, dDur, ax);
+            case 'f'; qctest.force_pulse(mdl, val, tPulse, dDur, ax);
+            otherwise; error('TRAJ_DIST 종류는 t(토크) 또는 f(힘): %s', key);
+        end
+        fprintf(['[TRAJ_DIST] %s = %g  @ t=%.2f s, %.2f s 동안' char(10)], ...
+                key, val, tPulse, dDur);
+    end
+end
+
 % --- 실행 ---
-fprintf('\n=== 궤적 추종 시뮬 (T=%gs) ===\n', T);
+fprintf([char(10) '=== 궤적 추종 시뮬 (T=%gs) ===' char(10)], T);
 sim(mdl);
 
 % --- 자세 요약 ---
