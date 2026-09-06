@@ -18,3 +18,5 @@ diagnose/results/**/*.csv
 diagnose/results/**/*.mat
 diagnose/results/**/*.png
 diagnose/results/*.log
+# MATLAB 콘솔 로그(cp949, Variants 경고 수백 줄) — 하위 폴더까지
+diagnose/results/**/*.log

@@ -26,6 +26,16 @@ pkgGrndTransW = 1e-3;
 %% Package parameters
 pkgSize = [1 1 1]*0.14; % m
 pkgDensity = 1/(pkgSize(1)*pkgSize(2)*pkgSize(3)); % kg/m^3
+% QC_PKG_MASS: 짐 질량 [kg] 을 밖에서 지정한다 (기본 1). 여기서 덮어써야 하는 이유는
+% 아래 게인 법칙(m_pkg_now 기반 1차식)이 **이 값에서 파생**되기 때문이다. 나중에
+% pkgDensity 만 갈아끼우면 플랜트 질량만 바뀌고 게인은 1 kg 짜리로 남는다.
+% 2 kg 은 게인 법칙이 이미 겨냥한 점인데(min(m_pkg,2), 1-|m_pkg-1|) 실측이 없어
+% capability._ANCHORS[2.0] 이 1 kg 복사본으로 남아 있다 — 그 칸을 재려고 연 손잡이다.
+qcPkgMassEnv = str2double(getenv('QC_PKG_MASS'));
+if ~isnan(qcPkgMassEnv) && qcPkgMassEnv > 0
+    pkgDensity = qcPkgMassEnv / (pkgSize(1)*pkgSize(2)*pkgSize(3));
+    fprintf(['[QC_PKG_MASS] 짐 질량 -> %g kg' char(10)], qcPkgMassEnv);
+end
 
 %% Propeller parameters
 propeller.diameter = 0.254; % m

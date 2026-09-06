@@ -61,6 +61,13 @@ if PKG == 0
     m_pkg_now = 0;  wind_speed = 0;                            %#ok<NASGU>
     V_REF = 1.2;                  % 0 kg 앵커 (capability._ANCHORS)
     TAG = '0kg_';
+elseif PKG >= 2
+    % 2 kg. 물성은 QC_PKG_MASS 로 parameters.m 에서 이미 반영됐다 (게인도 그 값에서
+    % 파생). 여기서 pkgDensity 를 다시 만지면 안 된다 — 게인과 플랜트가 어긋난다.
+    % V_REF 는 아직 1 kg 앵커의 복사본이다. capability._ANCHORS[2.0] 이 잠정인 그
+    % 칸이고, 이 시험이 그 칸을 실측으로 바꾸려는 것이다.
+    V_REF = 1.6;                  % 2 kg 앵커 (잠정 = 1 kg 복사본)
+    TAG = '2kg_';
 else
     V_REF = 1.6;                  % 1 kg 앵커
     TAG = '';
@@ -136,6 +143,10 @@ C = {
  'L', '20ms + 힘 y 2N (돌풍급)',              20,   5, 1.00, [0 0 0],   [0 2 0]
  'M', '20ms + 힘 y 5N (강한 돌풍)',           20,   5, 1.00, [0 0 0],   [0 5 0]
  'N', '20ms + 복합(토크x + 힘 y,z)',          20,   5, 1.00, [AMP 0 0], [0 2 -2]
+ % --- 축별 외란을 현실대역(20 ms)에서 (09-06). 기존 X/Y 는 무지연이라 K 와 짝이
+ %     안 맞았다. 시나리오 세트는 한 지연에서 축만 바꿔야 비교가 성립한다.
+ 'KP', '20ms + 토크 pitch 0.3',               20,   5, 1.00, [0 AMP 0], [0 0 0]
+ 'KY', '20ms + 토크 yaw 0.3',                 20,   5, 1.00, [0 0 AMP], [0 0 0]
 
  % --- 배분기가 외란 복귀에 손댈 수 있나 (사용자 질문 08-28) ---
  %   PID 는 이미 스윕 채택안이다 (0 kg: tune_0kg_r5). 남은 레버가 배분기인지 본다.
@@ -251,7 +262,12 @@ for i = 1:numel(R)
     if isnan(R(i).rec_s); recs = ''; else; recs = sprintf('%.3f', R(i).rec_s); end
     if isnan(R(i).act_Wh); acts = ''; else; acts = sprintf('%.5f', R(i).act_Wh); end
     if isnan(R(i).ratio);  rats = ''; else; rats = sprintf('%.4f', R(i).ratio); end
-    fprintf(fid, '%s,%s,%g,%g,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.1f,%.5f,%s,%s,%s,%.5f,%.2f,%.2f\n', ...
+    % 09-06 수정: 서식 지시자가 21개인데 인자는 24개였다. MATLAB 은 서식을
+    %   재활용하므로 15번째(fx_N)부터 값이 밀리고 한 줄이 다음 줄로 감겼다.
+    %   그 결과 이 폴더의 기존 summary.csv 는 전부 fx_N 이후가 깨져 있다
+    %   (energy_* 포함). 시계열 ts_*.csv 는 별도 경로라 멀쩡하다 - 에너지가
+    %   필요하면 거기 P_est_W 를 적분하는 쪽이 안전하다.
+    fprintf(fid, '%s,%s,%g,%g,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.1f,%.5f,%.5f,%.5f,%.5f,%s,%s,%s,%.5f,%.2f,%.2f\n', ...
         R(i).lab, R(i).desc, R(i).tauP, R(i).tauA, R(i).s, R(i).amp, R(i).vpk, ...
         R(i).end_cm, R(i).trk_cm, R(i).devy_cm, recs, R(i).tPulse, R(i).T_end, R(i).sec, ...
         R(i).fvec(1), R(i).fvec(2), R(i).fvec(3), ...
