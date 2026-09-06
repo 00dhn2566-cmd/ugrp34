@@ -1146,6 +1146,64 @@ MATLAB 정답 플랜트에서 최소 4편 (④ 추가): ④ C 강하 — 추력 
 강등) ③ B 회생 (인위 자세 교란 주입 — RECOVER 상태기계 완주). 각 편 수치는
 SESSIONS_BOARD에 보고.
 
+## 10. 구현 정합 현황 (2026-09-06 전수 점검)
+
+규격을 적어만 두고 실제로 안 지키면 규격이 아니다. `input/example_mission.json` 하나로
+**상위 -> 궤적 -> 시뮬 -> 되먹임** 전 구간을 실제로 돌려 대조한 결과다.
+
+### 지켜지는 것
+
+- **§2 궤적 계약 완전 준수** (`traj_pipeline.py`). `.mat` 변수 5종 shape, `controller_profile`,
+  `.json` 키 6종, 길이 일치, **`.mat` 과 `.json` 동일 내용(t/pos/yaw 최대차 0.00e+00)**,
+  `trajectory_hash` = `pipeline_meta` 일치. `verify_pipeline.py --static` 로 미션 7종
+  (stop_batch/fly_through/step/jitter_a/jitter_b/scan/look_at) 전부 생성·게이트 통과.
+- **전 구간이 실제로 이어진다.** 위 궤적으로 구운 모델 비행: 추종 RMS x/y **1.3 cm**,
+  z 0.5 cm, 종점오차 0.000 m, 자세 RMS 2.37도. 되먹임(`analyze_flight_log.py`)도 돌고,
+  수렴 판정으로 "안 쓴다" 를 정확히 냈다.
+- **§3 쓰기 스키마 준수** — `flight_id`/`written_at`/`used:false`/`trajectory_hash`/
+  `mode_freq_hz`/`tail`/`moving` 전부 채운다.
+
+### ★ 안 지켜지는 것 — MATLAB 구간 (`run_traj_baked.m`)
+
+| # | 규격 | 실제 | 위험도 |
+|---|---|---|---|
+| 1 | `trajectory_hash` 가 비행을 따라간다 (§2) | **`.mat` 에 hash 가 없다** | **높음** |
+| 2 | `controller_profile` -> `ctrl_profile` 적용 (§2) | **안 읽는다** | **높음** |
+| 3 | 입력은 `$UGRP_IO_ROOT/active/trajectory.mat` (§0) | 서브모듈 폴더의 `trajectory.mat` | 중간 |
+| 4 | 결과는 `output/` 또는 `runs/<flight_id>/` (§0) | `modelDir/sim_result_baked.mat` | 낮음 |
+
+**#1 - 해시 사슬이 MATLAB 구간에서 끊긴다.** `trajectory.mat` 에도 `sim_result_baked.mat`
+에도 `trajectory_hash` 가 없다. 그래서 `analyze_flight_log.py` 는 해시를 **비행과 무관한
+옆 파일**(`output/pipeline_meta.json`)에서 읽는다. 비행과 분석 사이에 누가 궤적을 한 번만
+다시 만들면 되먹임에 **엉뚱한 궤적의 해시**가 찍히고, 조용히 지나간다.
+
+> **가상이 아니다.** 09-06 점검 중 실제로 재현됐다 — `example_mission` 을 날린 뒤
+> `verify_pipeline.py --static` 을 돌렸더니 `output/pipeline_meta.json` 이 `look_at` 것으로
+> 덮였고, 그 상태에서 되먹임을 만들면 해시가 `17392fc1c185335d` 로 찍힌다. 실제로 난
+> 궤적은 `c0a71f4cc4b9462b` 다. 10분 안에 우연히 벌어진 일이지 억지 상황이 아니다.
+> §2 가 "피드백이 어느 궤적의 실측인지 대조하는 열쇠" 라고 적어 둔 바로 그 대조가 깨진다.
+
+고치는 법: `traj_pipeline.py` 가 `.mat` 에도 `trajectory_hash` 를 넣고, `run_traj_baked.m`
+이 그걸 `sim_result_baked.mat` 에 실어 보내고, `analyze_flight_log.py` 는 **거기서만** 읽는다.
+옆 파일 대체 경로는 없애야 한다 (있으면 조용히 그리로 샌다).
+
+**#2 - 프로파일이 계획과 실비행에서 갈린다.** `ctrl_profile` 은 `quadcopter_package_parameters.m`
+이 **읽어서 게인을 파생하는** 변수인데, `run_traj_baked.m` 은 24번째 줄에서 그 파일을 먼저
+부르고 40번째 줄에서야 `trajectory.mat` 을 연다. **순서상 읽어도 늦다.** 그래서 상위가
+`agile` 로 계획한 궤적을 시뮬은 `precision` 게인으로 난다. 경고도 안 뜬다.
+고치려면 궤적 로드를 `quadcopter_package_parameters` **앞으로** 옮겨야 한다.
+
+**#3** 은 09-06 점검에서 직접 겪었다 — 파이프라인 출력을 서브모듈 폴더로 **손으로 복사**
+해야 돌아갔다. 동작 자체는 되므로 위험도는 중간이지만, `UGRP_IO_ROOT` 로 옮기는 §0 의
+런타임 배치가 MATLAB 쪽에서는 **아직 불가능**하다는 뜻이다 (Gazebo 단계에서 걸린다).
+
+### 점검 밖
+
+`diagnose/verify_worstcase.m` 계열(성능 배터리)은 `input/`/`output/` 을 **한 번도 참조하지
+않는다** — 궤적을 `qctest.raised_cos_move` 로 내부 생성하고 `diagnose/results/` 에 쓴다.
+플랜트·제어기 시험용이라 그 자체는 맞는 설계지만, **인터페이스 회귀는 거기서 안 잡힌다.**
+인터페이스를 고칠 때 그 하네스가 초록이어도 아무 보증이 안 된다는 뜻이다.
+
 ## 공통 규칙
 
 - 대상 파일/키 못 찾으면 조용히 통과 금지 — **error()로 즉사** (저장소 규칙).

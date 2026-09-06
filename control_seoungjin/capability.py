@@ -57,17 +57,17 @@ _ANCHORS = {
         yaw=dict(scan_rate=1.0, align_deg=15.0, step90_s=2.1),
         disturb=dict(recovery="full", pulse_dev_deg=2.3),
     ),
-    # ⚠⚠ 2 kg 앵커는 1 kg 복사본이고, 09-06 실측으로 그게 **틀린 것**이 확인됐다.
-    #    "아직 안 재봤다" 가 아니라 "재봤더니 2 kg 는 이 성능을 못 낸다" 다.
-    #    무외란 3 m 직진(위치 지연 20 ms)에서 기수 진폭 **117도** (1 kg 6.4도, 0 kg 0.08도),
-    #    종단오차 3.47 cm. 같은 2 kg 이 지연 0 ms 에서는 20도라 원인은 질량 단독이 아니라
-    #    **질량 x 지연**이고, 1 kg 이 무난히 넘기는 20 ms 가 2 kg 에선 발산 조건이다.
-    #    (docs/HANDOFF_SCENARIO_SET.md §4, diagnose/results/worstcase/ts_2kg_nd_*.csv)
-    #    값을 여기서 안 고치는 이유: 앵커는 사람이 정하는 물건이고, 이 칸을 어떻게 할지가
-    #    아직 결정 대기다 (운용 상한 1.5 kg 하향 / yaw 게인 법칙 수정 후 재측정 /
-    #    "위치 지연 <= 5 ms 에서만" 조건부 개방 — SESSIONS_BOARD 대기/예약).
-    #    그전까지 상위는 2 kg 에서 1 kg 성능을 믿으면 안 된다.
-    #    `basis.anchor_provisional` 로 그 사실을 같이 내보낸다.
+    # ⚠ 2 kg 앵커는 1 kg 복사본이다 (PERFORMANCE §8b 도 "1 kg과 동일"로 적혀 있음).
+    #    2 kg 게인은 아직 튜닝 전이고(`tune_2kg.m` 진행 중, §7) 지금 값은 1 kg 앵커
+    #    외삽이다. 그러니 2 kg 성능이 1 kg 에 못 미치는 것 자체는 당연하다.
+    #    ★ 다만 09-06 실측에서 그 튜닝으로는 안 잡힐 것이 하나 나왔다: 무외란 3 m
+    #    직진(위치 지연 20 ms)에서 **기수 진폭 117도** (1 kg 6.4, 0 kg 0.08).
+    #    `tune_2kg.m` 은 축 19개를 훑는데 **yaw 축이 하나도 없고 점수 함수에도 yaw 항이
+    #    없다** — 튜닝이 끝나도 이 항목은 그대로 남는다. 게인 법칙 쪽도 마찬가지로
+    #    `kp_yaw = 15.0` 이 질량 무관 고정인데 I_yaw 는 짐 따라 커진다.
+    #    (docs/HANDOFF_SCENARIO_SET.md §4)
+    #    2 kg 전용 실측이 들어오면 교체할 것 — 그전까지 상위는 2 kg 에서 1 kg 성능을
+    #    믿으면 안 된다. `basis.anchor_provisional` 로 그 사실을 같이 내보낸다.
     2.0: dict(
         limits=dict(v=1.6, a=1.6, j=8.0, snap=64.0),
         budget=dict(track=0.04, overshoot=0.05, settle=2.2, keepout_inflate=0.10),
