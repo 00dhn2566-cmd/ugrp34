@@ -5,6 +5,8 @@
 실제 파이프라인에서는 이 노드 전체가 실제 검출 노드로 교체된다.
 """
 import json
+import os
+import sys
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -15,16 +17,15 @@ from std_msgs.msg import String
 W, H = 1280, 720
 FX, FY, CX, CY = 600.0, 600.0, 640.0, 360.0
 
-# TODO: 실제 extrinsics 있으면 교체 (EuRoC cam0->IMU)
-T_IC = np.array([
-    [ 0.0148655429818, -0.999880929698,   0.00414029679422, -0.0216401454975],
-    [ 0.999557249008,   0.0149672133247,  0.0257155299480,  -0.0646769867680],
-    [-0.0257744366974,  0.00375618835797, 0.999660727178,    0.00981073058949],
-    [0, 0, 0, 1]])
-R_IC, p_IC = T_IC[:3, :3], T_IC[:3, 3]
+# T_IC (cam -> IMU/body): spec §6.1 — 태민 window_recon_node.py 의 상수가 단일 진실이므로
+# 복제하지 않고 그 모듈에서 읽어 온다 (같은 폴더의 스크립트로 실행되는 전제).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from window_recon_node import T_IC, R_IC, p_IC  # noqa: E402
 
 DETECT_PERIOD = 0.5   # 검출 주기 (초) — 초당 2회
 PIX_NOISE = 1.0
+Z_VIS_MIN = 0.5       # 카메라 전방 깊이가 이보다 작으면 visibility=0 (카메라 뒤·초근접)
+Z_PROJ_MIN = 0.05     # §4.2 정책 C: 카메라 뒤 corner 도 "추정 좌표"를 낸다 — 깊이를 이 값으로 clamp 해 투영
 
 WINDOW_DEFS = [
     {"order_index": 0, "color": "red",   "center": np.array([11.1, -8.3, -2.0]), "size": 1.0},
@@ -88,18 +89,19 @@ class WindowSimNode(Node):
             corners_px, vis = [], []
             for P in wdef["corners3d"]:
                 p_C = R_WC.T @ (P - c_W)
-                if p_C[2] < 0.5:
-                    corners_px.append([-1.0, -1.0]); vis.append(0)
-                    continue
-                u = FX * p_C[0] / p_C[2] + CX + self.rng.normal(0, PIX_NOISE)
-                v = FY * p_C[1] / p_C[2] + CY + self.rng.normal(0, PIX_NOISE)
-                inside = (0 <= u < W) and (0 <= v < H)
+                # §4.2 정책 C: 화면 밖·카메라 뒤 corner 도 추정 픽셀 좌표 + visibility=0 (센티널 금지).
+                # 카메라 뒤(z≤0)는 투영이 정의되지 않으므로 깊이를 Z_PROJ_MIN 으로 clamp 해
+                # 같은 방향으로 화면 밖 먼 곳의 좌표를 낸다 — 하류(recon)는 vis=1 만 쓴다.
+                z = max(float(p_C[2]), Z_PROJ_MIN)
+                u = FX * p_C[0] / z + CX + self.rng.normal(0, PIX_NOISE)
+                v = FY * p_C[1] / z + CY + self.rng.normal(0, PIX_NOISE)
+                inside = (0 <= u < W) and (0 <= v < H) and p_C[2] >= Z_VIS_MIN
                 corners_px.append([round(float(u), 2), round(float(v), 2)])
-                vis.append(1 if inside else 0)   # §4.2 정책 C
+                vis.append(1 if inside else 0)
             if sum(vis) < 2:
                 continue
-            good = [c for c, vf in zip(corners_px, vis) if vf]
-            center = [round(sum(x) / len(x), 2) for x in zip(*good)]
+            # §5.1 center = corner 4점 평균 (가시 corner 만의 평균이 아님 — 추정 좌표 포함)
+            center = [round(sum(x) / 4.0, 2) for x in zip(*corners_px)]
             det_conf = round(float(self.rng.uniform(0.3, 0.6)
                                    if self.rng.random() < 0.05
                                    else self.rng.uniform(0.85, 0.99)), 2)
