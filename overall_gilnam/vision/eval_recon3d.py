@@ -19,15 +19,7 @@ import cv2
 import numpy as np
 
 from noisy_stream import load_records
-
-
-def quat_xyzw_to_rot(q):
-    x, y, z, w = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-    ])
+from frames import pose_as_camera, quat_xyzw_to_rot  # noqa: F401 — quat_xyzw_to_rot는 호환용 재export
 
 
 def projection_matrix(K, R_wc, t_wc):
@@ -45,8 +37,7 @@ def _observations(records, K, order_index):
     for rec in records:
         for w in rec["vision"]["windows"]:
             if w["order_index"] == order_index and all(v == 1 for v in w["corner_vis"]):
-                t = np.asarray(rec["pose"]["position"], dtype=float)
-                R = quat_xyzw_to_rot(rec["pose"]["orientation"])
+                t, R = pose_as_camera(rec["pose"])  # pose_frame(body/camera/레거시) 해석은 frames.py
                 obs.append((t, projection_matrix(K, R, t), np.asarray(w["corners"], dtype=float)))
     return obs
 
@@ -102,8 +93,8 @@ def reconstruct_windows_rays(records, scene_gt, det_conf_min=0.7, min_parallax_d
     """태민 window_recon_node.py의 수치 경로 재현 (corner별 전 관측 시선 LS 교점).
 
     재현 범위: det_conf ≥ det_conf_min 창문의 corner_vis=1 관측만,
-    시선 d = normalize(((u−cx)/fx, (v−cy)/fy, 1)) → world 변환(body≡camera 항등 —
-    오프라인 재현이므로 태민 노드의 EuRoC T_IC는 적용하지 않음, 방식 차이 측정이 목적),
+    시선 d = normalize(((u−cx)/fx, (v−cy)/fy, 1)) → world 변환(카메라 pose는 frames.pose_as_camera가
+    스트림의 pose_frame 표기대로 §6.1 표준 T_IC를 적용해 준다 — 2026-10-21),
     corner별 A += I − ddᵀ, b += (I−ddᵀ)c 누적 후 3×3 해.
     채택 조건도 태민 코드 그대로: corner 4개 전부 해 존재 + corner별 시차각
     (방향행렬 D의 최소 내적의 arccos)의 창문 최소가 min_parallax_deg 이상.
@@ -115,8 +106,7 @@ def reconstruct_windows_rays(records, scene_gt, det_conf_min=0.7, min_parallax_d
     colors = {w["order_index"]: w["color"] for w in scene_gt["windows"]}
     acc = {}  # (order_index, ci) -> [A(3,3), b(3,), dirs(list)]
     for rec in records:
-        R = quat_xyzw_to_rot(rec["pose"]["orientation"])
-        c = np.asarray(rec["pose"]["position"], dtype=float)
+        c, R = pose_as_camera(rec["pose"])
         for win in rec["vision"]["windows"]:
             if win["det_conf"] < det_conf_min:
                 continue

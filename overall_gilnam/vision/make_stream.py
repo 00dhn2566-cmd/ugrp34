@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from color_judge import load_color_config
+from frames import camera_pose_to_body_pose
 from gt_stream import labels_to_message
 from synth_scene import load_intrinsics, make_scene, make_trajectory, project, to_label_lines
 
@@ -27,9 +28,13 @@ CONVENTIONS_MD = """\
 
 - world: Z-up, X-전방, 미터 단위.
 - camera: OpenCV 관례 (+Z 광축, +X 우, +Y 하). u = fx·Xc/Zc + cx, v = fy·Yc/Zc + cy.
-- pose = T_world_cam (world 상 카메라 자세): position t_wc[3], orientation quaternion (x,y,z,w).
-  변환: X_cam = R_wc^T (X_world − t_wc), 투영행렬 P = K·[R_wc^T | −R_wc^T·t_wc].
-- 이 스트림에서는 **body ≡ camera** 로 선언한다 (IMU-카메라 외부 캘리브레이션 항등 고정).
+- pose 블록의 프레임은 `pose.pose_frame` 필드가 말한다 (2026-10-21 잠정 확정, 루트 spec §6.1):
+  - `"body"` (기본값): position/orientation = T_world_body — IMU/body 프레임(x 전방/y 좌/z 상).
+    카메라 pose는 T_world_cam = T_world_body · T_IC 로 얻는다. T_IC 표준값(§6.1): R_IC = [[0,0,1],[−1,0,0],[0,−1,0]], 병진 0.
+    참조 구현: `vision/frames.py` (`pose_as_camera`). 태민 노드에 그대로 물릴 수 있다.
+  - `"camera"`: position/orientation = T_world_cam (OpenCV 광학 프레임) — E2E 리허설 비교용.
+  - 필드 없음 = 2026-10-21 이전 파일 = `"camera"`로 해석 (당시 선언 body ≡ camera).
+- 카메라 pose 사용: X_cam = R_wc^T (X_world − t_wc), 투영행렬 P = K·[R_wc^T | −R_wc^T·t_wc].
 - look-at: z_cam = normalize(target − eye), x_cam = normalize(cross(z_cam, [0,0,1])),
   y_cam = cross(z_cam, x_cam), R_wc = [x_cam y_cam z_cam] (열벡터).
 - 창문: 수직 평면(pitch 0), normal n은 접근측을 향함. 접근측에서 본(시선 = −n)
@@ -52,8 +57,14 @@ def _round_message(msg):
     return msg
 
 
-def generate_stream(seed=42, out_dir="sample_stream"):
-    """스트림 3종 파일 생성. 반환: 통계 dict (프레임 수, 경로)."""
+def generate_stream(seed=42, out_dir="sample_stream", pose_frame="body"):
+    """스트림 3종 파일 생성. 반환: 통계 dict (프레임 수, 경로).
+
+    pose_frame: "body"(기본, §6.1 표준 — 카메라 pose를 T_IC로 IMU/body pose로 변환해 기록)
+                | "camera"(카메라 pose 그대로). 기록된 블록에 pose_frame 필드로 명시된다.
+    """
+    if pose_frame not in ("body", "camera"):
+        raise ValueError(f"pose_frame must be 'body' or 'camera', got {pose_frame!r}")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     intr = load_intrinsics(VISION_DIR / "synth_intrinsics.yaml")
@@ -66,13 +77,17 @@ def generate_stream(seed=42, out_dir="sample_stream"):
         for frame_id, pose in enumerate(traj):
             lines = to_label_lines(project(scene, pose, intr["K"]))
             msg = _round_message(labels_to_message(lines, pose["timestamp"], frame_id, config))
+            position, quat_xyzw = pose["position"], pose["quat_xyzw"]
+            if pose_frame == "body":
+                position, quat_xyzw = camera_pose_to_body_pose(position, quat_xyzw)
             record = {
                 "vision": msg,
                 "pose": {
                     "timestamp": pose["timestamp"],
                     "frame": "world",
-                    "position": _round_list(pose["position"], METER_DECIMALS),
-                    "orientation": _round_list(pose["quat_xyzw"], QUAT_DECIMALS),
+                    "pose_frame": pose_frame,
+                    "position": _round_list(list(position), METER_DECIMALS),
+                    "orientation": _round_list(list(quat_xyzw), QUAT_DECIMALS),
                 },
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -81,8 +96,8 @@ def generate_stream(seed=42, out_dir="sample_stream"):
         "seed": seed,
         "intrinsics": {k: v for k, v in intr.items() if k != "K"},
         "conventions": "world Z-up X-forward (m) / camera OpenCV +Z optical / "
-                       "pose T_world_cam quat xyzw / corners TL->TR->BR->BL from approach side / "
-                       "body==camera — 전문은 README_stream.md",
+                       f"pose_frame={pose_frame} (body: T_world_body, camera: T_world_cam; quat xyzw; §6.1 T_IC) / "
+                       "corners TL->TR->BR->BL from approach side — 전문은 README_stream.md",
         "windows": [
             {
                 "order_index": w["order_index"],
@@ -99,14 +114,14 @@ def generate_stream(seed=42, out_dir="sample_stream"):
     gt_path.write_text(json.dumps(scene_gt, ensure_ascii=False, indent=2), encoding="utf-8")
 
     readme_path = out / "README_stream.md"
-    readme_path.write_text(_readme_md(seed, len(traj)), encoding="utf-8")
+    readme_path.write_text(_readme_md(seed, len(traj), pose_frame), encoding="utf-8")
     return {"frames": len(traj), "jsonl": jsonl_path, "scene_gt": gt_path, "readme": readme_path}
 
 
-def _readme_md(seed, n_frames):
+def _readme_md(seed, n_frames, pose_frame="body"):
     return f"""# sample_stream — 태민(VIO)용 합성 §5 + GT pose 스트림
 
-> 생성: `python make_stream.py --seed {seed} --out sample_stream/` (overall_gilnam/vision/에서)
+> 생성: `python make_stream.py --seed {seed} --pose-frame {pose_frame} --out sample_stream/` (overall_gilnam/vision/에서)
 > 프레임 {n_frames}개 @30Hz. 창문 3개(red→green→blue = order 0→1→2) 순서 통과 궤적.
 > intrinsics는 `../synth_intrinsics.yaml`의 임시값 — 윤호가 spec §6 기입 시 교체 후 재생성.
 
@@ -118,10 +133,11 @@ def _readme_md(seed, n_frames):
 
 ```json
 {{"vision": <§5 메시지 (window_detection_spec_v0.2)>,
-  "pose": {{"timestamp": <int ns>, "frame": "world",
+  "pose": {{"timestamp": <int ns>, "frame": "world", "pose_frame": "{pose_frame}",
            "position": [x,y,z], "orientation": [qx,qy,qz,qw]}}}}
 ```
 
+- `pose_frame`: 이 파일은 `"{pose_frame}"`. 해석 규칙은 위 관례 절. 소비 코드는 `vision/frames.py: pose_as_camera`로 읽을 것.
 - `vision.timestamp == pose.timestamp` (int ns, 30Hz 간격 33,333,333ns).
 - **GT 스트림이므로 det_conf = color_conf = 1.0.**
 - vis=0인 corner는 화면 밖 추정 좌표(0~1280/0~720 이탈 가능) — 정책 C와 동일 의미.
@@ -136,7 +152,8 @@ corner 순서와 동일: TL→TR→BR→BL).
 
 1. 같은 창문이 4 corner 모두 vis=1로 보이는, 시차 있는 두 프레임 A·B를 고른다
    (position 차이 ≥ 0.5m 권장 — sway 덕에 순수 전진 구간에도 횡 시차 있음).
-2. 각 프레임의 pose로 P = K·[R_wc^T | −R_wc^T·t_wc] 구성 (quat→R 후).
+2. 각 프레임의 pose를 카메라 pose로 바꾼 뒤(`pose_frame`이 body면 T_world_cam = T_world_body·T_IC,
+   `frames.pose_as_camera`) P = K·[R_wc^T | −R_wc^T·t_wc] 구성.
 3. `cv2.triangulatePoints(P_A, P_B, corners_A.T, corners_B.T)` → 동차좌표 나눗셈.
 4. `scene_gt.json`의 해당 창문 `corners_3d`와 대조 — **목표 오차 mm 수준**
    (생성기 자기일관성은 `tests/test_synth_scene.py`의 왕복 테스트로 보증됨).
@@ -149,6 +166,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="합성 §5+pose 샘플 스트림 생성")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", type=str, default="sample_stream")
+    parser.add_argument("--pose-frame", choices=["body", "camera"], default="body",
+                        help="pose 블록 프레임 (기본 body = 루트 spec §6.1 표준)")
     args = parser.parse_args()
-    stats = generate_stream(seed=args.seed, out_dir=args.out)
+    stats = generate_stream(seed=args.seed, out_dir=args.out, pose_frame=args.pose_frame)
     print(f"frames={stats['frames']} → {stats['jsonl']}")

@@ -9,7 +9,7 @@
     "cy": 360.0,
     "distortion": []
   },
-  "conventions": "world Z-up X-forward (m) / camera OpenCV +Z optical / pose T_world_cam quat xyzw / corners TL->TR->BR->BL from approach side / body==camera — 전문은 README_stream.md",
+  "conventions": "world Z-up X-forward (m) / camera OpenCV +Z optical / pose_frame=body (body: T_world_body, camera: T_world_cam; quat xyzw; §6.1 T_IC) / corners TL->TR->BR->BL from approach side — 전문은 README_stream.md",
   "windows": [
     {
       "order_index": 0,
