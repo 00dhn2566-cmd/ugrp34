@@ -69,13 +69,13 @@ python3 interface/schemas.py validate ../control_seoungjin/input/lookat_mission.
 | 입력 (성진 내부) | 출력 (윤호 기대) |
 |---|---|
 | §2 `trajectory.json` `{dt, trajectory_hash, controller_profile, t[], pos[][3], yaw_rad[]}` | `isaacsim_trajectory.json` `{fps, frames[{time, position, yaw_rad, orientation_quat_wxyz}]}` |
-| 비행 로그 `sim_result_baked.mat` `{sim_time, prop1_w..prop4_w}` | `isaacsim_motor_commands.json` `{fps, frames[{time, motor_cmd_w[4]}]}` |
+| 비행 로그 `sim_result*.mat` `{sim_time, motor_cmd_w1..motor_cmd_w4}` (제어기 setpoint, rad/s) | `isaacsim_motor_commands.json` `{fps, frames[{time, motor_cmd_w[4]}]}` (unsigned) |
 
 ```bash
 python isaacsim_export.py \
     --trajectory output/trajectory.json \
     --flight-mat controller/Quadcopter-Drone-Model-Simscape/sim_result_baked.mat \
-    --out-dir output/
+    --out-dir output/        # [--allow-measured]  setpoint 채널 없는 구운 로그 대역용
 ```
 
 **설계 결정 3가지**
@@ -112,7 +112,7 @@ python isaacsim_export.py \
 | tail 잔류(도착 후 6s) | pitch·roll RMS 0.000° | — |
 | `isaacsim_trajectory.json` | 2464 프레임 / fps 100 ✅ | 2224 프레임 / fps 100 ✅ |
 | `isaacsim_motor_commands.json` | 3741 프레임 / fps 114.6 ✅ | 3465 프레임 / fps 114.6 ✅ |
-| `motor_cmd_w` 범위 | −825.9 ~ 824.6 rad/s | −825.7 ~ 824.8 rad/s |
+| `motor_cmd_w` 범위 (당시 실측 signed 대역; 현재는 unsigned setpoint로 바뀜 — 아래 주의) | −825.9 ~ 824.6 rad/s | −825.7 ~ 824.8 rad/s |
 
 윤호 쪽 소비 코드로도 확인: `infer_kind` 자동 판별, `TrajectoryFile`/
 `MotorCommandsFile` dataclass 왕복, `trajectory_frame_to_T()` 정상 4×4 반환.
@@ -128,8 +128,16 @@ python isaacsim_export.py \
 
 기존 테스트 **169개 전부 통과** (회귀 0).
 
-> **주의**: `motor_cmd_w`는 계산값이 아니라 Simscape 시뮬의 `prop1_w~prop4_w`
-> **실측 로그**다. MATLAB을 돌리지 않으면 이 파일은 생성되지 않는다.
+> **주의 (2026-10-21 수정)**: 윤호 스키마(`isaacsim_motor_commands.schema.json`,
+> CONVENTIONS.md "Control→sim boundary is the per-motor angular-velocity setpoint")가
+> 정의하는 `motor_cmd_w`는 **제어기 setpoint, unsigned** 이지 플랜트 실측이 아니다.
+> 위 왕복은 당시 `prop1_w~prop4_w` **실측(signed)** 을 그대로 내보낸 것이라 계약
+> 위반이었다. 지금 `isaacsim_export.py`는 setpoint 채널 `motor_cmd_w1..4`
+> (`run_sample_sim.m`이 남기는 이름)를 읽고 abs() 를 적용한다. 구운 모델
+> (`run_traj_baked`) 로그에는 아직 setpoint 채널이 없어 `--allow-measured` 를
+> 명시해야만 |prop*_w| 대역으로 내보내며 ★경고를 찍는다 — 정답은 구운 모델에
+> `motor_cmd_w1..4` 로깅을 추가하는 것 (controller_cpp README "cmd 탭 추가").
+> MATLAB을 돌리지 않으면 이 파일은 생성되지 않는다.
 
 ---
 
@@ -137,7 +145,7 @@ python isaacsim_export.py \
 
 ### 5.1 로터 인덱스 → 기하 + 회전방향 **미확정**
 
-`motor_cmd_w = [w1,w2,w3,w4]`를 현재 **Simulink Prop1~4 번호 순서 그대로** 내보낸다.
+`motor_cmd_w = [w1,w2,w3,w4]`를 현재 **Simulink 모터 1~4 번호 순서 그대로** (unsigned) 내보낸다.
 Isaac Sim이 어느 암에 어느 값을 물릴지는 윤호 결정 사항이다
 (`interface/README.md`에도 같은 취지로 적혀 있음). **순서가 틀리면 파일은 VALID인데
 드론이 뒤집힌다.** 인덱스 `0..3` 각각에 대해 (a) 어느 암/위치, (b) CW/CCW를
