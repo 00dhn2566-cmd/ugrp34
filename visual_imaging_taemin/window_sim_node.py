@@ -5,6 +5,8 @@
 실제 파이프라인에서는 이 노드 전체가 실제 검출 노드로 교체된다.
 """
 import json
+import os
+import sys
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -15,13 +17,10 @@ from std_msgs.msg import String
 W, H = 1280, 720
 FX, FY, CX, CY = 600.0, 600.0, 640.0, 360.0
 
-# TODO: 실제 extrinsics 있으면 교체 (EuRoC cam0->IMU)
-T_IC = np.array([
-    [ 0.0148655429818, -0.999880929698,   0.00414029679422, -0.0216401454975],
-    [ 0.999557249008,   0.0149672133247,  0.0257155299480,  -0.0646769867680],
-    [-0.0257744366974,  0.00375618835797, 0.999660727178,    0.00981073058949],
-    [0, 0, 0, 1]])
-R_IC, p_IC = T_IC[:3, :3], T_IC[:3, 3]
+# T_IC (cam -> IMU/body): spec §6.1 — 태민 window_recon_node.py 의 상수가 단일 진실이므로
+# 복제하지 않고 그 모듈에서 읽어 온다 (같은 폴더의 스크립트로 실행되는 전제).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from window_recon_node import T_IC, R_IC, p_IC  # noqa: E402
 
 DETECT_PERIOD = 0.5   # 검출 주기 (초) — 초당 2회
 PIX_NOISE = 1.0
