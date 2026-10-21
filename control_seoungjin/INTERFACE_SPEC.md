@@ -212,8 +212,12 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   이후 기준 미정의는 발산 위험.
 
 **한계 예산 규칙**: `limits`는 지터 상쇄 오프셋 예산을 **빼고** 작성한다.
-`limits ≤ (1 − JITTER_MARGIN=0.2) × 물리 한계(v2.0 / a2.0 / j10)` — 초과 시 거부(error).
-상쇄 수정이 얹혀도 최종 궤적이 물리 한계 안에 남게 하기 위한 몫이다.
+`limits ≤ (1 − JITTER_MARGIN=0.2) × 물리 한계(v2.0 / a2.0 / j10 / snap80)` =
+v 1.6 / a 1.6 / j 8 / snap 64. **초과분은 거부가 아니라 상한으로 클램프**하고
+회신 `adjustments`에 `LIMITS_CLAMPED`로 통지한다 (계약 v0.2 완화 정책, §7;
+`traj_pipeline.load_mission`). 옵션 `"strict": true`일 때만 v0.1처럼 즉시 거부
+(`ValueError` → `LIMITS_OVER_BUDGET`). 상쇄 수정이 얹혀도 최종 궤적이 물리 한계
+안에 남게 하기 위한 몫이다.
 
 **동적 배분 (지터 실측 연동)**: 승인 기준은 위 0.2로 고정(RL 계약 정상성)하되,
 **실제 계획에 쓰는 유효 한계**는 원장의 최근 잔류 지터(신선도 24h, 최근 3건
@@ -221,10 +225,24 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
 (유효 v/a ≤1.4, j ≤7), 심각(>4°)이면 0.35로 온건화. "지터 우선, 속도는 남는
 자산" 원칙의 동적판. 적용 내역은 `pipeline_meta.json`에 기록.
 
-**xy 동시 기동 주의**: 대각 이동(어느 샘플에서든 x·y가 동시에 유의미하게 움직임)이
-있는 미션은 스무더가 xy 한계에 ×0.7 축배분을 적용하므로, `limits`의 v/a/j도
-×0.7을 추가 반영해 작성할 것 (예: v ≤ 1.12). 안 그러면 스무더가 개입해 계획
-시각과 실제 궤적이 어긋난다 (개입량은 `pipeline_meta.json`의 `max_dev_m` 경고로 확인).
+**`limits` 적용 규칙 (정확한 의미 — 2026-10-21 명문화)**. 윤호
+`waypoints_config.schema.json`(`limits` description)과 `interface/README.md`
+Conventions는 "`limits` are enforced PER-AXIS"라고만 적고 있는데, 이 모듈이
+실제로 하는 일은 단계별로 다르다. 스키마 문구와 다른 부분을 아래에 전부 적는다
+(스키마 쪽 갱신 요청 중):
+
+| 단계 | 함수 | `limits` 해석 |
+|---|---|---|
+| ① 계획(시간 부여) | `path_time.plan_waypoints` | **축별(per-axis)**. 숫자 하나면 x/y/z 동일, `[x,y,z]`면 축별. 스키마 문구와 일치하는 유일한 단계. |
+| ② 예산 상한 | `traj_pipeline.load_mission` | 키별로 `(1−JITTER_MARGIN 0.2)×물리` = **v 1.6 / a 1.6 / j 8 / snap 64** 로 **클램프**(축별 `min`) 후 `LIMITS_CLAMPED` 통지 (`strict:true`면 거부). 이 상한은 스키마에 없으므로 RL은 이 숫자를 알고 보내야 요청값 그대로 날 수 있다. |
+| ③ 성형 | `traj_shaping.smooth_with_axis_sharing` | 입력에서 x·y가 **같은 샘플에서 동시에** 움직이면 xy 한계(v/a/j 셋 다)에 **×0.7 축배분**, z는 전한계. 적용 여부는 `trajectory_report.shaping.xy_share_applied`(0.7 또는 1.0). |
+| ④ 게이트(최종 수용) | `traj_shaping.traj_gate` | **xy는 노름** `hypot(vx,vy) ≤ 물리 한계`(v2.0/a2.0/j10), z는 축별. 즉 최종 기준은 per-axis가 **아니다** — 대각 이동이 축별 한계를 지켜도 노름이 넘으면 `GATE_EXCEEDED`. |
+
+요약: "per-axis"는 ①에만 맞고, 수용 여부는 ②+④가 정한다. 조정 없이 요청대로
+날게 하려면 `limits ≤ 예산(1.6/1.6/8/64)` 이고, 대각 이동(어느 샘플에서든 x·y가
+동시에 유의미하게 움직임)이 있는 미션은 ③ 때문에 `limits`의 v/a/j에 ×0.7을
+추가 반영해 작성할 것 (예: v ≤ 1.12). 안 그러면 스무더가 개입해 계획 시각과
+실제 궤적이 어긋난다 (개입량은 `pipeline_meta.json`의 `max_dev_m` 경고로 확인).
 
 ## 2. 궤적 (`output/trajectory.mat` + `trajectory.json`)
 
@@ -915,7 +933,7 @@ E       = integral(P dt)
 여전히 권장 (조정 없이 요청 그대로 날게 하려면): limits ≤ 예산, xy 대각 ×0.7,
 저크-가능 Tm ≥ (60·A/(0.8·j_max))^⅓, 스텝 대신 시간-현실적 궤적.
 
-### 회신 스키마 (`trajectory_report.json`, contract_version 0.1)
+### 회신 스키마 (`trajectory_report.json`, contract_version 0.2 — `traj_report.CONTRACT_VERSION`)
 
 ```json
 {
@@ -936,7 +954,7 @@ E       = integral(P dt)
     "keep_out_min_clearance_m": 0.8,        // 구역 최소 이격 실측 (음수 = 침범)
     "fidelity_gaps": {"plan": 0.05, "track": 0.02}   // 갭 분해: 의도→궤적 / 궤적→비행
   },
-  "contract_version": "0.1"
+  "contract_version": "0.2"
 }
 ```
 

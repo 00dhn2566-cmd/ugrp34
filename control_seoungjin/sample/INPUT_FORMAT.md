@@ -3,6 +3,16 @@
 다른 사람이 waypoint를 만들어서 이 파이프라인(`run_and_log.py`)에 넣을 때 쓰는 입력 파일 스펙이다.
 파일 이름은 자유(`input.yaml`, `input.json`, `config.yaml` 등 무엇이든 상관없음) — 확장자(`.yaml`/`.yml`/`.json`)로 포맷만 자동 판별한다.
 
+> **진입점 정리 (2026-10-21).** `sample/run_and_log.py`는 개인 테스트 케이스 경로다
+> (`docs/HANDOFF_PATH_TO_CONTROLLER.md` 파일 위치 규칙). 제어 모듈의 **공식 진입점은
+> `control_seoungjin/traj_pipeline.py`** (`python traj_pipeline.py plan --input
+> input/<mission>.json`, [SETUP.md](../SETUP.md) · [EXTERNAL_INTERFACE.md](../EXTERNAL_INTERFACE.md))
+> 이며, 아래 코어 3키는 두 경로에서 동일하게 읽힌다. 윤호 Isaac Sim 계약 파일
+> (`isaacsim_trajectory.json`, `isaacsim_motor_commands.json`)의 **생산자는
+> `control_seoungjin/isaacsim_export.py` 하나**다 — `run_and_log.py`도 그 함수를 호출한다.
+> 윤호 `interface/` 스키마 description 이 `run_and_log.py`를 진입점/생산자로 적고 있는 것은
+> 갱신 요청 중 (traj_pipeline.py / isaacsim_export.py 로).
+
 > **RL seam 코어 스키마.** 아래 3키(`waypoints`/`limits`/`dt`)는 윤호
 > `reinforcement_yunho/interface/waypoints_config.schema.json`과 **바이트 호환**이다
 > (JSON으로 쓸 때). 그 스키마는 `additionalProperties: false`라 **키를 하나라도
@@ -43,7 +53,7 @@ dt: <number>            # (선택, 기본 0.01) 출력 시간 간격 [s]
 | `dt` | X (기본 0.01) | 숫자 [s] | 궤적/피드를 몇 초 간격으로 샘플링할지. |
 
 - `yaw`(기수 방향)는 입력으로 받지 않는다 — 진행 방향(속도 벡터의 heading)으로 자동 계산됨.
-- `limits`는 축별(x/y/z)로 독립 적용되는 제약이라, 대각선 이동 시 벡터 크기 기준 속도/가속도가 `v_max`/`a_max`보다 커질 수 있음 (README "경로 관련 주의사항" 참고).
+- `limits`는 **계획(`plan_waypoints`) 단계에서는** 축별(x/y/z)로 독립 적용되는 제약이라, 대각선 이동 시 벡터 크기 기준 속도/가속도가 `v_max`/`a_max`보다 커질 수 있음 (README "경로 관련 주의사항" 참고). 이 `run_and_log.py` 경로는 거기서 끝이지만, 공식 진입점 `traj_pipeline.py` 경로는 그 위에 **예산 클램프(1.6/1.6/8/64) → 대각 동시 기동 시 xy ×0.7 축배분 → xy 노름 게이트**가 더 얹힌다 — 정확한 규칙은 [`INTERFACE_SPEC.md` §1 "`limits` 적용 규칙"](../INTERFACE_SPEC.md) 표. 윤호 스키마의 "enforced PER-AXIS" 문구는 계획 단계에만 해당한다.
 - 필수 필드가 빠지면 `run_and_log.py`가 `KeyError`로 즉시 실패한다 (별도 검증/기본값 처리 없음).
 
 ## 예시
