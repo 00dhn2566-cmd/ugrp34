@@ -11,6 +11,8 @@
 렌더 규칙: 배경·클러터는 S < hsv_min_s(color_order.yaml)로 제한해 색 판정
 오답 소스를 원천 차단. 창문 테두리 색은 같은 config의 order별 첫 h_range
 중앙 H (config가 곧 렌더 기준 — spec §3.1 단일 기준 원칙).
+창문 형상은 spec §2.5: 라벨 corner = 개구부 모서리, 색 프레임은 corner "바깥쪽"에
+그리고 개구부 안쪽은 건드리지 않는다 (투명 — 뒤 창문·배경이 그대로 보임).
 """
 
 import argparse
@@ -20,7 +22,7 @@ import cv2
 import numpy as np
 import yaml
 
-from color_judge import load_color_config
+from color_judge import draw_window_frame, load_color_config
 from synth_scene import (
     IMG_H,
     IMG_W,
@@ -65,7 +67,7 @@ def _render_frame(visible, scene, pose, config, rng):
         pts = np.asarray(p["corners_px"], dtype=np.int32)
         sides = [np.linalg.norm(pts[i] - pts[(i + 1) % 4]) for i in range(4)]
         thickness = int(np.clip(min(sides) * BORDER_FRAC, BORDER_MIN, BORDER_MAX))
-        cv2.polylines(hsv, [pts], isClosed=True, color=border[p["order_index"]], thickness=thickness)
+        draw_window_frame(hsv, pts, border[p["order_index"]], thickness)  # §2.5: corner 바깥에 프레임
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
