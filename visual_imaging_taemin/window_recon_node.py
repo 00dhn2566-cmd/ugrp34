@@ -2,7 +2,10 @@
 """창문 3D 복원 노드 — 태민 파트의 실제 모듈.
 /window_detections (§5.1 JSON) + /ov_msckf/poseimu 를 구독해,
 포즈 버퍼에서 타임스탬프를 맞춰 corner별 관측 시선을 누적하고,
-2초마다 삼각측량 결과(창문 중심·크기)를 로그 및 /window_positions 로 반환한다.
+2초마다 삼각측량 결과(창문 맵)를 로그 및 /window_positions 로 반환한다.
+/window_positions 의 JSON 은 overall_gilnam/docs/state_window_interface_spec_v0_1.md §6.2
+(창문 3D 맵 초안, 미확정) 의 필드명을 따른다 — timestamp/frame/windows[{track_id, order_index,
+color, corners_3d, center, normal, size_wh, n_obs, conf, passed}].
 """
 import json
 from collections import deque
@@ -32,6 +35,8 @@ DET_CONF_MIN = 0.7        # §5.2 신뢰도 필터
 MIN_PARALLAX_DEG = 2.0    # 삼각측량 최소 시차각 문턱
 POSE_TOL_NS = 20_000_000  # 검출-포즈 타임스탬프 허용 오차 20ms
 REPORT_PERIOD = 2.0       # 결과 갱신 주기 (초)
+CONF_PARALLAX_REF_DEG = 10.0  # conf 산출 기준: 최소 시차각이 이 값 이상이면 conf=1 (state_window §6.2 — 산출 방식은 태민 정의)
+MAP_FRAME = "world"       # state_window §6.2 frame — VIO odom 원점 (world↔odom 정렬은 §2.1-① 초기 1회 공유)
 
 
 def quat_to_rot(qx, qy, qz, qw):
@@ -39,6 +44,15 @@ def quat_to_rot(qx, qy, qz, qw):
         [1-2*(qy*qy+qz*qz), 2*(qx*qy-qz*qw),   2*(qx*qz+qy*qw)],
         [2*(qx*qy+qz*qw),   1-2*(qx*qx+qz*qz), 2*(qy*qz-qx*qw)],
         [2*(qx*qz-qy*qw),   2*(qy*qz+qx*qw),   1-2*(qx*qx+qy*qy)]])
+
+
+def normal_from_corners(c):
+    """corner 4점(접근측에서 본 좌상→우상→우하→좌하) → 접근측을 향하는 단위 법선.
+    state_window spec §3.1 잠정 확정: n̂ = normalize(cross(c3−c0, c1−c0)) = (BL−TL)×(TR−TL).
+    cross(c1−c0, c3−c0) 는 반대 방향이므로 인자 순서 주의."""
+    n = np.cross(c[3] - c[0], c[1] - c[0])
+    norm = np.linalg.norm(n)
+    return n / norm if norm > 0 else n
 
 
 class CornerAccumulator:
@@ -69,6 +83,7 @@ class WindowReconNode(Node):
         self.pose_buf = deque(maxlen=600)   # (t_ns, R_WI, p_WI) 약 30초 분량
         self.acc = {}                        # (order_index, corner번호) -> CornerAccumulator
         self.colors = {}                     # order_index -> color (디버깅용)
+        self.last_det_t = 0                  # 마지막으로 누적한 검출 timestamp (ns) — 맵 갱신 시각
         self.n_det = 0
         self.n_nopose = 0
         self.create_subscription(
@@ -85,6 +100,7 @@ class WindowReconNode(Node):
             self.pose_buf.clear()
             self.acc.clear()
             self.colors.clear()
+            self.last_det_t = 0
         q = msg.pose.pose.orientation
         p = msg.pose.pose.position
         self.pose_buf.append((t_ns, quat_to_rot(q.x, q.y, q.z, q.w),
@@ -125,6 +141,7 @@ class WindowReconNode(Node):
                 d_C = np.array([(u - CX) / FX, (v - CY) / FY, 1.0])
                 d_C /= np.linalg.norm(d_C)
                 self.acc.setdefault((oi, ci), CornerAccumulator()).add(c_W, R_WC @ d_C)
+        self.last_det_t = max(self.last_det_t, int(det["timestamp"]))
         self.n_det += 1
 
     def report(self):
@@ -151,21 +168,37 @@ class WindowReconNode(Node):
                 continue
             pts = np.array(pts)
             center = pts.mean(axis=0)
+            normal = normal_from_corners(pts)
             width = float(np.linalg.norm(pts[1] - pts[0]))
             height = float(np.linalg.norm(pts[2] - pts[1]))
+            conf = float(np.clip(min_ang / CONF_PARALLAX_REF_DEG, 0.0, 1.0))
             self.get_logger().info(
                 f"W{oi}({self.colors.get(oi)}): center=({center[0]:.2f}, {center[1]:.2f}, "
                 f"{center[2]:.2f})m, {width:.2f}x{height:.2f}m, "
-                f"관측 {n_obs}개, 최소 시차각 {min_ang:.1f}도")
+                f"관측 {n_obs}개, 최소 시차각 {min_ang:.1f}도, conf {conf:.2f}")
+            r3 = lambda v: [round(float(x), 3) for x in v]
             results.append({
+                # --- state_window_interface_spec_v0_1.md §6.2 (초안) ---
+                # track_id: 누적기가 order_index 단위라 현재는 색당 창문 1개 가정 (S-2 다중 개체
+                # 추적은 §3.2 확정 후 — 같은 색 창문 2개가 들어오면 지금은 하나로 섞인다).
+                "track_id": oi,
                 "order_index": oi, "color": self.colors.get(oi),
-                "center_w": [round(float(x), 3) for x in center],
-                "corners_w": [[round(float(x), 3) for x in p] for p in pts],
+                "corners_3d": [r3(p) for p in pts],   # world, m. 접근측 기준 좌상→우상→우하→좌하
+                "center": r3(center),
+                "normal": r3(normal),                  # 단위벡터, 접근측을 향함 (§3.1)
+                "size_wh": [round(width, 3), round(height, 3)],
+                "n_obs": n_obs,
+                "conf": round(conf, 2),
+                "passed": False,                       # 소유권 미결 (§7) — 맵은 마킹하지 않음
+                # --- 구 필드명 (호환용, 삭제 예정) — prototype_demo 소비자가 아직 읽는다 ---
+                "center_w": r3(center), "corners_w": [r3(p) for p in pts],
                 "width": round(width, 3), "height": round(height, 3),
-                "n_obs": n_obs, "min_parallax_deg": round(min_ang, 1)})
+                "min_parallax_deg": round(min_ang, 1)})
         if results:
             m = String()
-            m.data = json.dumps({"windows": results})
+            m.data = json.dumps({"timestamp": self.last_det_t,   # int ns — §4 공통 규약
+                                 "frame": MAP_FRAME,
+                                 "windows": results})
             self.pub.publish(m)
 
 
