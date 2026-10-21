@@ -81,7 +81,7 @@
 |---|---|---|
 | `IsaacSimBackend(PhysicsBackend)`: `reset(start_pos, params)` / `step(waypoint_world, dt)` → `StepPhysics` | ⛔ | 인터페이스 고정 — 환경 코드 무수정 |
 | 벡터화(num_envs) | ⛔ | `window_env.py` 단일 인스턴스 가정. Isaac 병렬은 사실상 **Isaac Lab** 방식(한 스테이지에 N 복제) — 직접 구현 부담 큼. PyBullet은 SubprocVecEnv로 해결 중 |
-| 관측 17차원·GT 치트 금지·노이즈 주입 | ✅ | `state_window_adapter.py` — 단 corner→normal **폴백** 부호가 아직 `cross(c1−c0, c3−c0)`(확정 부호 반대, 08-11 요청). 명시 `normal` 필드가 있으면 무해 |
+| 관측 17차원·GT 치트 금지·노이즈 주입 | ✅ | `state_window_adapter.py` — corner→normal 폴백 부호를 spec §3.1 확정값 `cross(c3−c0, c1−c0)`(접근측 방향 = `Window.normal`)로 정정(10-21). 태민 `/window_positions`에 `normal` 필드가 없어 이 폴백이 실제 경로 |
 | 정책 `step` 파라미터 기록 | ⚠ | 학습 0.3 vs 기본 0.6 불일치로 성공률 95%→5% 오독 사례 — config에 박을 것 |
 | 보상 가중치 | ⛔ | 스텁(안건 2-7) |
 

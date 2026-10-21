@@ -152,17 +152,17 @@ def _window_normal(win: Mapping[str, Any]) -> np.ndarray:
     """Unit window normal in world.
 
     Prefer the explicit ``normal`` field (spec §6.2). If absent, derive it from
-    the corners per the task/spec formula ``normalize(cross(c1-c0, c3-c0))`` with
-    CORNER_ORDER TL(0)->TR(1)->BR(2)->BL(3).
+    the corners per state_window_interface_spec_v0.1 §3.1 (잠정 확정 2026-08-08):
 
-    WARNING -- the normal ± direction is UNCONFIRMED (spec §3.1: "normal의 ±
-    방향 ... 확정 필요"; winding "접근측에서 본" is also OPEN). With the shared
-    ``common.geometry`` corner order this derived vector comes out **antiparallel**
-    to the env's ``Window.normal`` (which points toward the approach side / drone);
-    the derived one points *through* the window. So at contract-confirmation time
-    either (a) ship an explicit ``normal`` (used here as-is), or (b) pin the ±
-    convention so the derived normal matches the env's toward-approach sign. Until
-    then, GT streams should include ``normal`` to stay unambiguous.
+        n = normalize(cross(c3 - c0, c1 - c0))      # (BL-TL) x (TR-TL)
+
+    with CORNER_ORDER TL(0)->TR(1)->BR(2)->BL(3) wound clockwise as seen from the
+    approach side. The spec pins the sign: the normal points TOWARD the approach
+    side (the drone), which is exactly the env's ``Window.normal`` (``R[:, 2]``
+    = +Z_local of ``common.geometry``). The opposite order
+    ``cross(c1-c0, c3-c0)`` is antiparallel and is explicitly forbidden by §3.1.
+    This fallback is live at integration: 태민's ``/window_positions``
+    (``window_recon_node.py``) ships no ``normal`` field.
     """
     n = win.get("normal")
     if n is not None:
@@ -170,7 +170,8 @@ def _window_normal(win: Mapping[str, Any]) -> np.ndarray:
         if float(np.linalg.norm(v)) > 1e-9:
             return _normalize(v)
     c = np.asarray(win["corners_3d"], dtype=np.float64).reshape(4, 3)
-    return _normalize(np.cross(c[1] - c[0], c[3] - c[0]))
+    # spec §3.1: (BL-TL) x (TR-TL) -> toward the approach side == Window.normal
+    return _normalize(np.cross(c[3] - c[0], c[1] - c[0]))
 
 
 def _heading_yaw(
