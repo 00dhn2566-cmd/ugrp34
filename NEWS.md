@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-10-21 — 인터페이스 정합성 전수 리뷰 + 모듈별 수정 제안 branch (길남)
+
+**TL;DR**: 네 모듈 전부를 공유 계약(루트 spec §2.5/§6.1, state_window §3.1/§6.2, 윤호 schema, CONVENTIONS)과 대조해 **불일치 13건 확정**(high 5). 가장 큰 건 `T_IC`가 태민 node(EuRoC 값)·윤호 calib(identity)·윤호 export(camera pose)에서 **세 값이 공존**하는 것. 13건을 모듈별 `proposal/*` branch에서 고쳐 올렸다(12 fixed / 1 partial). **main에는 안 합쳤다 — 각자 자기 branch diff 보고 merge 여부 결정.** 넷을 합친 `integration/interface-trial-2026-10-21`은 conflict 0, 439 passed, E2E 리허설 main과 동일. 상세: [interface_review_2026-10-21](overall_gilnam/docs/interface_review_2026-10-21.md) · [interface_fix_trial_2026-10-21](overall_gilnam/docs/interface_fix_trial_2026-10-21.md) (§0에 git 명령).
+
+- **태민**: `proposal/vio-interface-fixes` 4 commit — T_IC → spec §6.1 표준값(08-29 액션 완료), TUM awk 열 순서·timestamp 정밀도, `/window_positions` §6.2 필드명+`normal`+`timestamp`, sim node policy C. ROS2 live 실행은 못 했으니 **EuRoC rehearsal 재실행 요청**.
+- **성진**: `proposal/control-interface-fixes` 4 commit — `motor_cmd_w`를 실측 `prop_w`가 아니라 controller setpoint(unsigned)로 export, isaacsim_* producer를 `isaacsim_export.py` 하나로, INTERFACE_SPEC §1/§7 모순 정리. **limits 의미(per-axis vs xy-norm)는 코드로 못 닫음 → 윤호 schema 문구와 합의 필요 (회의 안건)**. Simscape `run_traj_baked` tap 추가는 MATLAB 쪽이라 미수정.
+- **윤호**: `proposal/rl-interface-fixes` 4 commit — corner→normal 부호 `cross(c3−c0, c1−c0)`(08-11 요청), export_vio/export_stream GT pose를 body(IMU) frame으로, `procedural_render.py` frame+개구부(채운 색판 폐기), calib T_cam_imu 소유권을 spec §6.1로. **export_stream 기본 frame이 바뀌어 길남 reader와 어긋남 → 길남이 sample_stream 계약 결정 후 회신**. `interface/*.schema.json`의 성진 entry point·limits 문구 갱신 요청은 fix_trial §4.
+- **길남(본인)**: `proposal/vision-hsv-band-outside` 1 commit(본인 merge 예정). 할 일: sample_stream pose frame 결정, §6.2 track_id·conf 확정, 윤호 새 renderer 데이터셋으로 HSV 94.8% 재측정, 08-29 안건 추인 목록에 이번 3건(T_IC·motor_cmd_w·limits) 추가.
+- **전원**: 이 리뷰는 "코드가 스펙과 다르다"만 본 것. **스펙이 틀렸다고 보면 branch를 merge하지 말고 회의에서 말해 달라.**
+
+---
+
 ## 2026-08-29 — 2학기 개강 직전 현황 정리 + 회의 안건 (길남)
 
 **TL;DR**: 방학 checkpoint("Isaac 시뮬 + RL 훈련 완료")는 원래 정의대로는 미달 — Isaac 렌더러 6주째 차단. 대신 윤호 PyBullet 프로토타입으로 파이프라인 전 구간은 뚫렸고, 성진은 08-18~23에 동역학 문서화·0kg 재튜닝·지연 강건화를 진행했다(0kg 앵커 선택·`measAgeS` 생산자는 미결). **시뮬레이터 후보가 Isaac/PyBullet/Gazebo 3개**가 된 상태라 2학기 마일스톤·역할 분담을 첫 안건으로 올렸다. 안건 전체: [meeting_agenda_2026-08-29](overall_gilnam/docs/meeting_agenda_2026-08-29.md) (08-11 브리핑의 A1~A7을 잇는 문서). Isaac 전환 시 필요 요소 표: [ISAAC_MIGRATION_CHECKLIST](reinforcement_yunho/docs/ISAAC_MIGRATION_CHECKLIST.md).
