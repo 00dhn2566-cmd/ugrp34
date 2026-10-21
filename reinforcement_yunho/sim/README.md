@@ -61,7 +61,11 @@ python3 sim/export_dataset.py --mode from-metadata --metadata-dir <dir> --out <d
 ## Coordinate / projection contract (must match 길남 + §5)
 
 world Z-up X-forward (m) · camera OpenCV `+Z` optical / `+X` right / `+Y` down ·
-pose `T_world_cam` · window corners TL→TR→BR→BL. `build_label_lines` projects via
+render pose `T_world_cam` · window corners TL→TR→BR→BL. The *exported* pose
+streams (`export_vio.py`, `export_stream.py`) are the **IMU/body** pose
+(`T_world_body = T_world_cam · T_IC⁻¹`, body x fwd / y left / z up, root spec §6.1;
+standard `R_IC = [[0,0,1],[−1,0,0],[0,−1,0]]`, offset 0 — owner of the constant is
+태민's `window_recon_node.py`, mirrored as `common.T_IC_SPEC`). `build_label_lines` projects via
 `common.geometry.world_to_camera_cv`, which applies the **USD→CV flip**, so it
 takes the *USD* camera-prim pose; `scene_gen.cv_to_usd_transform` bridges a CV
 pose (`R_usd = R_cv @ diag(1,−1,−1)`). `smoke_test.py` cross-checks that the
@@ -77,8 +81,8 @@ Quaternion order is **per interface** (CONVENTIONS.md): §5 stream pose = **XYZW
 | to | artifact | how |
 |----|----------|-----|
 | **길남** | detection dataset | `export_dataset.py` → `images/labels/{train,val,test}` (80/10/10) + `meta.jsonl`. 길남 sets `overall_gilnam/vision/window_pose.yaml:path` to the dataset root (윤호 does **not** ship a competing `window_pose.yaml`) and runs `eval_corners.py` on it. |
-| **태민** | §5 GT-pose stream | `export_stream.py` → JSONL `{"vision": <§5 msg>, "pose": {...xyzw...}}`, **built by 길남's `gt_stream.labels_to_message`** (`overall_gilnam/vision/gt_stream.py`), matching `sample_stream/sample_stream.jsonl`. |
-| **태민** | flight bag (VIO/OpenVINS) | `export_vio.py` → EuRoC-ASL `mav0/` (cam0 ~20 Hz, imu0 200 Hz, GT WXYZ, int-ns shared clock). Pairs with `calib/` Kalibr YAMLs. |
+| **태민** | §5 GT-pose stream | `export_stream.py` → JSONL `{"vision": <§5 msg>, "pose": {...xyzw...}}`, **built by 길남's `gt_stream.labels_to_message`** (`overall_gilnam/vision/gt_stream.py`), same shape as `sample_stream/sample_stream.jsonl`. **Pose block = IMU/body pose** (root spec §6.1; camera pose converted via the standard T_IC, `common.T_IC_SPEC`). `pose_frame="camera"` gives 길남's body≡camera rehearsal stream, which §6.1 says must not go straight into 태민's node. |
+| **태민** | flight bag (VIO/OpenVINS) | `export_vio.py` → EuRoC-ASL `mav0/` (cam0 ~20 Hz, imu0 200 Hz, GT WXYZ, int-ns shared clock). **GT = IMU/body pose** (spec §6.1) — build rows with `gt_state_from_camera_pose(ts, cam_position, R_world_cam_cv)`; `cam0/sensor.yaml T_BS` = the same T_IC. Pairs with `calib/` Kalibr YAMLs. |
 | **길남 · 태민** | camera intrinsics (spec §6) | fill `overall_gilnam/vision/synth_intrinsics.yaml` numbers once the sim camera is fixed; `scene_gen.default_intrinsics()` reads that file, so pixels stay comparable. |
 
 ## Open items (see `docs/To_do_checklist_yunho.md`)

@@ -82,14 +82,21 @@ def check_imucam() -> None:
     assert isinstance(cam["cam_overlaps"], list), f"cam_overlaps {cam['cam_overlaps']!r}"
 
     # T_cam_imu is the PINNED direction stored here (Kalibr: p_cam = T_cam_imu*p_imu);
-    # 태민's recon inverts it. Must be 4x4.
+    # 태민's recon holds the inverse (T_IC). Must be 4x4 AND equal the root spec
+    # §6.1 standard, inverse(T_IC_SPEC) -- never an identity placeholder.
     assert "T_cam_imu" in cam, "missing camera-imu extrinsic T_cam_imu"
     assert _is_4x4(cam["T_cam_imu"]), "T_cam_imu is not 4x4"
+    import numpy as np
+    from common import T_IC_SPEC, invert_transform
+    T_ci = np.asarray(cam["T_cam_imu"], float)
+    assert np.allclose(T_ci, invert_transform(T_IC_SPEC)), \
+        "T_cam_imu must be inverse(T_IC) of root spec §6.1 (R_IC=[[0,0,1],[-1,0,0],[0,-1,0]], t=0)"
+    assert not np.allclose(T_ci, np.eye(4)), "T_cam_imu must not be identity (body != camera)"
 
     assert isinstance(cam["timeshift_cam_imu"], (int, float)), "timeshift type"
     assert cam["rostopic"] == "/cam0/image_raw", cam["rostopic"]
     print(f"  [ok] cam0: pinhole/radtan, intrinsics len4, resolution {res}, "
-          f"cam_overlaps {cam['cam_overlaps']}, T_cam_imu 4x4, rostopic {cam['rostopic']}")
+          f"cam_overlaps {cam['cam_overlaps']}, T_cam_imu == inv(spec §6.1 T_IC), rostopic {cam['rostopic']}")
 
 
 def check_imu() -> None:

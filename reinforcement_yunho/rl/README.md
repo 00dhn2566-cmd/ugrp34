@@ -101,7 +101,8 @@ from the two real interface messages:
 - **window 3D map** (spec §6.2, `WindowMap`): world `corners_3d`/`center`/`normal`/
   `size_wh` per `order_index`; the adapter picks the target by `order_index`,
   transforms it into the yaw-only heading frame, and derives the normal from the
-  corners (`normalize(cross(c1-c0, c3-c0))`) when no explicit `normal` is shipped.
+  corners (`normalize(cross(c3-c0, c1-c0))`, state_window spec §3.1) when no
+  explicit `normal` is shipped (태민's `/window_positions` ships none).
 
 **GT now / VIO later** (spec §1 원칙 1, §9-조윤호): the schema has two producers.
 Now, 윤호 feeds Isaac **GT** pose + **GT** window on this schema so the RL consumer
@@ -117,10 +118,11 @@ caps policy performance (README §7.6) — so train through injected obs noise
 > There is **no single global quat order** (see `CONVENTIONS.md` "Quaternion order
 > is per-interface"); the adapter reorders XYZW→WXYZ and reuses
 > `common.geometry.quat_wxyz_to_R` rather than re-deriving. The normal ± direction
-> and corner winding are still **OPEN** in the spec (§3.1): with the shared corner
-> order the corner-derived normal comes out *antiparallel* to the env's
-> toward-approach normal, so GT streams should ship an explicit `normal` until the
-> convention is pinned.
+> and corner winding are **pinned** (state_window spec §3.1, 잠정 확정 2026-08-08):
+> winding TL→TR→BR→BL clockwise seen from the approach side, and
+> `n = normalize(cross(c3−c0, c1−c0))` points toward the approach side — the same
+> sign as the env's `Window.normal`. `cross(c1−c0, c3−c0)` is the forbidden
+> (antiparallel) order; `tests/test_integration.py::test_window_normal_sign` guards it.
 
 ## Handoff to 윤호 — what to fill in
 

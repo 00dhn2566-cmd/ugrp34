@@ -24,7 +24,7 @@ calibration always matches the camera the images were actually rendered with.
 | `estimator_config.yaml` | OpenVINS master config. **MONO by default** (`max_cameras: 1`, `use_stereo: false`, cam0 only), `gravity_mag: 9.81`, tracking/init params, and a commented **STEREO** alternative. References the two chains via `relative_config_imu`/`imucam`. Plain YAML (not `%YAML:1.0`) so it validates with pyyaml. | data file |
 | `kalibr_imucam_chain.yaml` | `cam0` block: pinhole intrinsics, radtan distortion, resolution, `cam_overlaps`, `T_cam_imu` extrinsics (**direction pinned**, see below), `timeshift_cam_imu`, `rostopic`. | data file (placeholders) |
 | `kalibr_imu_chain.yaml` | `imu0` block: accel/gyro noise densities + random walks, `update_rate`, `model`, `time_offset`, `T_i_b`, `rostopic`. | data file (placeholders) |
-| `fill_from_intrinsics.py` | pyyaml helper: given a `synth_intrinsics.yaml` in **길남's schema** `{width,height,fx,fy,cx,cy,distortion}`, writes a **copy** of the camchain with `intrinsics`/`resolution`/`distortion` filled; leaves `T_cam_imu` + IMU noise as TODO. | **yes** (numpy + pyyaml) |
+| `fill_from_intrinsics.py` | pyyaml helper: given a `synth_intrinsics.yaml` in **길남's schema** `{width,height,fx,fy,cx,cy,distortion}`, writes a **copy** of the camchain with `intrinsics`/`resolution`/`distortion` filled; leaves `T_cam_imu` (already the spec §6.1 standard) and the IMU noise (still TODO) untouched. | **yes** (numpy + pyyaml) |
 | `smoke_test.py` | validates both chains + `estimator_config.yaml` (keys/types), and round-trips the `gen_intrinsics → fill` seam. | **yes** |
 
 Nothing here imports Isaac Sim, OpenVINS, or ROS — the YAMLs are consumed by
@@ -60,19 +60,32 @@ flip `use_stereo`/`max_cameras` in `estimator_config.yaml`, set
 `cam0.cam_overlaps: [1]`, and add a `cam1` block (`cam_overlaps: [0]`,
 `rostopic: /cam1/image_raw`) to `kalibr_imucam_chain.yaml`.
 
-## Extrinsic direction is PINNED (read before filling `T_cam_imu`)
+## Extrinsic: value and direction are PINNED (root spec §6.1)
 
-윤호 delivers exactly **ONE** physical camera↔IMU extrinsic, but it appears in two
-conventions:
+There is exactly **ONE** camera↔IMU extrinsic and its **single source of truth is
+태민's `window_recon_node.py` constant `T_IC`** (root `window_detection_spec_v0.2.md`
+§6.1 "소유"). It is *not* derived from the drone CAD or the Isaac USD scene graph:
+the Isaac camera prim is placed relative to the IMU prim so that it realises the
+spec value (ISAAC_MIGRATION_CHECKLIST row D), never the other way round.
 
-- **camchain (`kalibr_imucam_chain.yaml`) stores `T_cam_imu`**, the Kalibr/
-  OpenVINS direction: `p_cam = T_cam_imu · p_imu` (IMU-frame point → camera frame).
-- **태민's `window_recon_node.py` wants the INVERSE** (`T_IC`, cam-in-IMU):
-  `p_imu = T_IC · p_cam` (i.e. the camera pose expressed in the IMU frame; there
-  `R_WC = R_WI·R_IC`, `c_W = p_WI + R_WI·p_IC`).
+Spec §6.1 standard (sim, forward camera): body/IMU frame x forward / y left / z up,
+OpenCV optical frame z forward / x right / y down,
+`R_IC = [[0,0,1],[−1,0,0],[0,−1,0]]`, `p_IC = 0`. Mirrored for the exporters as
+`common.geometry.T_IC_SPEC`.
 
-So `T_IC = inverse(T_cam_imu) = T_imu_cam`. **Do not paste the same 4×4 into both
-places** — the camchain gets `T_cam_imu`, the recon node gets its inverse.
+It appears in two conventions:
+
+- **camchain (`kalibr_imucam_chain.yaml`) stores `T_cam_imu = inverse(T_IC)`**, the
+  Kalibr/OpenVINS direction: `p_cam = T_cam_imu · p_imu` (IMU-frame point → camera
+  frame). Filled with the spec value (`R = R_IC^T`, `t = 0`).
+- **태민's `window_recon_node.py` holds `T_IC`** (cam-in-IMU): `p_imu = T_IC · p_cam`
+  (the camera pose expressed in the IMU frame; there `R_WC = R_WI·R_IC`,
+  `c_W = p_WI + R_WI·p_IC`).
+
+**Do not paste the same 4×4 into both places** — the camchain gets `T_cam_imu`, the
+recon node holds its inverse. A real-hardware Kalibr calibration replaces the numbers
+only once it is adopted into the spec §6.1 table (태민's constant changes first,
+then this file).
 
 ## Intrinsics must ALSO reach 태민's node constants
 
@@ -90,7 +103,7 @@ because the recon/sim nodes back-project pixels with those literals.
 | `cam0.resolution` `[1280,720]` | **윤호** — same intrinsics YAML (CONVENTIONS.md fixes 1280×720) | run `fill_from_intrinsics.py` |
 | `cam0.distortion_*` | synthetic camera is distortion-free (spec 6) → `radtan [0,0,0,0]` | run helper; keep zero unless distortion deliberately rendered |
 | `cam0.cam_overlaps` | `[]` mono / `[1]` stereo | manual (mono default) |
-| `cam0.T_cam_imu` (4×4) | **drone CAD / Isaac Sim scene** — Kalibr direction (`p_cam = T_cam_imu·p_imu`); 태민 inverts for the recon node | manual (CAD / sim scene) |
+| `cam0.T_cam_imu` (4×4) | **root spec §6.1 standard** = inverse of 태민's `window_recon_node.py` `T_IC` (single source of truth); Kalibr direction (`p_cam = T_cam_imu·p_imu`). Isaac USD camera prim is placed to match it — never read back from CAD/scene | filled; change only via the spec §6.1 table |
 | `cam0.timeshift_cam_imu`, `imu0.time_offset` | 0.0 — camera and IMU share one clock (CONVENTIONS.md) | leave 0.0 unless latency is modelled |
 | `cam0.rostopic` / `imu0.rostopic` | the Isaac Sim / rosbag publisher topics (`/cam0/image_raw`, `/imu0`) | match publisher |
 | `imu0.*_noise_density`, `imu0.*_random_walk` | **IMU datasheet + Allan variance**, OR the **Isaac Sim IMU sensor** noise config | manual; often inflated 2–10× for VIO robustness |
@@ -145,9 +158,11 @@ the number that lands in `imu.yaml` are literally the same quantity.
 
 1. Run `gen_intrinsics.py` → `synth_intrinsics.yaml`, then `fill_from_intrinsics.py`
    → `kalibr_imucam_chain.filled.yaml` (intrinsics/resolution/distortion done).
-2. Fill `cam0.T_cam_imu` from the drone CAD / Isaac Sim scene graph (Kalibr
-   direction); **태민 inverts it** for `window_recon_node.py`'s `T_IC`. Also copy
-   fx/fy/cx/cy into the node `FX/FY/CX/CY` constants.
+2. `cam0.T_cam_imu` is already the spec §6.1 standard (= inverse of 태민's
+   `window_recon_node.py` `T_IC`); do **not** refill it from CAD/USD. 태민: make
+   sure the node's `T_IC` equals the spec §6.1 table (it must not stay the EuRoC
+   cam0 value — spec §6.1 근거). Also copy fx/fy/cx/cy into the node
+   `FX/FY/CX/CY` constants.
 3. Fill the four `imu0` noise values to match the Isaac Sim IMU sensor config;
    set `rostopic`s to the actual publishers; keep `time_offset`/`timeshift` at 0.0.
 4. Drop `estimator_config.yaml` + both chains into the OpenVINS `euroc_mav` config

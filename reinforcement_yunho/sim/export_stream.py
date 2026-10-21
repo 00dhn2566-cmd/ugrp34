@@ -22,8 +22,17 @@ each 17-token line via parse_label_line — a live format check) instead of
 assembling the dict ourselves, so a spec §5 change touches only 길남's code and
 GT stays det_conf = color_conf = 1.0.
 
-The pose block mirrors 길남's make_stream.py: T_world_cam in the CV convention,
-orientation as quaternion (x,y,z,w). scene_gen's camera["quat_xyzw"] is that value.
+POSE FRAME (window_detection_spec_v0.2.md §6.1)
+------------------------------------------------
+The inputs are the rendered CAMERA pose (scene_gen's camera["position"] /
+camera["quat_xyzw"], CV T_world_cam). The emitted ``pose`` block is, by default
+(``pose_frame="body"``), the **IMU/body pose** the spec fixes for the pose stream
+(body x forward / y left / z up): T_WB = T_WC @ inv(T_IC) with the spec §6.1
+standard T_IC (``common.T_IC_SPEC``; owner of the constant = 태민's
+window_recon_node.py). ``pose_frame="camera"`` reproduces 길남's
+sample_stream.jsonl contract (body ≡ camera, identity) — spec §6.1 says that
+stream is for E2E rehearsal only and must NOT be fed to 태민's node directly.
+Either way orientation is quaternion (x,y,z,w).
 
 NOTE: gt_stream needs the colour config (color_order.yaml). 길남's loader
 ``color_judge.load_color_config`` is just ``yaml.safe_load`` but lives in a module
@@ -37,9 +46,12 @@ import os
 import sys
 from typing import Dict, List, Optional, Sequence
 
+import numpy as np
 import yaml
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 # 길남's vision dir (sibling package under ugrp34) — the §5 builders live here.
 GILNAM_VISION = os.path.join(os.path.dirname(_ROOT), "overall_gilnam", "vision")
 DEFAULT_COLOR_ORDER = os.path.join(GILNAM_VISION, "color_order.yaml")
@@ -75,6 +87,18 @@ def _round(vs, nd):
     return [round(float(v), nd) for v in vs]
 
 
+def camera_pose_to_body_pose(position, quat_xyzw, T_IC=None):
+    """CV camera pose -> IMU/body pose (spec §6.1), both as (position, quat_xyzw).
+    T_WB = T_WC @ inv(T_IC); T_IC defaults to ``common.T_IC_SPEC``."""
+    from common import quat_wxyz_to_R, make_transform, T_world_body_from_cam_cv
+    from sim.scene_gen import R_to_quat_xyzw
+
+    q = list(quat_xyzw)
+    R_wc = quat_wxyz_to_R([q[3], q[0], q[1], q[2]])
+    T_wb = T_world_body_from_cam_cv(make_transform(R_wc, position), T_IC)
+    return [float(x) for x in T_wb[:3, 3]], [float(x) for x in R_to_quat_xyzw(T_wb[:3, :3])]
+
+
 def build_stream_record(
     label_lines: Sequence[str],
     timestamp_ns: int,
@@ -84,16 +108,24 @@ def build_stream_record(
     config: dict,
     *,
     round_pixels: bool = True,
+    pose_frame: str = "body",
 ) -> Dict[str, object]:
     """One JSONL record = {"vision": <§5 msg>, "pose": {...}} (make_stream.py shape).
 
     label_lines : 17-token YOLO-pose lines for this frame (build_label_lines).
     timestamp_ns: int ns, shared cam/IMU clock (== pose timestamp).
-    position    : camera position in world [x,y,z].
-    quat_xyzw   : camera orientation quaternion (x,y,z,w) — CV T_world_cam.
+    position    : CAMERA position in world [x,y,z] (as rendered).
+    quat_xyzw   : CAMERA orientation quaternion (x,y,z,w) — CV T_world_cam.
+    pose_frame  : "body" (default) -> emit the IMU/body pose (spec §6.1, via the
+                  standard T_IC); "camera" -> emit the camera pose as-is (길남's
+                  sample_stream body≡camera contract, E2E rehearsal only).
     """
     if not isinstance(timestamp_ns, int):
         raise ValueError(f"timestamp_ns must be int (ns), got {type(timestamp_ns).__name__}")
+    if pose_frame == "body":
+        position, quat_xyzw = camera_pose_to_body_pose(position, quat_xyzw)
+    elif pose_frame != "camera":
+        raise ValueError(f"pose_frame must be 'body' or 'camera', got {pose_frame!r}")
     gt_stream = _import_gt_stream()
     msg = gt_stream.labels_to_message(list(label_lines), timestamp_ns, frame_id, config)
     if round_pixels:
@@ -115,9 +147,13 @@ def write_stream(
     out_path: str,
     frames: Sequence[Dict[str, object]],
     config: Optional[dict] = None,
+    *,
+    pose_frame: str = "body",
 ) -> Dict[str, object]:
     """Write a JSONL §5+pose stream. ``frames``: [{label_lines, timestamp_ns,
-    frame_id, position, quat_xyzw}]. Returns {path, frames}."""
+    frame_id, position, quat_xyzw}] with the CAMERA pose; the written pose block
+    is the IMU/body pose unless ``pose_frame="camera"`` (see build_stream_record).
+    Returns {path, frames}."""
     if config is None:
         config = load_color_config()
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
@@ -126,7 +162,7 @@ def write_stream(
         for fr in frames:
             rec = build_stream_record(
                 fr["label_lines"], fr["timestamp_ns"], fr["frame_id"],
-                fr["position"], fr["quat_xyzw"], config,
+                fr["position"], fr["quat_xyzw"], config, pose_frame=pose_frame,
             )
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             n += 1

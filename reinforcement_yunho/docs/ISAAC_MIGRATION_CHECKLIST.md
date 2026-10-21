@@ -24,7 +24,7 @@
 | 요소 | 상태 | 비고 |
 |---|---|---|
 | 창문 배치 샘플러(1~5개·근/중/원·±60°·3색 균등) | ✅ | `sim/scene_gen.py` 순수 로직 |
-| 창문 프림: **색 테두리 프레임 + 뚫린 개구부**(루트 spec §2.5 잠정 확정) — 렌더용 색 + 충돌 지오메트리 겸용 | ⛔ | 기존 설계는 "채운 색판"(thin box) — 채움은 색 판정·삼각측량을 무너뜨림(윤호 PyBullet 실측). 프레임 4변이 각각 collider여야 RL 충돌 판정 가능 |
+| 창문 프림: **색 테두리 프레임 + 뚫린 개구부**(루트 spec §2.5 잠정 확정) — 렌더용 색 + 충돌 지오메트리 겸용 | ⛔ | 기존 설계는 "채운 색판"(thin box) — 채움은 색 판정·삼각측량을 무너뜨림(윤호 PyBullet 실측). 프레임 4변이 각각 collider여야 RL 충돌 판정 가능. CPU 폴백 `sim/procedural_render.py`는 10-21부터 §2.5대로 렌더(프레임 두께 랜덤 `FRAME_THICKNESS_FRAC`, corner = 개구부 모서리, 개구부 투명) — 기존 채움 데이터셋으로 학습한 `best.pt`는 재학습(ⓑ) 대상 |
 | 창문 재질: `color_order.yaml` HSV 대역 안 채도 원색, 조명 랜덤화에 강건(emissive 혼합) | ⚠ | 실렌더 검증은 CPU 폴백(94.8%)에서만 |
 | 텍스처 배경(VIO 특징점용, S<100 탈채도) | ⚠ | 절차 생성 `bg_noise.png` → 실제 USD 에셋 교체 예정 |
 | 조명 랜덤화(밝기·방향) | ⚠ | 샘플러 있음. CPU 렌더러 키 불일치 버그(`brightness/direction`→`intensity/azimuth_rad`, 08-11 통보) 수정 여부 확인 |
@@ -81,7 +81,7 @@
 |---|---|---|
 | `IsaacSimBackend(PhysicsBackend)`: `reset(start_pos, params)` / `step(waypoint_world, dt)` → `StepPhysics` | ⛔ | 인터페이스 고정 — 환경 코드 무수정 |
 | 벡터화(num_envs) | ⛔ | `window_env.py` 단일 인스턴스 가정. Isaac 병렬은 사실상 **Isaac Lab** 방식(한 스테이지에 N 복제) — 직접 구현 부담 큼. PyBullet은 SubprocVecEnv로 해결 중 |
-| 관측 17차원·GT 치트 금지·노이즈 주입 | ✅ | `state_window_adapter.py` — 단 corner→normal **폴백** 부호가 아직 `cross(c1−c0, c3−c0)`(확정 부호 반대, 08-11 요청). 명시 `normal` 필드가 있으면 무해 |
+| 관측 17차원·GT 치트 금지·노이즈 주입 | ✅ | `state_window_adapter.py` — corner→normal 폴백 부호를 spec §3.1 확정값 `cross(c3−c0, c1−c0)`(접근측 방향 = `Window.normal`)로 정정(10-21). 태민 `/window_positions`에 `normal` 필드가 없어 이 폴백이 실제 경로 |
 | 정책 `step` 파라미터 기록 | ⚠ | 학습 0.3 vs 기본 0.6 불일치로 성공률 95%→5% 오독 사례 — config에 박을 것 |
 | 보상 가중치 | ⛔ | 스텁(안건 2-7) |
 
@@ -92,8 +92,8 @@
 | 프레임 메타데이터 → `export_dataset.py` → YOLO-pose 17토큰 + `meta.jsonl` | ✅ | 오프라인 경로 검증됨 |
 | Replicator 4-corner 커스텀 writer | ⚠ | 순수 로직 있음, Isaac 실행 미검증(spec §7) |
 | 렌더↔라벨 정합(`visualize_labels.py`) | ✅ | |
-| EuRoC-ASL 비행 bag(`export_vio.py`) | ⚠ | 작성기 있음, Isaac 비행·IMU 값 넣는 쪽 없음. PyBullet `export_euroc.py`가 선례 |
-| §5 GT 스트림(`export_stream.py`, 길남 `gt_stream` 경유) | ✅ | |
+| EuRoC-ASL 비행 bag(`export_vio.py`) | ⚠ | 작성기 있음, Isaac 비행·IMU 값 넣는 쪽 없음. PyBullet `export_euroc.py`가 선례. GT pose는 **IMU/body 프레임**(spec §6.1) — 카메라 pose를 `gt_state_from_camera_pose`로 변환해 넣을 것(10-21 정정, 이전엔 body≡camera로 기록) |
+| §5 GT 스트림(`export_stream.py`, 길남 `gt_stream` 경유) | ✅ | pose 블록 기본값 = IMU/body pose(spec §6.1, `pose_frame="body"`). 길남 sample_stream(body≡camera)은 `pose_frame="camera"` — 리허설 전용 |
 | ROS2 브릿지(`/cam0/image_raw`, `/imu0`, odom) | ⛔ | 태민 실시간 구독 단계. 컨테이너 안 ROS2 Jazzy 정합 확인 |
 
 ## I. 검증 순서 (권장)

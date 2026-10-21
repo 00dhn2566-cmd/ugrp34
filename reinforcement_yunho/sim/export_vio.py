@@ -23,8 +23,15 @@ CONTRACT (CONVENTIONS.md + the checklist "테스트용 시뮬 비행 데이터 1
            update_rate + unit comments in calib/).
 * GT pose: EuRoC state_groundtruth_estimate0. position p [m]; quaternion order is
            **q_w,q_x,q_y,q_z (WXYZ)** — EuRoC GT convention (CONVENTIONS.md
-           quaternion table). Frame = T_world_body; body ≡ camera here (same
-           declaration as the §5 stream / scene_gt.json), so pass the camera pose.
+           quaternion table). Frame = **T_world_body, the IMU/body pose**
+           (window_detection_spec_v0.2.md §6.1: body x forward / y left / z up;
+           the pose stream is NOT the camera pose). The Isaac render gives the
+           CAMERA pose, so convert it with ``gt_state_from_camera_pose`` (uses
+           ``common.T_world_body_from_cam_cv`` and the spec §6.1 standard T_IC,
+           R_IC = [[0,0,1],[-1,0,0],[0,-1,0]], translation 0) before writing.
+           cam0/sensor.yaml ``T_BS`` carries the same T_IC so OpenVINS reads a
+           consistent chain. Owner of the T_IC constant: 태민's
+           window_recon_node.py (spec §6.1); the value here mirrors the spec table.
            Optional velocity + gyro/accel bias columns fill out the canonical
            17-column EuRoC GT row when supplied (default: pose-only 8 columns).
 
@@ -44,6 +51,9 @@ import numpy as np
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+from common import T_IC_SPEC, T_world_body_from_cam_cv, make_transform  # noqa: E402
+from sim.scene_gen import R_to_quat_xyzw, xyzw_to_wxyz  # noqa: E402
 
 # EuRoC-ASL canonical CSV headers (leading '#', SI units in brackets).
 CAM_HEADER = ["#timestamp [ns]", "filename"]
@@ -78,6 +88,31 @@ def _write_csv(path: str, header: Sequence[str], rows: Sequence[Sequence]) -> No
         w = csv.writer(f)
         w.writerow(header)
         w.writerows(rows)
+
+
+def gt_state_from_camera_pose(
+    timestamp_ns: int,
+    position,
+    R_world_cam_cv,
+    *,
+    T_IC=None,
+    **extra,
+) -> Dict[str, object]:
+    """One ``gt_states`` row (IMU/body pose, spec §6.1) from the rendered CAMERA
+    pose: ``position`` [m] + ``R_world_cam_cv`` (3x3, OpenCV optical axes), e.g.
+    ``scene["camera"]["position"]`` / ``scene["camera"]["R_world_cam_cv"]``.
+
+    T_WB = T_WC @ inv(T_IC) with the spec §6.1 standard T_IC by default. Extra
+    keys (velocity, bias_gyro, bias_accel) pass through to ``write_gt_csv``."""
+    T_wc = make_transform(np.asarray(R_world_cam_cv, float), position)
+    T_wb = T_world_body_from_cam_cv(T_wc, T_IC)
+    row = {
+        "timestamp_ns": _require_int_ns(timestamp_ns),
+        "position": [float(x) for x in T_wb[:3, 3]],
+        "quat_wxyz": [float(x) for x in xyzw_to_wxyz(R_to_quat_xyzw(T_wb[:3, :3]))],
+    }
+    row.update(extra)
+    return row
 
 
 # ======================================================================
@@ -138,13 +173,16 @@ def write_gt_csv(mav0_dir: str, gt_states: Sequence[Dict[str, object]]) -> str:
 
 
 def write_cam0_sensor_yaml(mav0_dir: str, intr, rate_hz: float = 20.0,
-                           T_cam_imu=None) -> str:
+                           T_IC=None) -> str:
     """cam0/sensor.yaml — EuRoC pinhole model from CameraIntrinsics (spec §6/§2).
-    ``intr`` is a common.intrinsics.CameraIntrinsics. T_cam_imu (4x4) defaults to
-    identity (body ≡ camera, matching the §5 stream / scene_gt.json declaration)."""
+    ``intr`` is a common.intrinsics.CameraIntrinsics. ``T_BS`` is EuRoC's
+    sensor-to-body transform, i.e. T_IC (cam -> IMU/body, p_B = T_BS p_S); it
+    defaults to the spec §6.1 standard ``common.T_IC_SPEC`` (forward camera,
+    R_IC = [[0,0,1],[-1,0,0],[0,-1,0]], zero offset) — the same value the GT rows
+    were converted with. Not identity: body is NOT the camera (spec §6.1)."""
     import yaml
 
-    T = np.eye(4) if T_cam_imu is None else np.asarray(T_cam_imu, float)
+    T = T_IC_SPEC if T_IC is None else np.asarray(T_IC, float)
     doc = {
         "sensor_type": "camera",
         "comment": "Isaac Sim synthetic pinhole (윤호). Fills spec §6 intrinsics.",

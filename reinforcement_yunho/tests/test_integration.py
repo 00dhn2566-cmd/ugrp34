@@ -90,6 +90,28 @@ def test_interface_schemas():
     print("  [interface] schema validate + wxyz->T + round-trip OK")
 
 
+def test_window_normal_sign():
+    """state_window spec §3.1: the corner-derived normal must point toward the
+    approach side, i.e. equal the env's ``Window.normal`` (+Z_local). Guards the
+    forbidden ``cross(c1-c0, c3-c0)`` order (antiparallel)."""
+    from common import window_corners_world
+    from rl.window_env import Window, _window_rotation
+    from rl.state_window_adapter import _window_normal
+    from sim.scene_gen import window_rotation_from_normal
+
+    # Both production R_world_win builders are right-handed (det +1); a mirrored
+    # (left-handed) R would flip the cross product, so never hand-write one here.
+    for R in (_window_rotation(0.3), window_rotation_from_normal([-1.0, 0.2, 0.0])):
+        assert np.isclose(np.linalg.det(R), 1.0)
+        win = Window(center=np.array([4.0, 0.0, 1.5]), R=R, width=1.2, height=1.0,
+                     color="red", order_index=0)
+        corners = window_corners_world(win.center, win.R, win.width, win.height)
+        n = _window_normal({"corners_3d": corners.tolist()})  # no explicit normal -> fallback
+        assert np.allclose(n, win.normal), f"derived {n} != Window.normal {win.normal}"
+        assert np.allclose(n, R[:, 2]) and n[0] < 0  # toward the approaching drone (-X side)
+    print("  [rl]        corner-derived normal == Window.normal (spec §3.1 sign) OK")
+
+
 def test_rl_env_and_baseline():
     from rl.window_env import WindowTraversalEnv, MockPhysics, OBS_DIM, OBS_REL_WIN_POS
     from rl.baseline import WaypointBaseline
@@ -126,5 +148,6 @@ if __name__ == "__main__":
     test_common_projection()
     test_vision_labels_and_split()
     test_interface_schemas()
+    test_window_normal_sign()
     test_rl_env_and_baseline()
     print("ALL INTEGRATION TESTS PASSED")

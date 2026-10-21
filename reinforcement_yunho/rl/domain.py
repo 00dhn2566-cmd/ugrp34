@@ -21,6 +21,12 @@ and mirrors its two remaining draw rules (fill shade, darker border) as named
 constants below. If 윤호 changes the renderer, this module follows automatically
 — the same routing discipline ``sim/export_stream.py`` uses for 길남's builders.
 
+NOTE (2026-10-21): ``procedural_render`` now draws the spec §2.5 look — a coloured
+frame ring OUTSIDE the labelled corners with a see-through opening — and no longer
+fills the pane. ``build_window(pane=True)`` below reproduces the OLD filled look
+only because the shipped ``window_yolo11s_best.pt`` was trained on it; once the
+detector is retrained on the §2.5 renderer (checklist ⓑ) use ``pane=False``.
+
 The camera side is pinned to 길남's ``synth_intrinsics.yaml`` (spec §6), so the
 projected pixel size of a window at a given range matches the training frames.
 

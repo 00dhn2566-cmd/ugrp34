@@ -95,6 +95,36 @@ def invert_transform(T: np.ndarray) -> np.ndarray:
     return Ti
 
 
+# ---------------------------------------------------------------------------
+# Camera <-> IMU/body extrinsic  (window_detection_spec_v0.2.md §6.1)
+# ---------------------------------------------------------------------------
+# Body (= IMU) frame: x forward / y left / z up (Isaac = PyBullet convention;
+# world is Z-up). Camera: forward-looking, OpenCV optical frame (z forward /
+# x right / y down). ``T_IC`` maps a point in the CAMERA frame into the IMU/body
+# frame, p_I = T_IC @ p_C (a.k.a. T_imu_cam: the camera pose expressed in the
+# body frame; EuRoC ``T_BS``). Spec §6.1 standard: optical z -> body x,
+# optical x -> body -y, optical y -> body -z; translation = mount offset (0 in sim).
+#
+# OWNERSHIP (spec §6.1): the single source of truth for this constant is 태민's
+# ``visual_imaging_taemin/window_recon_node.py::T_IC``. This copy exists only so
+# the GT exporters (sim/export_vio.py, sim/export_stream.py) can emit IMU/body
+# poses without importing a ROS node. It must stay equal to the spec table and
+# must NOT be re-derived from the Isaac USD scene: the USD camera prim is placed
+# to match THIS value, never the other way round (ISAAC_MIGRATION_CHECKLIST row D).
+R_IC_SPEC = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
+T_IC_SPEC = make_transform(R_IC_SPEC, [0.0, 0.0, 0.0])
+
+
+def T_world_body_from_cam_cv(T_world_cam_cv: np.ndarray, T_IC=None) -> np.ndarray:
+    """IMU/body pose ``T_world_body`` (what the spec §6.1 pose stream carries)
+    from a CV camera pose ``T_world_cam``:  T_WB = T_WC @ inv(T_IC).
+
+    ``T_IC`` defaults to the spec §6.1 standard ``T_IC_SPEC``; pass the calibrated
+    value (same direction, cam -> IMU) on real hardware."""
+    T_IC = T_IC_SPEC if T_IC is None else np.asarray(T_IC, dtype=np.float64)
+    return np.asarray(T_world_cam_cv, dtype=np.float64) @ invert_transform(T_IC)
+
+
 def _to_points_array(points) -> np.ndarray:
     p = np.asarray(points, dtype=np.float64)
     if p.ndim == 1:
