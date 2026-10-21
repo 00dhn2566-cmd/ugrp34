@@ -2,6 +2,17 @@
 정해진 입력 형식(waypoints)을 받아서 Simulink(quadcopter_package_delivery)를
 실행하고, 먹인 입력(feed)과 시뮬레이션 결과를 각각 CSV로 남긴다.
 
+위치 (2026-10-21 정리)
+---------------------
+- 이 스크립트는 `sample/` = 개인 테스트 케이스 경로다 (docs/HANDOFF_PATH_TO_CONTROLLER.md
+  파일 위치 규칙). 제어 모듈의 **진입점은 `control_seoungjin/traj_pipeline.py`**
+  (`python traj_pipeline.py plan --input input/<mission>.json`, SETUP.md /
+  EXTERNAL_INTERFACE.md). 입력 코어(waypoints/limits/dt)는 두 경로가 같다
+  (윤호 `interface/waypoints_config.schema.json` 과 바이트 호환).
+- 윤호 Isaac Sim 계약 파일(`isaacsim_trajectory.json`, `isaacsim_motor_commands.json`)
+  의 **유일한 생산자는 `control_seoungjin/isaacsim_export.py`** 다. 여기서는 그
+  모듈의 변환 함수를 호출만 한다 — 포맷/부호/키 규칙을 이 파일에 따로 두지 말 것.
+
 입력 형식
 ---------
 waypoints : (N, 3) array-like  — 순서대로 지나갈 x, y, z 좌표
@@ -17,7 +28,8 @@ v_max, a_max, j_max, snap_max : 스칼라 또는 [x, y, z] — plan_waypoints �
    여기엔 우리 파트의 최종 출력인 모터별 명령 motor_cmd_w1~w4(각속도 setpoint, rad/s)와
    그 시간축 sim_time도 포함됨 — 그 이후 모터/프로펠러 물리 응답은 Isaac Sim 쪽 역할)
 5. sim_result.mat의 각 로그 변수를 sim_result_<변수명>.csv로 저장
-6. motor_cmd_w1~w4 + sim_time을 Isaac Sim이 바로 읽을 프레임별 JSON(isaacsim_motor_commands.json)으로 저장
+6. motor_cmd_w1~w4 + sim_time을 isaacsim_export.flight_mat_to_motor_commands 로
+   윤호 스키마(isaacsim_motor_commands.json, unsigned setpoint)로 변환해 저장
 
 입력 설정 파일 (JSON 또는 YAML, config.yaml 참고)
 ---------------------------------------------
@@ -43,6 +55,7 @@ from scipy.io import loadmat
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from waypoints_to_maneuver_input import waypoints_to_maneuver_input, save_for_matlab  # noqa: E402
+import isaacsim_export  # noqa: E402  — isaacsim_* 파일의 유일한 생산자 (control_seoungjin/)
 
 SAMPLE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTROL_DIR = os.path.dirname(SAMPLE_DIR)
@@ -85,38 +98,20 @@ def save_feed_csv(path, timespot_spl, spline_data, spline_yaw):
 
 
 def save_feed_isaacsim_json(path, timespot_spl, spline_data, spline_yaw):
-    """Isaac Sim에서 바로 읽어 쓸 수 있는 프레임별 pose 목록(JSON).
+    """궤적 피드 → 윤호 `isaacsim_trajectory.json` (isaacsim_export 에 위임).
 
-    형식 (아직 Isaac Sim 쪽 스키마가 정해지지 않아 가장 쉬운 형태로 결정):
-        {
-          "fps": ...,
-          "frames": [
-            {"time": t, "position": [x, y, z], "yaw_rad": yaw,
-             "orientation_quat_wxyz": [w, x, y, z]},
-            ...
-          ]
-        }
-
-    orientation_quat_wxyz는 yaw만 반영한 쿼터니언(roll=pitch=0)이라
-    Isaac Sim의 set_world_pose(position, orientation) 등에 바로 넣을 수 있다.
+    형식·쿼터니언(WXYZ, yaw-only)·원자적 쓰기 규칙은 전부 `isaacsim_export`
+    (`reinforcement_yunho/interface/isaacsim_trajectory.schema.json`) 가 정한다.
     """
-    dt = float(timespot_spl[1] - timespot_spl[0]) if len(timespot_spl) > 1 else 0.0
-    fps = 1.0 / dt if dt > 0 else 0.0
-
-    frames = []
-    for t, (x, y, z), yaw in zip(timespot_spl, spline_data, spline_yaw):
-        half = yaw / 2.0
-        quat_wxyz = [float(np.cos(half)), 0.0, 0.0, float(np.sin(half))]
-        frames.append({
-            "time": float(t),
-            "position": [float(x), float(y), float(z)],
-            "yaw_rad": float(yaw),
-            "orientation_quat_wxyz": quat_wxyz,
-        })
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"fps": fps, "frames": frames}, f, indent=2)
-    print(f"[save_feed_isaacsim_json] 저장 완료: {path} ({len(frames)}프레임)")
+    t = np.asarray(timespot_spl, float).ravel()
+    dt = float(t[1] - t[0]) if len(t) > 1 else 0.01
+    traj = {"dt": dt, "t": t.tolist(),
+            "pos": np.asarray(spline_data, float).reshape(-1, 3).tolist(),
+            "yaw_rad": np.asarray(spline_yaw, float).ravel().tolist()}
+    out = isaacsim_export.trajectory_to_isaacsim(traj)
+    isaacsim_export._atomic_write_json(path, out)
+    print(f"[save_feed_isaacsim_json] 저장 완료: {path} ({len(out['frames'])}프레임, "
+          f"isaacsim_export 경유)")
 
 
 def find_matlab():
@@ -159,38 +154,20 @@ def run_matlab_sim():
 
 
 def save_motor_cmd_isaacsim_json(mat_path, path):
-    """sim_result.mat의 모터별 명령(motor_cmd_w1~w4)을 Isaac Sim에서 바로 읽을 프레임별 JSON으로 저장.
+    """sim_result.mat 의 모터 setpoint(motor_cmd_w1~w4) → 윤호 `isaacsim_motor_commands.json`.
 
-    우리 파트의 출력 경계는 "각 모터에 들어가는 명령"(각속도 setpoint, rad/s)까지이고,
-    그 이후(모터 전기/역학, 프로펠러 공력 등 실제 물리 응답)는 Isaac Sim 쪽에서 담당한다.
+    우리 파트의 출력 경계는 "각 모터에 들어가는 명령"(각속도 setpoint, rad/s, unsigned)
+    까지이고, 그 이후(모터 전기/역학, 프로펠러 공력 등 실제 물리 응답)는 Isaac Sim 쪽
+    담당이다. 변환은 `isaacsim_export.flight_mat_to_motor_commands` 에 위임한다
+    (setpoint 채널 우선, abs(), 원자적 쓰기 — 규칙은 그쪽 docstring 참조).
 
     motor_cmd_w1~w4는 To Workspace(Array 포맷)라 시간이 따로 없어서, run_sample_sim.m이
     같은 솔버 스텝마다 Clock으로 같이 로깅해둔 sim_time과 행 순서로 맞춰 짝짓는다.
-
-    형식 (아직 Isaac Sim 쪽 스키마가 정해지지 않아 가장 쉬운 형태로 결정):
-        {
-          "fps": ...,
-          "frames": [
-            {"time": t, "motor_cmd_w": [w1, w2, w3, w4]},
-            ...
-          ]
-        }
     """
-    data = loadmat(mat_path)
-    sim_time = np.asarray(data["sim_time"]).ravel()
-    motor_keys = ["motor_cmd_w1", "motor_cmd_w2", "motor_cmd_w3", "motor_cmd_w4"]
-    motor_cmds = np.column_stack([np.asarray(data[k]).ravel() for k in motor_keys])
-
-    dt = np.median(np.diff(sim_time)) if len(sim_time) > 1 else 0.0
-    fps = 1.0 / dt if dt > 0 else 0.0
-
-    frames = []
-    for t, w in zip(sim_time, motor_cmds):
-        frames.append({"time": float(t), "motor_cmd_w": [float(x) for x in w]})
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"fps": fps, "frames": frames}, f, indent=2)
-    print(f"[save_motor_cmd_isaacsim_json] 저장 완료: {path} ({len(frames)}프레임)")
+    out = isaacsim_export.flight_mat_to_motor_commands(mat_path)
+    isaacsim_export._atomic_write_json(path, out)
+    print(f"[save_motor_cmd_isaacsim_json] 저장 완료: {path} ({len(out['frames'])}프레임, "
+          f"isaacsim_export 경유)")
 
 
 def save_result_csvs(mat_path, out_dir):

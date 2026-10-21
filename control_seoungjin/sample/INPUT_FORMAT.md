@@ -3,6 +3,16 @@
 다른 사람이 waypoint를 만들어서 이 파이프라인(`run_and_log.py`)에 넣을 때 쓰는 입력 파일 스펙이다.
 파일 이름은 자유(`input.yaml`, `input.json`, `config.yaml` 등 무엇이든 상관없음) — 확장자(`.yaml`/`.yml`/`.json`)로 포맷만 자동 판별한다.
 
+> **진입점 정리 (2026-10-21).** `sample/run_and_log.py`는 개인 테스트 케이스 경로다
+> (`docs/HANDOFF_PATH_TO_CONTROLLER.md` 파일 위치 규칙). 제어 모듈의 **공식 진입점은
+> `control_seoungjin/traj_pipeline.py`** (`python traj_pipeline.py plan --input
+> input/<mission>.json`, [SETUP.md](../SETUP.md) · [EXTERNAL_INTERFACE.md](../EXTERNAL_INTERFACE.md))
+> 이며, 아래 코어 3키는 두 경로에서 동일하게 읽힌다. 윤호 Isaac Sim 계약 파일
+> (`isaacsim_trajectory.json`, `isaacsim_motor_commands.json`)의 **생산자는
+> `control_seoungjin/isaacsim_export.py` 하나**다 — `run_and_log.py`도 그 함수를 호출한다.
+> 윤호 `interface/` 스키마 description 이 `run_and_log.py`를 진입점/생산자로 적고 있는 것은
+> 갱신 요청 중 (traj_pipeline.py / isaacsim_export.py 로).
+
 > **RL seam 코어 스키마.** 아래 3키(`waypoints`/`limits`/`dt`)는 윤호
 > `reinforcement_yunho/interface/waypoints_config.schema.json`과 **바이트 호환**이다
 > (JSON으로 쓸 때). 그 스키마는 `additionalProperties: false`라 **키를 하나라도
