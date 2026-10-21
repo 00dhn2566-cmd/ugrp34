@@ -54,13 +54,18 @@ ls ~/results/
 
 ## 7. 결과 파일 TUM 형식 변환
 ```bash
-awk 'NR>1 {print $1, $6, $7, $8, $3, $4, $5, $2}' ~/results/state_estimate.txt \
+# state_estimate.txt 열: t qx qy qz qw px py pz ...  ->  TUM: t tx ty tz qx qy qz qw
+# (quaternion 순서 XYZW 그대로 — reinforcement_yunho/CONVENTIONS.md 'Quaternion order' 표 참조)
+awk 'NR>1 {print $1, $6, $7, $8, $2, $3, $4, $5}' ~/results/state_estimate.txt \
   > ~/results/state_estimate_tum.txt
 ```
 
 ## 8. Ground Truth 변환
 ```bash
-awk -F',' 'NR>1 {print $1/1e9, $2, $3, $4, $5, $6, $7, $8}' \
+# EuRoC GT data.csv 열: t[ns] px py pz q_w q_x q_y q_z ...  ->  TUM: t[s] tx ty tz qx qy qz qw
+# - GT quaternion 은 WXYZ 이므로 $6 $7 $8 $5 로 XYZW 재배열 (CONVENTIONS.md 표)
+# - 타임스탬프는 printf %.9f 로 출력 (print 는 OFMT=%.6g 라 1.40364e+09 로 뭉개짐)
+awk -F',' 'NR>1 {printf "%.9f %s %s %s %s %s %s %s\n", $1/1e9, $2, $3, $4, $6, $7, $8, $5}' \
   ~/datasets/euroc/MH_01_easy_asl/mav0/state_groundtruth_estimate0/data.csv \
   > ~/results/groundtruth_tum.txt
 ```
