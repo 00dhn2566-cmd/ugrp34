@@ -18,8 +18,10 @@
 - 테스트 비행 데이터: `sim/export_vio.py` → EuRoC-ASL 폴더(`mav0/cam0/data` + `imu0` +
   `state_groundtruth_estimate0/data.csv`), ns 타임스탬프, GT 쿼터니언 WXYZ
 **윤호 결정**:
-1. **카메라↔IMU 외부 파라미터**(4×4) — CAD/씬그래프에서. camchain엔 `T_cam_imu`(Kalibr 방향)로,
-   태민 `window_recon_node.py`는 그 **역행렬**(cam-in-IMU) 사용 → 방향 헷갈리지 말 것
+1. **카메라↔IMU 외부 파라미터**(4×4) — 루트 spec §6.1 표준값(R_IC=[[0,0,1],[−1,0,0],[0,−1,0]], 병진 0).
+   **단일 진실 = 태민 `window_recon_node.py`의 `T_IC`** — CAD/USD 씬그래프에서 읽어 채우지 말고,
+   Isaac 카메라 프림을 이 값에 맞춰 배치. camchain엔 그 **역행렬** `T_cam_imu`(Kalibr 방향)로
+   이미 기입됨(`calib/kalibr_imucam_chain.yaml`) → 방향 헷갈리지 말 것
 2. **IMU 노이즈 4개**(accel/gyro × noise_density/random_walk) + update_rate(200Hz) —
    Isaac IMU 센서 설정값 = kalibr_imu_chain 값 (동일하게)
 3. **intrinsics를 태민 노드 소스에도** 전파 (`window_recon_node.py`/`window_sim_node.py`의

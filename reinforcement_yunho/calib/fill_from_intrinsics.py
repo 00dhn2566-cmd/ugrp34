@@ -9,8 +9,9 @@ WHAT
     its fx/fy/cx/cy, resolution and distortion into a COPY of
     calib/kalibr_imucam_chain.yaml. The extrinsics
     (T_cam_imu) and every IMU noise number are intentionally left untouched --
-    they come from the drone CAD and the IMU datasheet / Isaac Sim IMU sensor,
-    not from the camera intrinsics (see calib/README.md).
+    T_cam_imu is the root spec §6.1 standard (owner: 태민's window_recon_node.py
+    T_IC) and the noise comes from the IMU datasheet / Isaac Sim IMU sensor, not
+    from the camera intrinsics (see calib/README.md).
 
 WHY
     The camchain OpenVINS consumes MUST describe the exact camera the images
@@ -21,7 +22,7 @@ NOTE ON COMMENTS
     pyyaml does not preserve comments on round-trip, so the generated output is
     a plain-data file. The rich field documentation lives in the template
     (calib/kalibr_imucam_chain.yaml); the output is a machine artifact whose
-    T_cam_imu and IMU noise still need manual fill.
+    IMU noise still needs manual fill (T_cam_imu is carried over as-is).
 
 Runnable now (numpy + pyyaml only), no dependency on vision/ having run: pass the
 intrinsics path explicitly.
@@ -157,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[fill_from_intrinsics] wrote      -> {args.out}")
     print(f"  {args.cam_key}.intrinsics = {filled[args.cam_key]['intrinsics']}")
     print(f"  {args.cam_key}.resolution = {filled[args.cam_key]['resolution']}")
-    print("  NOTE: T_cam_imu and all IMU noise values remain TODO placeholders.")
+    print("  NOTE: T_cam_imu carried over (spec §6.1 standard); IMU noise values remain TODO placeholders.")
     return 0
 
 

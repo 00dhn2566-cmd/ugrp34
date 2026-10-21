@@ -22,9 +22,13 @@
 #           constants (FX, FY, CX, CY in visual_imaging_taemin/window_recon_node.py
 #           AND window_sim_node.py -- currently hard-coded 600/600/640/360), not
 #           just into this yaml. Those constants and this file must agree. ***
-#   T_cam_imu                            <- drone CAD / Isaac Sim scene graph
-#       (where the camera sits relative to the IMU, and which way it points).
-#       Identity placeholder below -- see the long direction note on that field.
+#   T_cam_imu                            <- root spec window_detection_spec_v0.2.md
+#       §6.1 standard extrinsic (forward camera). The value below is
+#       inverse(T_IC) with R_IC = [[0,0,1],[-1,0,0],[0,-1,0]] and zero offset.
+#       SINGLE SOURCE OF TRUTH = 태민's window_recon_node.py `T_IC` (spec §6.1
+#       "소유"); this file must agree with that constant, NOT with whatever the
+#       drone CAD / Isaac USD scene holds -- the USD camera prim is placed to
+#       match this value, never read back from it (ISAAC_MIGRATION_CHECKLIST row D).
 #   timeshift_cam_imu                    <- Kalibr imu-cam time calibration, or
 #       0.0 for a simulator where camera and IMU share one clock (see below).
 # =============================================================================
@@ -64,31 +68,35 @@ cam0:
   # Kalibr / OpenVINS store T_cam_imu, defined as:
   #     p_cam = T_cam_imu @ p_imu
   # i.e. it maps a point expressed in IMU coordinates INTO camera coordinates.
-  # 윤호 delivers exactly ONE physical extrinsic (the known camera<->IMU mount);
-  # it is stored HERE in that Kalibr direction (T_cam_imu).
   #
-  # 태민's window_recon_node.py wants the INVERSE (cam-in-IMU): its `T_IC` maps
+  # 태민's window_recon_node.py holds the INVERSE (cam-in-IMU): its `T_IC` maps
   #     p_imu = T_IC @ p_cam           (T_IC == T_imu_cam == inverse of T_cam_imu)
   # (there `R_WC = R_WI @ R_IC`, `c_W = p_WI + R_WI @ p_IC`, so R_IC/p_IC are the
-  # camera pose EXPRESSED IN the IMU frame). So there is ONE extrinsic in two
-  # conventions: this file holds T_cam_imu; 태민 must invert it (or equivalently
-  # take T_imu_cam) to fill window_recon_node.py's T_IC. Do NOT paste the same
-  # 4x4 into both places.
+  # camera pose EXPRESSED IN the IMU frame). Per root spec §6.1 that node constant
+  # is the SINGLE SOURCE OF TRUTH; this file stores inverse(T_IC) in the Kalibr
+  # direction. Do NOT paste the same 4x4 into both places.
   #
-  # TODO -- THIS IDENTITY IS A PLACEHOLDER. Fill from the drone CAD / Isaac Sim:
-  #   * translation (last column, top 3 rows): position of the camera optical
-  #     centre relative to the IMU, expressed in the IMU frame, in METRES.
-  #   * rotation (top-left 3x3): orientation of the camera-optical frame
-  #     (OpenCV: +X right, +Y down, +Z forward/along the optical axis) relative
-  #     to the IMU frame. A forward-looking camera on a body-frame IMU is
-  #     typically NOT identity (it involves the body->optical axis swap).
-  # In simulation this transform is known exactly from the Isaac Sim scene graph
-  # (camera prim pose relative to the IMU sensor prim). Keep the IMU frame
-  # consistent with kalibr_imu_chain.yaml (T_i_b there).
+  # VALUE = root spec window_detection_spec_v0.2.md §6.1 standard (잠정 확정
+  # 2026-08-18): body/IMU frame x forward / y left / z up; forward-looking camera
+  # with OpenCV optical axes (z forward / x right / y down);
+  #     R_IC = [[0, 0, 1], [-1, 0, 0], [0, -1, 0]]   (optical z->body x,
+  #                                                   optical x->body -y,
+  #                                                   optical y->body -z)
+  #     p_IC = [0, 0, 0]                              (mount offset; 0 in sim)
+  # so T_cam_imu = inverse(T_IC): R = R_IC^T, t = -R_IC^T p_IC = 0.
+  # The same constant is mirrored as common.geometry.T_IC_SPEC for the exporters
+  # (sim/export_vio.py writes it as cam0/sensor.yaml T_BS).
+  #
+  # NOT a placeholder and NOT to be refilled from the drone CAD / Isaac USD scene:
+  # the Isaac camera prim must be placed relative to the IMU prim so that it
+  # realises THIS transform (checklist row D). Only a real-hardware Kalibr
+  # calibration adopted into the spec §6.1 table replaces these numbers, and then
+  # 태민's node constant changes first. Keep the IMU frame consistent with
+  # kalibr_imu_chain.yaml (T_i_b there).
   T_cam_imu:
+    - [0.0, -1.0, 0.0, 0.0]
+    - [0.0, 0.0, -1.0, 0.0]
     - [1.0, 0.0, 0.0, 0.0]
-    - [0.0, 1.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.0]
     - [0.0, 0.0, 0.0, 1.0]
 
   # Time offset between camera and IMU clocks (seconds): t_imu = t_cam + shift.
