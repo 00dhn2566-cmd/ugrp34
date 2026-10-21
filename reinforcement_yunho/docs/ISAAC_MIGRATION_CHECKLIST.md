@@ -92,8 +92,8 @@
 | 프레임 메타데이터 → `export_dataset.py` → YOLO-pose 17토큰 + `meta.jsonl` | ✅ | 오프라인 경로 검증됨 |
 | Replicator 4-corner 커스텀 writer | ⚠ | 순수 로직 있음, Isaac 실행 미검증(spec §7) |
 | 렌더↔라벨 정합(`visualize_labels.py`) | ✅ | |
-| EuRoC-ASL 비행 bag(`export_vio.py`) | ⚠ | 작성기 있음, Isaac 비행·IMU 값 넣는 쪽 없음. PyBullet `export_euroc.py`가 선례 |
-| §5 GT 스트림(`export_stream.py`, 길남 `gt_stream` 경유) | ✅ | |
+| EuRoC-ASL 비행 bag(`export_vio.py`) | ⚠ | 작성기 있음, Isaac 비행·IMU 값 넣는 쪽 없음. PyBullet `export_euroc.py`가 선례. GT pose는 **IMU/body 프레임**(spec §6.1) — 카메라 pose를 `gt_state_from_camera_pose`로 변환해 넣을 것(10-21 정정, 이전엔 body≡camera로 기록) |
+| §5 GT 스트림(`export_stream.py`, 길남 `gt_stream` 경유) | ✅ | pose 블록 기본값 = IMU/body pose(spec §6.1, `pose_frame="body"`). 길남 sample_stream(body≡camera)은 `pose_frame="camera"` — 리허설 전용 |
 | ROS2 브릿지(`/cam0/image_raw`, `/imu0`, odom) | ⛔ | 태민 실시간 구독 단계. 컨테이너 안 ROS2 Jazzy 정합 확인 |
 
 ## I. 검증 순서 (권장)

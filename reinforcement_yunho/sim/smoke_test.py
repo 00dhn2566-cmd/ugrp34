@@ -30,6 +30,7 @@ from common import (  # noqa: E402
 from sim import scene_gen  # noqa: E402
 from sim.replicator_writer import build_label_lines, build_label_records  # noqa: E402
 from sim import export_dataset, export_vio, export_stream  # noqa: E402
+from common import quat_wxyz_to_R, T_IC_SPEC  # noqa: E402
 
 T0_NS = 1_720_000_000_000_000_000
 
@@ -142,8 +143,17 @@ def test_export_dataset_and_meta():
 def test_export_vio():
     intr = scene_gen.default_intrinsics()
     scene = scene_gen.sample_scene(seed=3, intr=intr)
-    q_wxyz = list(map(float, scene["camera"]["quat_wxyz"]))
-    pos = list(map(float, scene["camera"]["position"]))
+    # GT rows carry the IMU/body pose (spec §6.1), not the rendered camera pose.
+    R_cam = np.asarray(scene["camera"]["R_world_cam_cv"], float)
+    pos_cam = list(map(float, scene["camera"]["position"]))
+    gt0 = export_vio.gt_state_from_camera_pose(T0_NS, pos_cam, R_cam)
+    q_wxyz, pos = gt0["quat_wxyz"], gt0["position"]
+    R_body = quat_wxyz_to_R(q_wxyz)
+    assert np.allclose(R_body[:, 0], R_cam[:, 2]), "body +x (forward) must be the optical axis"
+    assert np.allclose(R_body[:, 1], -R_cam[:, 0]), "body +y (left) == optical -x"
+    assert np.allclose(R_body[:, 2], -R_cam[:, 1]), "body +z (up) == optical -y"
+    assert np.allclose(pos, pos_cam), "zero mount offset in sim"
+    assert not np.allclose(q_wxyz, scene["camera"]["quat_wxyz"]), "body pose != camera pose"
 
     cam = [{"timestamp_ns": T0_NS + k * 50_000_000, "filename": f"{T0_NS + k*50_000_000}.png"}
            for k in range(5)]                                   # 20 Hz
@@ -161,6 +171,11 @@ def test_export_vio():
         assert len(rc) == 5 and len(ri) == 50 and len(rg) == 5
         assert all(isinstance(s["timestamp_ns"], int) for s in ri), "IMU ts int ns"
         assert len(rg[0]["quat_wxyz"]) == 4 and np.allclose(rg[0]["quat_wxyz"], q_wxyz)
+        # cam0/sensor.yaml T_BS == the spec §6.1 T_IC (same value the GT used)
+        import yaml
+        with open(summary["paths"]["cam0_sensor"], encoding="utf-8") as f:
+            T_BS = np.asarray(yaml.safe_load(f)["T_BS"]["data"], float).reshape(4, 4)
+        assert np.allclose(T_BS, T_IC_SPEC), "cam0/sensor.yaml T_BS must be spec §6.1 T_IC"
         # cam rate ~20 Hz, imu ~200 Hz from the stamps
         assert ri[1]["timestamp_ns"] - ri[0]["timestamp_ns"] == 5_000_000
         # float timestamps must be rejected (int-ns contract)
@@ -169,21 +184,26 @@ def test_export_vio():
             raise AssertionError("float timestamp should raise")
         except ValueError:
             pass
-    print("  [5 euroc]      mav0 cam/imu/gt CSV round-trip, int-ns + WXYZ OK")
+    print("  [5 euroc]      mav0 cam/imu/gt CSV round-trip, int-ns + WXYZ + body-frame GT OK")
 
 
 def test_export_stream():
     scene, intr, _ = _first_scene_with_labels()
     lines = build_label_lines(scene["windows"], scene["camera"]["T_world_cam_usd"], intr)
     config = export_stream.load_color_config()
-    rec = export_stream.build_stream_record(
-        lines, T0_NS, 0,
-        list(map(float, scene["camera"]["position"])),
-        list(map(float, scene["camera"]["quat_xyzw"])),
-        config,
-    )
+    pos_cam = list(map(float, scene["camera"]["position"]))
+    q_cam = list(map(float, scene["camera"]["quat_xyzw"]))
+    rec = export_stream.build_stream_record(lines, T0_NS, 0, pos_cam, q_cam, config)
     assert rec["vision"]["timestamp"] == rec["pose"]["timestamp"] == T0_NS
     assert len(rec["pose"]["orientation"]) == 4  # xyzw
+    # default pose block = IMU/body pose (spec §6.1): body +x == camera optical +z
+    R_cam = np.asarray(scene["camera"]["R_world_cam_cv"], float)
+    q = rec["pose"]["orientation"]
+    R_body = quat_wxyz_to_R([q[3], q[0], q[1], q[2]])
+    assert np.allclose(R_body[:, 0], R_cam[:, 2], atol=1e-5), "stream pose must be the body pose"
+    rec_cam = export_stream.build_stream_record(lines, T0_NS, 0, pos_cam, q_cam, config,
+                                               pose_frame="camera")
+    assert np.allclose(rec_cam["pose"]["orientation"], np.round(q_cam, 6), atol=1e-6)
     assert len(rec["vision"]["windows"]) == len(lines)
     for w in rec["vision"]["windows"]:
         assert w["det_conf"] == 1.0 and w["color_conf"] == 1.0  # GT stream
@@ -197,7 +217,7 @@ def test_export_stream():
         }], config)
         back = json.loads(Path(p).read_text().splitlines()[0])
         assert back["vision"]["windows"][0]["corners"]
-    print("  [6 stream]     §5 msg via 길남 gt_stream (routed, not hand-rolled) OK")
+    print("  [6 stream]     §5 msg via 길남 gt_stream (routed, not hand-rolled) + body-frame pose OK")
 
 
 if __name__ == "__main__":
