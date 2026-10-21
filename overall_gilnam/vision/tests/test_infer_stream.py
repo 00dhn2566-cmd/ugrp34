@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from color_judge import load_color_config
+from color_judge import draw_window_frame, load_color_config
 from infer_stream import detections_to_windows
 from vision_msg import build_frame_message
 
@@ -15,13 +15,13 @@ RED_CORNERS = [[950, 150], [1150, 150], [1150, 400], [950, 400]]
 
 
 def make_frame(windows, thickness=14):
-    """[(corners, border_hsv)] 목록으로 720p RGB 프레임 생성 (테두리만 색, 내부는 배경)."""
+    """[(corners, border_hsv)] 목록으로 720p RGB 프레임 생성 (spec §2.5: 프레임은 corner 바깥, 개구부는 배경)."""
     hsv = np.zeros((720, 1280, 3), dtype=np.uint8)
     hsv[:] = (30, 30, 120)
     for corners, border in windows:
         pts = np.array(corners, dtype=np.int32)
         cv2.fillPoly(hsv, [pts], (90, 20, 200))
-        cv2.polylines(hsv, [pts], isClosed=True, color=border, thickness=thickness)
+        draw_window_frame(hsv, corners, border, thickness)
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
