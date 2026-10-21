@@ -15,7 +15,8 @@
       = 계획 한계(입력 JSON limits, 시간 부여용 스펙)
       + 지터 상쇄 오프셋 예산 (JITTER_MARGIN 몫 — 상쇄 수정이 얹혀도 총합이
         물리 한계 안에 남도록 시간 부여 단계에서 미리 떼어둠)
-    입력 limits가 (1-JITTER_MARGIN)·물리 한계를 넘으면 시끄럽게 error.
+    입력 limits가 (1-JITTER_MARGIN)·물리 한계를 넘으면 상한으로 클램프하고
+    통지(LIMITS_CLAMPED, 계약 v0.2). 옵션 strict=true 일 때만 error.
 
 지터 상쇄 레이어: 최종 궤적 = 스무딩 궤적 + delta (현재는 ZV/ZVD가 1호기).
 delta는 trajectory.mat에 jitter_delta로 별도 저장 — attitude_feedback 학습

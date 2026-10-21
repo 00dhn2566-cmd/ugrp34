@@ -190,8 +190,9 @@ Isaac Sim이 어느 암에 어느 값을 물릴지는 윤호 결정 사항이다
    대역이고 정책 출력이 아니다. 실제 정책을 태우려면 `pybullet` +
    `gym-pybullet-drones`가 필요한데, Windows에 MSVC가 없어(로컬 툴체인 MinGW) 빌드
    실패 → 윤호 환경에서 할 일. **성진 파트에는 불필요** (입력 형식만 같으면 동일).
-4. **문서 오타**: `INTERFACE_SPEC.md §7` 제목은 `contract_version 0.1`인데 실제
-   `traj_report.py` 출력은 `"0.2"`다.
+4. ~~**문서 오타**: `INTERFACE_SPEC.md §7` 제목은 `contract_version 0.1`인데 실제
+   `traj_report.py` 출력은 `"0.2"`다.~~ → 2026-10-21 §7 제목·예시 JSON 을 0.2로,
+   §1 "초과 시 거부" 문구를 클램프+`LIMITS_CLAMPED`(strict만 거부)로 정정.
 
 ---
 

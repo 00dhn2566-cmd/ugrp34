@@ -212,8 +212,12 @@ $UGRP_IO_ROOT/                # 미설정 시: repo output/ (개발 기본, 현�
   이후 기준 미정의는 발산 위험.
 
 **한계 예산 규칙**: `limits`는 지터 상쇄 오프셋 예산을 **빼고** 작성한다.
-`limits ≤ (1 − JITTER_MARGIN=0.2) × 물리 한계(v2.0 / a2.0 / j10)` — 초과 시 거부(error).
-상쇄 수정이 얹혀도 최종 궤적이 물리 한계 안에 남게 하기 위한 몫이다.
+`limits ≤ (1 − JITTER_MARGIN=0.2) × 물리 한계(v2.0 / a2.0 / j10 / snap80)` =
+v 1.6 / a 1.6 / j 8 / snap 64. **초과분은 거부가 아니라 상한으로 클램프**하고
+회신 `adjustments`에 `LIMITS_CLAMPED`로 통지한다 (계약 v0.2 완화 정책, §7;
+`traj_pipeline.load_mission`). 옵션 `"strict": true`일 때만 v0.1처럼 즉시 거부
+(`ValueError` → `LIMITS_OVER_BUDGET`). 상쇄 수정이 얹혀도 최종 궤적이 물리 한계
+안에 남게 하기 위한 몫이다.
 
 **동적 배분 (지터 실측 연동)**: 승인 기준은 위 0.2로 고정(RL 계약 정상성)하되,
 **실제 계획에 쓰는 유효 한계**는 원장의 최근 잔류 지터(신선도 24h, 최근 3건
@@ -929,7 +933,7 @@ E       = integral(P dt)
 여전히 권장 (조정 없이 요청 그대로 날게 하려면): limits ≤ 예산, xy 대각 ×0.7,
 저크-가능 Tm ≥ (60·A/(0.8·j_max))^⅓, 스텝 대신 시간-현실적 궤적.
 
-### 회신 스키마 (`trajectory_report.json`, contract_version 0.1)
+### 회신 스키마 (`trajectory_report.json`, contract_version 0.2 — `traj_report.CONTRACT_VERSION`)
 
 ```json
 {
@@ -950,7 +954,7 @@ E       = integral(P dt)
     "keep_out_min_clearance_m": 0.8,        // 구역 최소 이격 실측 (음수 = 침범)
     "fidelity_gaps": {"plan": 0.05, "track": 0.02}   // 갭 분해: 의도→궤적 / 궤적→비행
   },
-  "contract_version": "0.1"
+  "contract_version": "0.2"
 }
 ```
 
