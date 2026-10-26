@@ -31,6 +31,7 @@ def main(argv=None) -> int:
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--height", type=int, default=360)
     ap.add_argument("--every", type=int, default=1, help="render every N decisions")
+    ap.add_argument("--config", action="append", default=[], help="extra yaml merged over the config (e.g. tuned fsm)")
     a = ap.parse_args(argv)
 
     from isaaclab.app import AppLauncher
@@ -52,6 +53,14 @@ def main(argv=None) -> int:
             cfg = Cfg(json.load(f)["config"])
     else:
         cfg = load_config()
+    if a.config:
+        import yaml
+        from rl_planner.core.config import deep_merge
+        merged = dict(cfg)
+        for path in a.config:
+            with open(path, encoding="utf-8") as f:
+                merged = deep_merge(merged, yaml.safe_load(f) or {})
+        cfg = Cfg(merged)
     cfg["seed"] = a.seed
     cfg["sim"]["num_envs"] = 1
     env = WindowMissionIsaacEnv(make_env_cfg(cfg, num_envs=1, device="cuda:0"))
