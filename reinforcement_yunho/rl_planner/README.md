@@ -38,14 +38,16 @@ rl_planner/
     fsm.py                    상태머신 기준선 (traj_manager 이식, 벡터화)
     policy.py                 학습된 정책 로더 (TorchScript + policy_meta.json)
     onboard.py                실제 파이프라인 연동 어댑터: §5 검출 + §6.1 VIO → 웨이포인트 + 성진 waypoints_config
+    safety.py                 실행 시 안전 필터: 인지 상실 시 제자리 정지 비행 + 경계(가상 울타리) — 온보드 기본 적용
   scripts/train.py          rsl_rl PPO 학습 (비대칭 actor-critic, 커리큘럼, DR)
-  scripts/evaluate.py       고정 시드 장면에서 RL vs 상태기계 (성공률·충돌률·시간·여유)
+  scripts/evaluate.py       고정 시드 장면에서 RL vs 상태기계 (성공률·충돌률·시간·여유), 계획기 이름 뒤 +safe = 안전 필터
   eval_harness.py           평가 공통 루틴
   tests/                    단위 테스트 (팀 공용 기하 규약 일치 포함)
 ```
 
-두 백엔드는 `WindowMissionCore` 를 공유하므로 **물리 적분만 다르고 MDP 는 같다**. 검증: 같은 512 장면에서 상태기계
-성공률 torch 100% / Isaac 99.8%, 평균 완료시간 14.69 s / 14.63 s.
+두 백엔드는 `WindowMissionCore` 를 공유하므로 **물리 적분만 다르고 MDP 는 같다**. 같은 시드·레벨·장면 수면 두 백엔드가
+**같은 장면**을 받는다(장면 지문 일치). 검증: L3 64 장면에서 RL 완료시간 torch 8.280 s / Isaac 8.280 s,
+상태기계 12.075 s / 12.070 s, 성공률 모두 100% (512 장면 교차 비교는 [RESULTS.md](RESULTS.md)).
 
 ## 3. 환경 (이 PC 기준, 2026-10-27 구축)
 
@@ -87,12 +89,20 @@ $PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations
 
 # 평가 — 같은 시드 장면에서 RL vs 상태기계 (레벨 3 = 창문 3개, 실측 수준 잡음)
 $PY rl_planner/scripts/evaluate.py --backend isaac --planners fsm,rl --policy <run>/export --level 3
+#   --planners fsm,rl,rl+safe   (+safe = 안전 필터 뒤에서 실행)   --config rl_planner/configs/stress/<조건>.yaml
 tensorboard --logdir /data/runs/rl_planner
 ```
+
+평가는 계획기마다 같은 시드로 난수를 다시 맞추고(`core.reseed`) 전체 리셋한다. 장면·도메인 랜덤화는 에피소드용 난수열,
+카메라 잡음은 매 결정 고정 크기로 뽑는 별도 난수열이라, 각 환경의 첫 에피소드는 **모든 계획기에게 같은 실험**이다
+(장면 지문을 `summary.json` 에 기록, 어긋나면 평가 중단). 그래서 결과 표에 같은 장면 짝 비교(McNemar)를 함께 낸다.
 
 배포(실제 파이프라인): `planners/onboard.py` 의 `OnboardPlanner` 가 traj_manager 자리를 대신한다.
 §5 검출 메시지와 VIO 자세(§6.1, XYZW)를 넣으면 학습 때와 **같은 코드**로 삼각측량해 관측을 만들고,
 다음 웨이포인트와 성진 스키마 `waypoints_config` (`{waypoints:[현재, 다음], limits, dt}`) 를 돌려준다.
+정책 출력은 **안전 필터**(`planners/safety.py`)를 거친다: 창문이 1 s 넘게 하나도 검출되지 않고 목표 창문 추정도 없으면
+그 자리에 정지 비행하고(`hold: true`), 다시 보이면 정책에 돌려준다. 웨이포인트는 경기장 상자 안으로 제한한다.
+실제 방 크기는 `OnboardPlanner(..., safety={"bounds": {"x_min": .., "y_abs": .., "z_min": .., "z_max": ..}})` (VIO 좌표).
 
 ## 5. MDP 정의 (설정: `configs/default.yaml`)
 
@@ -153,6 +163,8 @@ L4 창문 3~5개 + 창문 yaw ±20°.
 | yaw 제어 허용 | `action.yaw: true` (4차원 행동) |
 | 다른 RL 라이브러리 | Isaac 백엔드는 표준 DirectRLEnv 라 Isaac Lab 의 skrl/rl_games/sb3 래퍼를 그대로 쓸 수 있음 |
 | 클러스터(40GB×20)로 이전 | `train.py` 는 인자만 받음. `--num-envs` 를 키우고 `/data/envs/isaac` 와 같은 버전으로 설치 |
+| 안전 규칙 추가/변경 | `planners/safety.py` `SafetyFilter.filter()` + yaml `safety` (학습·MDP 와 분리, 시뮬 평가 `+safe` 로 효과 측정) |
+| 새 스트레스 조건 | `configs/stress/<이름>.yaml` (부분 설정) — 평가 매트릭스가 자동으로 포함 |
 
 ## 7. 가정과 한계 (정직하게)
 
@@ -163,6 +175,8 @@ L4 창문 3~5개 + 창문 yaw ±20°.
   `controller.type` 교체 후 재학습/재평가 필요.
 - 통과 카운트는 관측에서 "자기가 통과한 개수"로 쓴다 (실기에서는 추정 창문 평면 통과로 판단 — `onboard.py` 가 그렇게 함).
 - 정책은 웨이포인트를 매 0.1 s 로 낸다. 성진 `waypoints_config` 에는 `[현재, 다음]` 2점으로 넘긴다 (리시딩 호라이즌).
+- **카메라가 아무것도 못 보는 상황은 학습 분포 밖**이다. 이때 정책은 뒤로 물러나 경계를 벗어나고, 상태기계도 SEARCH 가
+  계속 전진해 벽에 부딪힌다. 실행 시 안전 필터로 막는다 (RESULTS.md 안전 절). 근본 대책은 학습에 인지 상실 구간을 넣는 것.
 
 ## 8. 팀 결정이 필요한 것
 
@@ -170,3 +184,4 @@ L4 창문 3~5개 + 창문 yaw ±20°.
 2. 카메라 intrinsics 확정 (지금 fx=763, HFOV 80° 잠정) — 바뀌면 `perception.camera` 수정 후 재학습.
 3. 창문 개수 상한(지금 5)·배치 분포(간격 2.6~3.6 m, yaw ±20°)가 실제 대회/실험 조건과 맞는지.
 4. 안전 여유: 충돌 반경 0.30 m, 안전 여유 0.35 m (planner_limits) — 기체 실측으로 확정 필요.
+5. 안전 필터: 정지 비행 전환 시간(지금 1 s), 실험실 경계 상자, 정지 비행 대신 착륙할지.

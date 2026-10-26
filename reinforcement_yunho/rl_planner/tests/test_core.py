@@ -198,3 +198,46 @@ def test_planners_see_identical_scenes_and_camera_noise():
     assert runs[0][0] == runs[1][0]
     assert torch.equal(runs[0][1], runs[1][1])
     assert runs[1][2] > runs[0][2]
+
+
+def test_safety_filter_holds_blind_drone_and_passes_nominal_missions():
+    """planners/safety.py: a planner that backs away when it sees nothing (what the RL policy
+    does with a dead camera) is held in place; nominal missions still succeed."""
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    from rl_planner.eval_harness import run_planner, summarize
+    from rl_planner.planners.fsm import FSMPlanner
+    from rl_planner.planners.safety import SafePlanner
+
+    class Backer:
+        def reset(self, ids):
+            pass
+
+        def act(self, core):
+            a = torch.zeros(core.E, core.action_dim)
+            a[:, 0] = -1.0
+            return a
+
+    cfg = cfg_cpu("sim.num_envs=16", "perception.det_conf_min=1.01")
+    for guarded in (False, True):
+        env = TorchWindowEnv(cfg, num_envs=16, device="cpu", seed=5)
+        env.core.fixed_level = 3
+        env._reset_all()
+        p0 = env.core.state.pos.clone()
+        pl = SafePlanner(Backer(), cfg, 16, "cpu", env.core.step_dt) if guarded else Backer()
+        pl.reset(torch.arange(16))
+        crashed = torch.zeros(16, dtype=torch.bool)
+        for _ in range(60):
+            _, _, d, _ = env.step(pl.act(env.core))
+            crashed |= d.bool() & env.core.episode_record["crashed"]   # auto-reset: read the record
+        if guarded:
+            assert not bool(crashed.any())
+            assert float((env.core.state.pos - p0).norm(dim=-1).max()) < 0.3
+        else:
+            assert bool(crashed.all())
+
+    cfg = cfg_cpu("sim.num_envs=32", "seed=3")
+    env = TorchWindowEnv(cfg, num_envs=32, device="cpu")
+    env.core.fixed_level = 0
+    env._reset_all()
+    s = summarize(run_planner(env, SafePlanner(FSMPlanner(cfg, 32, "cpu"), cfg, 32, "cpu", env.core.step_dt)))
+    assert s["success_rate"] >= 0.9

@@ -50,8 +50,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     from rl_planner.core.config import Cfg, load_config
-    planners = [p.strip() for p in a.planners.split(",") if p.strip()]
-    if "rl" in planners and not a.policy:
+    planners = [p.strip() for p in a.planners.split(",") if p.strip()]   # "+safe" suffix = behind SafetyFilter
+    if any(p.split("+")[0] == "rl" for p in planners) and not a.policy:
         raise SystemExit("--policy <export dir> is required for the rl planner")
 
     if a.policy:   # evaluate with the exact config the policy was trained with (+ explicit overrides)
@@ -119,13 +119,19 @@ def main(argv=None) -> int:
         scene_fp[name] = scene_fingerprint(env.core.scene)
         if scene_fp[name] != scene_fp[planners[0]]:
             raise SystemExit(f"[eval] planners would see different scenes: {scene_fp}")
-        if name == "fsm":
+        base, _, guard = name.partition("+")
+        if base == "fsm":
             planner = FSMPlanner(cfg, n, env.device)
-        elif name == "rl":
+        elif base == "rl":
             from rl_planner.planners.policy import PolicyPlanner
             planner = PolicyPlanner(a.policy, device=env.device, cfg=cfg)
         else:
             raise SystemExit(f"unknown planner {name!r}")
+        if guard == "safe":
+            from rl_planner.planners.safety import SafePlanner
+            planner = SafePlanner(planner, cfg, n, env.device, env.core.step_dt)
+        elif guard:
+            raise SystemExit(f"unknown planner suffix {guard!r} (only +safe)")
         rec = run_planner(env, planner, record_k=a.record)
         if "traj" in rec:
             os.makedirs(out, exist_ok=True)

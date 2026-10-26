@@ -12,6 +12,9 @@ This is the drop-in replacement for the mission state machine
   (PerceptionSurrogate.add_detections), so the estimates it sees online are built
   exactly like in training — no separate re-implementation that can drift.
 * Observation layout, action scaling and timing come from policy_meta.json.
+* A SafetyFilter (planners/safety.py) sits between policy and output: hold position on
+  perception loss, clamp waypoints into the arena box. Set the real room with
+  ``safety={"bounds": {"x_min": .., "y_abs": .., "z_min": .., "z_max": ..}}`` (VIO frame).
 * Interface conventions (CONVENTIONS.md): drone state quaternion is XYZW (state_window
   §6.1 / OpenVINS); window corners in CORNER_ORDER (TL, TR, BR, BL); pixels are
   1280x720 §2 coordinates; camera = body +x (root spec §6.1 R_IC).
@@ -39,6 +42,7 @@ from ..core.dynamics import RigidBodyState
 from ..core.observations import build_spec, compute_group, _gather
 from ..core.perception import PerceptionSurrogate
 from .policy import PolicyPlanner
+from .safety import SafetyFilter
 
 _RB = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # reinforcement_yunho/
 _PLANNER_LIMITS = os.path.join(os.path.dirname(_RB), "overall_gilnam", "planning", "planner_limits.yaml")
@@ -59,7 +63,8 @@ class _Scene:
 
 
 class OnboardPlanner:
-    def __init__(self, export_dir: str, n_windows: int, device: str = "cpu", limits: Optional[dict] = None):
+    def __init__(self, export_dir: str, n_windows: int, device: str = "cpu", limits: Optional[dict] = None,
+                 safety: Optional[Mapping] = None):
         self.device = torch.device(device)
         self.policy = PolicyPlanner(export_dir, device=device)
         self.cfg = Cfg(self.policy.meta["config"])
@@ -79,6 +84,10 @@ class OnboardPlanner:
         self.actions = torch.zeros(1, self.action_dim, device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
         self.step_dt = float(self.policy.meta["timing"]["decision_dt_s"])
+        if safety is not None:
+            self.cfg["safety"] = {**(self.cfg.get("safety") or {}), **safety}
+        self.safety = SafetyFilter(self.cfg, 1, self.device, self.step_dt)
+        self._seen = False                       # any window detected since the last step()
         self.episode_length_s = float(self.cfg["sim"]["episode_length_s"])
         self.t0: Optional[float] = None
         self.t_now = 0.0
@@ -137,6 +146,7 @@ class OnboardPlanner:
         self.det = self.perception.add_detections(cam_c, R_WC, corners, det, conf,
                                                   torch.ones(1, dtype=torch.bool, device=self.device))
         self.est = self.perception.estimate()
+        self._seen = self._seen or bool(det.any())
 
     def mark_passed(self) -> None:
         self.mission.target += 1
@@ -177,14 +187,19 @@ class OnboardPlanner:
             self.add_frame(drone_state["position"], drone_state["orientation"], None)
         obs = compute_group(self, self.policy_spec)
         self.last_obs = obs                      # exactly what the policy saw (debug / logging)
-        act = self.policy.act_obs(obs).clamp(-1.0, 1.0)
+        raw = self.policy.act_obs(obs).clamp(-1.0, 1.0)
+        seen = torch.tensor([self._seen], device=self.device)
+        self._seen = False
+        act = self.safety.filter(raw, seen, _gather(self.est.valid, self.target_idx), self.state.pos, self.yaw,
+                                 self.step_max)
         self.prev_actions, self.actions = self.actions, act
         wp = self.state.pos + m3.heading_to_world(act[:, :3] * self.step_max, self.yaw)
         wp[:, 2] = wp[:, 2].clamp(*self.wp_z)
         cur = [float(v) for v in self.state.pos[0]]
         nxt = [float(v) for v in wp[0]]
         wc = {"waypoints": [cur, nxt], "limits": self.limits, "dt": 0.01}
-        return {"waypoint": nxt, "action": [float(v) for v in act[0]], "target_index": int(self.mission.target[0]),
+        return {"waypoint": nxt, "action": [float(v) for v in act[0]], "policy_action": [float(v) for v in raw[0]],
+                "hold": bool(self.safety.holding[0]), "target_index": int(self.mission.target[0]),
                 "done": int(self.mission.target[0]) >= self.mission.n, "waypoints_config": wc,
                 "estimate_valid": bool(_gather(self.est.valid, self.target_idx)[0])}
 

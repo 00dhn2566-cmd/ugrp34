@@ -331,6 +331,10 @@ class WindowMissionCore:
         self._refresh_cache()
         s = self.state
         take = (self.episode_step % self.frame_every) == 0
+        bo = self.cfg["perception"].get("blackout_s")
+        if bo:                                   # stress knob: no camera frames in [t0, t1)
+            t = self.episode_time
+            take = take & ~((t >= float(bo[0])) & (t < float(bo[1])))
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
         self.det = self.perception.observe(cam_c, R_WC, self.scene, take, self.gen)
         self.est = self.perception.estimate()

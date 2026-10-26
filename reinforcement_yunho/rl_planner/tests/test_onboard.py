@@ -53,6 +53,7 @@ def test_onboard_matches_training_obs_and_actions():
                 "lin_vel": v_b.tolist(), "ang_vel": s.omega_b[0].tolist()}
 
     max_diff = 0.0
+    holds = 0
     term_diff = {}
     for t in range(150):
         ds = drone_state()
@@ -64,7 +65,8 @@ def test_onboard_matches_training_obs_and_actions():
         for name, a0, a1 in ob.policy_spec:
             term_diff[name] = max(term_diff.get(name, 0.0), float((o_env[a0:a1] - o_ob[a0:a1]).abs().max()))
         a_env = pol.act(core).clamp(-1.0, 1.0)
-        max_diff = max(max_diff, float((torch.tensor(out["action"]) - a_env[0]).abs().max()))
+        max_diff = max(max_diff, float((torch.tensor(out["policy_action"]) - a_env[0]).abs().max()))
+        holds += int(out["hold"])
         ob.validate_waypoints_config(out["waypoints_config"])
         _, _, done, _ = env.step(torch.tensor([out["action"]]))
         if bool(done[0]):
@@ -72,3 +74,4 @@ def test_onboard_matches_training_obs_and_actions():
     print("per-term max |obs_env - obs_onboard|:", {k: round(v, 6) for k, v in term_diff.items()})
     assert max(term_diff.values()) < 1e-3, f"observation mismatch: {term_diff}"
     assert max_diff < 1e-3, f"onboard actions differ from training-env actions by {max_diff}"
+    assert holds == 0, f"safety hold triggered {holds} times on a nominal mission"
