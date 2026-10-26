@@ -164,6 +164,7 @@ L4 창문 3~5개 + 창문 yaw ±20° → L5 스트레스(σ 4~12 px, 누락 5~20
 |---|---|
 | 보상 항목 추가 | `core/rewards.py` 에 `@register("name")` 함수 + yaml `reward.name: 가중치` |
 | 관측 항목 추가/순서 변경 | `core/observations.py` `@register` + yaml `observation.policy` 목록 (export 메타에 레이아웃 자동 기록) |
+| 학습된 정책에 관측 추가 (재학습 없이 이어서) | `scripts/expand_obs.py --run <run> --add <항목>` → 새 입력 0 가중치로 확장한 체크포인트 + `train.py --resume` (예: `detection_gap`, RESULTS.md §5) |
 | 난이도 축 추가 | yaml `curriculum.levels` 각 레벨에 키 추가 (`scene.LevelTable.KEYS` 에 등록) |
 | 성진 PID(C++)로 저수준 교체 | `core/controller.py` 에 `Controller` 하위 클래스 + `CONTROLLERS` 등록 + `controller.type` |
 | 실제 기체 USD (FX450) 사용 | `envs/isaaclab_env.py` 의 `WindowMissionSceneCfg.drone` spawn 교체 (힘은 wrench composer 로 그대로) |
@@ -173,6 +174,8 @@ L4 창문 3~5개 + 창문 yaw ±20° → L5 스트레스(σ 4~12 px, 누락 5~20
 | 클러스터(40GB×20)로 이전 | `train.py` 는 인자만 받음. `--num-envs` 를 키우고 `/data/envs/isaac` 와 같은 버전으로 설치 |
 | 안전 규칙 추가/변경 | `planners/safety.py` `SafetyFilter.filter()` + yaml `safety` (학습·MDP 와 분리, 시뮬 평가 `+safe` 로 효과 측정) |
 | 새 스트레스 조건 | `configs/stress/<이름>.yaml` (부분 설정) — 평가 매트릭스가 자동으로 포함 |
+| 검출 지연 | `perception.latency_steps` (평가 스트레스) / `domain_randomization.latency_steps: [lo, hi]` (학습 DR) |
+| 시드·설정 비교 | `scripts/compare_runs.py --run <run>=<이름> ...` — 학습 곡선 작은 그림 + L5 도달·정체 지표 (RESULTS.md §7) |
 
 ## 7. 가정과 한계 (정직하게)
 

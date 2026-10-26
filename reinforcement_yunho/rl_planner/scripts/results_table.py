@@ -100,7 +100,9 @@ def main(root: str) -> int:
     out = []
     for pol, pol_name in (("isaac", "Isaac(PhysX) 학습 정책"), ("torch", "torch 학습 정책"),
                           ("robust", "Isaac 정책 + 카메라 끊김 DR 미세조정"),
-                          ("robust10", "Isaac 정책 + 긴 끊김(0.5~10 s) DR 미세조정")):
+                          ("robust10", "Isaac 정책 + 긴 끊김(0.5~10 s) DR 미세조정"),
+                          ("gap10", "Isaac 정책 + 긴 끊김 DR + 검출 공백 관측(detection_gap)"),
+                          ("gap4", "Isaac 정책 + 끊김 DR(≤ 4 s) + 검출 공백 관측(detection_gap)")):
         if not any(os.path.isdir(os.path.join(root, d)) for d in os.listdir(root) if d.startswith(f"{pol}pol_")):
             continue
         out.append(f"\n### {pol_name}\n")
@@ -168,7 +170,8 @@ def safety_final_table(root: str) -> int:
 
 ABLATIONS = (("full_s1", "전체 (시드 1)"), ("full_s2", "전체 (시드 2)"), ("full_s3", "전체 (시드 3)"),
              ("noshaping_s1", "추정 개선 보상 없음"), ("nocurr_s1", "커리큘럼 없음 (L5 고정)"),
-             ("symcritic_s1", "대칭 비평가 (특권 정보 없음)"))
+             ("symcritic_s1", "대칭 비평가 (특권 정보 없음)"),
+             ("nodet_s1", "검출 시선 관측 없음 (시드 1)"), ("nodet_s2", "검출 시선 관측 없음 (시드 2)"))
 
 
 def ablation_table(root: str, runs_root: str = "/data/runs/rl_planner/window_mission") -> int:
