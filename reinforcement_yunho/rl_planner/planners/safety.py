@@ -6,9 +6,12 @@ wall and the RL policy backs out of the arena (RESULTS.md). This filter is the
 standard runtime guard for a learned planner and changes nothing while the
 mission is nominal:
 
-* hold   — no window detected for ``lost_hold_s`` (or none yet this episode) AND
-           no valid estimate of the target window: latch the current position
-           and command it until the next detection, then hand control back.
+* hold   — no window detected for ``lost_hold_s`` (``start_grace_s`` before the first
+           detection of the episode) AND no valid estimate of the target window:
+           latch the current position and command it until the next detection,
+           then hand control back. Thresholds come from nominal flights
+           (scripts/perception_gaps.py): the RL policy's longest such streak was
+           0.3 s before the first detection and 1.8 s after it (L5, 512 scenes).
 * fence  — clamp every waypoint into the arena box (scene.bounds shrunk by
            ``fence_margin_m``).
 
@@ -29,18 +32,21 @@ class SafetyFilter:
     def __init__(self, cfg: Mapping, num_envs: int, device, step_dt: float):
         s = dict(cfg.get("safety") or {})
         self.enabled = bool(s.get("enabled", True))
-        self.lost_steps = max(1, int(round(float(s.get("lost_hold_s", 1.0)) / float(step_dt))))
+        self.lost_steps = max(1, int(round(float(s.get("lost_hold_s", 2.0)) / float(step_dt))))
+        self.start_steps = max(1, int(round(float(s.get("start_grace_s", 0.5)) / float(step_dt))))
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
         self.lo = torch.tensor([float(b["x_min"]) + m, -float(b["y_abs"]) + m, float(b["z_min"]) + m], device=device)
         self.hi = torch.tensor([float("inf"), float(b["y_abs"]) - m, float(b["z_max"]) - m], device=device)
         E = int(num_envs)
-        self.since_seen = torch.full((E,), self.lost_steps + 1, dtype=torch.long, device=device)
+        self.since_seen = torch.zeros(E, dtype=torch.long, device=device)
+        self.ever_seen = torch.zeros(E, dtype=torch.bool, device=device)
         self.holding = torch.zeros(E, dtype=torch.bool, device=device)
         self.hold_pos = torch.zeros(E, 3, device=device)
         self.hold_steps = torch.zeros(E, dtype=torch.long, device=device)   # per episode, for logging
 
     def reset(self, env_ids) -> None:
-        self.since_seen[env_ids] = self.lost_steps + 1      # hold until the first detection
+        self.since_seen[env_ids] = 0
+        self.ever_seen[env_ids] = False
         self.holding[env_ids] = False
         self.hold_steps[env_ids] = 0
 
@@ -50,9 +56,12 @@ class SafetyFilter:
         """actions (E,A) in [-1,1]; seen (E,) any window detected since the last decision;
         target_valid (E,) the current target window has a valid estimate."""
         self.since_seen = torch.where(seen, torch.zeros_like(self.since_seen), self.since_seen + 1)
+        self.ever_seen |= seen
         if not self.enabled:
             return actions
-        hold = (self.since_seen > self.lost_steps) & ~target_valid
+        limit = torch.where(self.ever_seen, torch.full_like(self.since_seen, self.lost_steps),
+                            torch.full_like(self.since_seen, self.start_steps))
+        hold = (self.since_seen > limit) & ~target_valid
         self.hold_pos = torch.where((hold & ~self.holding)[:, None], pos, self.hold_pos)
         self.holding = hold
         self.hold_steps += hold.long()

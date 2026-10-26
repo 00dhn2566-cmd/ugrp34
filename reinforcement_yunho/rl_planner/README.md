@@ -100,8 +100,9 @@ tensorboard --logdir /data/runs/rl_planner
 배포(실제 파이프라인): `planners/onboard.py` 의 `OnboardPlanner` 가 traj_manager 자리를 대신한다.
 §5 검출 메시지와 VIO 자세(§6.1, XYZW)를 넣으면 학습 때와 **같은 코드**로 삼각측량해 관측을 만들고,
 다음 웨이포인트와 성진 스키마 `waypoints_config` (`{waypoints:[현재, 다음], limits, dt}`) 를 돌려준다.
-정책 출력은 **안전 필터**(`planners/safety.py`)를 거친다: 창문이 1 s 넘게 하나도 검출되지 않고 목표 창문 추정도 없으면
-그 자리에 정지 비행하고(`hold: true`), 다시 보이면 정책에 돌려준다. 웨이포인트는 경기장 상자 안으로 제한한다.
+정책 출력은 **안전 필터**(`planners/safety.py`)를 거친다: 창문이 하나도 검출되지 않고 목표 창문 추정도 없는 상태가
+시작 후 0.5 s / 첫 검출 이후 2 s 를 넘으면 그 자리에 정지 비행하고(`hold: true`), 다시 보이면 정책에 돌려준다.
+웨이포인트는 경기장 상자 안으로 제한한다.
 실제 방 크기는 `OnboardPlanner(..., safety={"bounds": {"x_min": .., "y_abs": .., "z_min": .., "z_max": ..}})` (VIO 좌표).
 
 ## 5. MDP 정의 (설정: `configs/default.yaml`)

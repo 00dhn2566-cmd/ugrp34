@@ -85,6 +85,7 @@ class WindowMissionCore:
         self.thrust_max = torch.full((self.E,), float(d["thrust_to_weight"]) * self.mass0 * self.g, device=self.device)
         self.drag = torch.full((self.E,), float(d["linear_drag"]), device=self.device)
         self.wind_acc = torch.zeros(self.E, 3, device=self.device)
+        self.blackout = torch.full((self.E, 2), float("inf"), device=self.device)   # per-env [t0, t1) no frames
 
         # episode_step is OWNED by the backend env (rsl_rl may overwrite it with random
         # initial lengths); the core only reads it. episode_time derives from it.
@@ -92,7 +93,8 @@ class WindowMissionCore:
         self.obs_noise_enabled = True
         self.dr_enabled = bool(cfg["domain_randomization"]["enabled"])
         self.curriculum_enabled = bool(cfg["curriculum"]["enabled"])
-        self.fixed_level: Optional[int] = None          # evaluation pins a level
+        fl = cfg["curriculum"].get("fixed_level")       # yaml: train without curriculum (ablation)
+        self.fixed_level: Optional[int] = None if fl is None else int(fl)   # evaluation pins a level
 
         self.policy_spec = build_spec(cfg, "policy")
         self.critic_spec = build_spec(cfg, "critic")
@@ -181,6 +183,13 @@ class WindowMissionCore:
             mag = self._u(dr["wind_accel"], n)
             ang = self._u((0.0, 2 * math.pi), n)
             self.wind_acc[env_ids] = torch.stack((mag * torch.cos(ang), mag * torch.sin(ang), torch.zeros_like(mag)), -1)
+            p_bo = float(dr.get("blackout_prob", 0.0))
+            if p_bo > 0:                          # camera outage DR (no draws when off)
+                has = torch.rand(n, generator=self.reset_gen, device=self.device) < p_bo
+                t0 = self._u(dr["blackout_start_s"], n)
+                t1 = t0 + self._u(dr["blackout_len_s"], n)
+                inf = torch.full_like(t0, float("inf"))
+                self.blackout[env_ids] = torch.stack((torch.where(has, t0, inf), torch.where(has, t1, inf)), -1)
         else:
             self.mass[env_ids] = self.mass0
             self.inertia[env_ids] = self.inertia0
@@ -331,9 +340,10 @@ class WindowMissionCore:
         self._refresh_cache()
         s = self.state
         take = (self.episode_step % self.frame_every) == 0
+        t = self.episode_time
+        take = take & ~((t >= self.blackout[:, 0]) & (t < self.blackout[:, 1]))   # DR outage
         bo = self.cfg["perception"].get("blackout_s")
         if bo:                                   # stress knob: no camera frames in [t0, t1)
-            t = self.episode_time
             take = take & ~((t >= float(bo[0])) & (t < float(bo[1])))
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
         self.det = self.perception.observe(cam_c, R_WC, self.scene, take, self.gen)

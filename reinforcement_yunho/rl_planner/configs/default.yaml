@@ -164,6 +164,7 @@ curriculum:
   promote_on: success                # success | windows
   demote_on_crash: true
   init_level_max: 0                  # 리셋 시 시작 레벨 상한 (0 = 모두 레벨 0 시작)
+  fixed_level: null                  # 정수면 커리큘럼 없이 모든 환경을 이 레벨로 학습 (ablation)
   levels:
     - {n_windows: [1, 1], spacing: [3.2, 3.6], lateral: [-0.3, 0.3], corner_noise_px: [1.0, 2.0], miss_prob: [0.0, 0.0]}
     - {n_windows: [1, 2], spacing: [3.0, 3.6], lateral: [-0.5, 0.5], corner_noise_px: [2.0, 4.0], miss_prob: [0.0, 0.05]}
@@ -184,6 +185,9 @@ domain_randomization:
   drag_scale: [0.5, 1.5]
   motor_time_constant: [0.02, 0.05]
   wind_accel: [0.0, 0.3]             # 일정 외란 가속 크기 [m/s^2] (방향 랜덤 수평)
+  blackout_prob: 0.0                 # 에피소드마다 이 확률로 카메라 끊김 구간 1회 (인지 상실 DR, 0 = 끔)
+  blackout_start_s: [0.5, 20.0]      # 끊김 시작 시각 [s]
+  blackout_len_s: [0.5, 4.0]         # 끊김 길이 [s]
 
 # ---------------------------------------------------------------------------
 # 상태기계 기준선 (backup/prototype_demo/traj_manager.py 이식) — 같은 인지 추정치를 쓴다
@@ -208,7 +212,9 @@ fsm:
 # ---------------------------------------------------------------------------
 safety:
   enabled: true
-  lost_hold_s: 1.0                   # 이 시간 동안 창문이 하나도 검출되지 않고 목표 추정도 없으면 제자리 정지 비행
+  start_grace_s: 0.5                 # 에피소드 시작 후 이 시간 안에 아무 창문도 못 보면 제자리 정지 비행
+  lost_hold_s: 2.0                   # 첫 검출 이후: 이 시간 동안 하나도 검출되지 않고 목표 추정도 없으면 정지 비행
+                                     # (근거: 명목 비행에서 RL 최장 미검출 구간 시작 0.3 s / 이후 1.8 s — perception_gaps.py)
   fence_margin_m: 0.5                # 웨이포인트를 scene.bounds 안쪽 이 여유까지로 제한 (가상 울타리)
 
 # ---------------------------------------------------------------------------
