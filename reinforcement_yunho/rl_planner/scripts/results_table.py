@@ -2,6 +2,7 @@
 
     python rl_planner/scripts/results_table.py /data/runs/rl_planner/eval_main > tables.md
     python rl_planner/scripts/results_table.py --safety /data/runs/rl_planner/eval_safety
+    python rl_planner/scripts/results_table.py --safety-final /data/runs/rl_planner/eval_safety_final
     python rl_planner/scripts/results_table.py --ablation /data/runs/rl_planner/eval_ablation
 """
 from __future__ import annotations
@@ -96,7 +97,8 @@ HEAD = ("| 조건 | 성공률 (상태기계 / RL) | 같은 장면: RL만 / 상�
 def main(root: str) -> int:
     out = []
     for pol, pol_name in (("isaac", "Isaac(PhysX) 학습 정책"), ("torch", "torch 학습 정책"),
-                          ("robust", "Isaac 정책 + 카메라 끊김 DR 미세조정")):
+                          ("robust", "Isaac 정책 + 카메라 끊김 DR 미세조정"),
+                          ("robust10", "Isaac 정책 + 긴 끊김(0.5~10 s) DR 미세조정")):
         if not any(os.path.isdir(os.path.join(root, d)) for d in os.listdir(root) if d.startswith(f"{pol}pol_")):
             continue
         out.append(f"\n### {pol_name}\n")
@@ -137,6 +139,27 @@ def safety_table(root: str) -> int:
                 x = s[pk]
                 out.append(f"| {label} | {pn} | {pct(x['success_rate'])} | {pct(x['crash_rate'])} | "
                            f"{pct(x['timeout_rate'])} | {num(x['mean_time_success_s'], 1)} |")
+    print("\n".join(out))
+    return 0
+
+
+FINAL_CONDS = (("L4", "명목 L4"), ("L5", "명목 L5"), ("bo3", "카메라 끊김 3 s (3~6 s, L4)"),
+               ("bo7", "카메라 끊김 7 s (3~10 s, L4)"), ("blind", "검출 전무 (L4)"))
+FINAL_COLS = (("main", "fsm", "상태기계"), ("main", "fsm+safe", "상태기계 +필터"), ("main", "rl", "본 RL"),
+              ("main", "rl+safe", "본 RL +필터"), ("robust", "rl", "끊김 DR RL"), ("robust", "rl+safe", "끊김 DR RL +필터"))
+
+
+def safety_final_table(root: str) -> int:
+    """eval_safety_final.sh layout: <policy>_<cond>/summary.json; cells = success / crash [%]."""
+    out = ["| 조건 (성공 / 충돌 %) | " + " | ".join(c[2] for c in FINAL_COLS) + " |",
+           "|---|" + "---|" * len(FINAL_COLS)]
+    for cond, label in FINAL_CONDS:
+        cells = []
+        for pol, planner, _ in FINAL_COLS:
+            p = os.path.join(root, f"{pol}_{cond}", "summary.json")
+            x = json.load(open(p))["summary"].get(planner) if os.path.exists(p) else None
+            cells.append("–" if x is None else f"{100 * x['success_rate']:.1f} / {100 * x['crash_rate']:.1f}")
+        out.append(f"| {label} | " + " | ".join(cells) + " |")
     print("\n".join(out))
     return 0
 
@@ -192,6 +215,8 @@ def ablation_table(root: str, runs_root: str = "/data/runs/rl_planner/window_mis
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--safety":
         raise SystemExit(safety_table(sys.argv[2]))
+    if len(sys.argv) > 2 and sys.argv[1] == "--safety-final":
+        raise SystemExit(safety_final_table(sys.argv[2]))
     if len(sys.argv) > 2 and sys.argv[1] == "--ablation":
         raise SystemExit(ablation_table(sys.argv[2]))
     raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else "/data/runs/rl_planner/eval_main"))

@@ -30,6 +30,8 @@ def main(argv=None) -> int:
     ap.add_argument("--num-scenes", type=int, default=512)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--config", action="append", default=[])
+    ap.add_argument("--sigma-safe", type=float, default=None,
+                    help="count a valid target estimate looser than this [m] as unknown (safety.sigma_safe_m)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
 
@@ -63,6 +65,8 @@ def main(argv=None) -> int:
     for _ in range(core.max_episode_length + 5):
         seen = core.det.detected.any(-1)
         valid = core.est.valid.gather(1, core.target_idx[:, None]).squeeze(1)
+        if a.sigma_safe is not None:
+            valid &= core.est.sigma.gather(1, core.target_idx[:, None]).squeeze(1) <= a.sigma_safe
         ever_seen |= seen & active
         lost = ~seen & ~valid & active
         streak = torch.where(lost, streak + 1, torch.zeros_like(streak))

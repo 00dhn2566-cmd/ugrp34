@@ -7,11 +7,13 @@ standard runtime guard for a learned planner and changes nothing while the
 mission is nominal:
 
 * hold   — no window detected for ``lost_hold_s`` (``start_grace_s`` before the first
-           detection of the episode) AND no valid estimate of the target window:
-           latch the current position and command it until the next detection,
-           then hand control back. Thresholds come from nominal flights
-           (scripts/perception_gaps.py): the RL policy's longest such streak was
-           0.3 s before the first detection and 1.8 s after it (L5, 512 scenes).
+           detection of the episode) AND the target window is not known (no valid
+           estimate, or one looser than ``sigma_safe_m``): latch the current position
+           and command it until the next detection, then hand control back.
+           Thresholds come from nominal flights (scripts/perception_gaps.py): the RL
+           policies' longest such streak was 0.3 s before the first detection and
+           2.1 s after it (L5, 512 scenes, sigma_safe 0.3 m). Defaults (3 s, 0.3 m)
+           were picked on outage tests (RESULTS.md §5).
 * fence  — clamp every waypoint into the arena box: ``fence_margin_m`` inside the x/y
            bounds; altitude [z_min + 0.25, z_max - 0.3], the same waypoint clamp the
            policy was trained with (so nominal flight is never touched).
@@ -33,8 +35,10 @@ class SafetyFilter:
     def __init__(self, cfg: Mapping, num_envs: int, device, step_dt: float):
         s = dict(cfg.get("safety") or {})
         self.enabled = bool(s.get("enabled", True))
-        self.lost_steps = max(1, int(round(float(s.get("lost_hold_s", 2.0)) / float(step_dt))))
+        self.lost_steps = max(1, int(round(float(s.get("lost_hold_s", 3.0)) / float(step_dt))))
         self.start_steps = max(1, int(round(float(s.get("start_grace_s", 0.5)) / float(step_dt))))
+        ss = s.get("sigma_safe_m", 0.3)               # None: any valid target estimate counts as known
+        self.sigma_safe = float("inf") if ss is None else float(ss)
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
         self.lo = torch.tensor([float(b["x_min"]) + m, -float(b["y_abs"]) + m, float(b["z_min"]) + 0.25], device=device)
         self.hi = torch.tensor([float("inf"), float(b["y_abs"]) - m, float(b["z_max"]) - 0.3], device=device)
@@ -53,16 +57,19 @@ class SafetyFilter:
 
     @torch.no_grad()
     def filter(self, actions: torch.Tensor, seen: torch.Tensor, target_valid: torch.Tensor,
-               pos: torch.Tensor, yaw: torch.Tensor, step_max: torch.Tensor) -> torch.Tensor:
+               pos: torch.Tensor, yaw: torch.Tensor, step_max: torch.Tensor,
+               target_sigma: torch.Tensor | None = None) -> torch.Tensor:
         """actions (E,A) in [-1,1]; seen (E,) any window detected since the last decision;
-        target_valid (E,) the current target window has a valid estimate."""
+        target_valid (E,) the current target window has a valid estimate; target_sigma (E,) its
+        1-sigma position uncertainty [m] (a valid estimate looser than sigma_safe_m counts as unknown)."""
         self.since_seen = torch.where(seen, torch.zeros_like(self.since_seen), self.since_seen + 1)
         self.ever_seen |= seen
         if not self.enabled:
             return actions
         limit = torch.where(self.ever_seen, torch.full_like(self.since_seen, self.lost_steps),
                             torch.full_like(self.since_seen, self.start_steps))
-        hold = (self.since_seen > limit) & ~target_valid
+        known = target_valid if target_sigma is None else target_valid & (target_sigma <= self.sigma_safe)
+        hold = (self.since_seen > limit) & ~known
         self.hold_pos = torch.where((hold & ~self.holding)[:, None], pos, self.hold_pos)
         self.holding = hold
         self.hold_steps += hold.long()
@@ -92,6 +99,8 @@ class SafePlanner:
     @torch.no_grad()
     def act(self, core) -> torch.Tensor:
         a = self.base.act(core).clamp(-1.0, 1.0)
-        target_valid = core.est.valid.gather(1, core.target_idx[:, None]).squeeze(1)
+        idx = core.target_idx[:, None]
+        target_valid = core.est.valid.gather(1, idx).squeeze(1)
+        target_sigma = core.est.sigma.gather(1, idx).squeeze(1)
         return self.safety.filter(a, core.det.detected.any(-1), target_valid,
-                                  core.state.pos, core.yaw, core.step_max)
+                                  core.state.pos, core.yaw, core.step_max, target_sigma)
