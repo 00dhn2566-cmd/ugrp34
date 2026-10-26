@@ -103,6 +103,7 @@ perception:
   pose_noise_m: 0.0                  # 광선을 쏘는 카메라 위치 잡음 σ [m] (VIO 오차)
   pose_noise_deg: 0.0                # 광선을 쏘는 카메라 yaw 잡음 σ [deg] (VIO 오차)
   blackout_s: null                   # [t0, t1] 이 시간 동안 카메라 프레임 없음 (일시적 인지 상실)
+  latency_steps: 0                   # 검출 지연 [결정 스텝, 1 = 0.1 s]: 찍은 프레임이 이만큼 늦게 삼각측량·관측에 들어감
 
 # ---------------------------------------------------------------------------
 # 행동 — 정책 출력 = 다음 웨이포인트 (README §7.3, CONVENTIONS "RL boundaries")
@@ -188,6 +189,7 @@ domain_randomization:
   blackout_prob: 0.0                 # 에피소드마다 이 확률로 카메라 끊김 구간 1회 (인지 상실 DR, 0 = 끔)
   blackout_start_s: [0.5, 20.0]      # 끊김 시작 시각 [s]
   blackout_len_s: [0.5, 4.0]         # 끊김 길이 [s]
+  latency_steps: [0, 0]              # 에피소드마다 검출 지연 [결정 스텝] 정수 균등 (지연 DR, [0, 0] = 끔)
 
 # ---------------------------------------------------------------------------
 # 상태기계 기준선 (backup/prototype_demo/traj_manager.py 이식) — 같은 인지 추정치를 쓴다

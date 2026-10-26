@@ -243,12 +243,36 @@ def test_safety_filter_holds_blind_drone_and_passes_nominal_missions():
     assert s["success_rate"] >= 0.9
 
 
+def test_detection_latency_delivers_frames_late():
+    """perception.latency_steps: the triangulator (and so estimates and observations) receives each
+    camera frame that many decisions after it was taken, also the first frame of an episode."""
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    hist = {}
+    for lat in (0, 2):
+        cfg = cfg_cpu("sim.num_envs=8", f"perception.latency_steps={lat}")
+        env = TorchWindowEnv(cfg, num_envs=8, device="cpu", seed=4)
+        env.core.fixed_level = 3
+        env.core.reseed(11)
+        env._reset_all()
+        n_obs = [env.core.perception.n_obs.clone()]
+        for _ in range(12):
+            _, _, d, _ = env.step(torch.zeros(8, env.num_actions))    # hover: same flight in both runs
+            assert not bool(d.any())
+            n_obs.append(env.core.perception.n_obs.clone())
+        hist[lat] = n_obs
+    assert float(hist[0][12].sum()) > 0
+    assert float(hist[2][0].sum()) == 0 and float(hist[2][1].sum()) == 0
+    for k in range(2, 13):
+        assert torch.equal(hist[2][k], hist[0][k - 2])
+
+
 def test_eval_config_turns_training_only_augmentations_off():
     from rl_planner.core.config import config_for_policy
     trained = cfg_cpu("domain_randomization.blackout_prob=0.5", "curriculum.fixed_level=5",
-                      "reward.crash=-30").to_dict()
+                      "domain_randomization.latency_steps=[0,2]", "reward.crash=-30").to_dict()
     c = config_for_policy(trained)
     assert c["domain_randomization"]["blackout_prob"] == 0.0 and c["curriculum"]["fixed_level"] is None
+    assert list(c["domain_randomization"]["latency_steps"]) == [0, 0]
     assert c["reward"]["crash"] == -30                    # everything else follows the training config
     c = config_for_policy(trained, overrides=["domain_randomization.blackout_prob=0.3"])
     assert c["domain_randomization"]["blackout_prob"] == 0.3

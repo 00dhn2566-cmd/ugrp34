@@ -1,0 +1,3 @@
+# 검출 지연 0.1 s (결정 1스텝): YOLO 추론 + 전송 지연 흉내 — 프레임을 찍은 뒤 다음 결정에 반영
+perception:
+  latency_steps: 1

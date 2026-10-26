@@ -92,6 +92,15 @@ class WindowMissionCore:
         self.episode_step = torch.zeros(self.E, dtype=torch.long, device=self.device)
         self.obs_noise_enabled = True
         self.dr_enabled = bool(cfg["domain_randomization"]["enabled"])
+        # detection latency [decision steps] = fixed stress knob + per-episode DR. Captured frames wait
+        # in a ring buffer and reach the triangulator / observations that many decisions later.
+        lat_dr = cfg["domain_randomization"].get("latency_steps") or (0, 0)
+        self.lat_fixed = int(cfg["perception"].get("latency_steps") or 0)
+        self.lat_dr = (int(lat_dr[0]), int(lat_dr[1])) if self.dr_enabled else (0, 0)
+        self.lat_max = self.lat_fixed + self.lat_dr[1]
+        self.latency = torch.full((self.E,), self.lat_fixed + self.lat_dr[0], dtype=torch.long, device=self.device)
+        self._lat_buf: Optional[tuple] = None              # (lat_max+1, E, ...) per add_detections argument
+        self._lat_ptr = 0                                  # slot of the newest captured frame
         self.curriculum_enabled = bool(cfg["curriculum"]["enabled"])
         fl = cfg["curriculum"].get("fixed_level")       # yaml: train without curriculum (ablation)
         self.fixed_level: Optional[int] = None if fl is None else int(fl)   # evaluation pins a level
@@ -190,6 +199,10 @@ class WindowMissionCore:
                 t1 = t0 + self._u(dr["blackout_len_s"], n)
                 inf = torch.full_like(t0, float("inf"))
                 self.blackout[env_ids] = torch.stack((torch.where(has, t0, inf), torch.where(has, t1, inf)), -1)
+            lo, hi = self.lat_dr
+            if hi > lo:                           # detection latency DR (no draws when off)
+                k = (torch.rand(n, generator=self.reset_gen, device=self.device) * (hi - lo + 1)).long()
+                self.latency[env_ids] = self.lat_fixed + lo + k.clamp_max(hi - lo)
         else:
             self.mass[env_ids] = self.mass0
             self.inertia[env_ids] = self.inertia0
@@ -230,13 +243,44 @@ class WindowMissionCore:
         take = torch.zeros(self.E, dtype=torch.bool, device=self.device)
         take[env_ids] = True
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
-        det = self.perception.observe(cam_c, R_WC, self.scene, take, self.reset_gen)
+        frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.reset_gen)
+        det = self.perception.add_detections(*self._deliver(frame, env_ids))
         self.det = det if self.det is None else self._merge_det(det, env_ids)
         self.est = self.perception.estimate()
         self.est_err = PerceptionSurrogate.center_error(self.est, self.scene, self.err_cap)
         tgt = self.target_idx
         self.prev_dist[env_ids] = (_gather(self.scene.center, tgt) - s.pos).norm(dim=-1)[env_ids]
         self.prev_phi[env_ids] = -_gather(self.est_err, tgt).clamp_max(self.err_cap)[env_ids]
+
+    def _deliver(self, frame: tuple, reset_ids: Optional[torch.Tensor] = None) -> tuple:
+        """Detection latency: keep ``frame`` (PerceptionSurrogate.add_detections arguments) as the newest
+        capture and return, per env, the frame captured ``latency`` decisions ago. ``reset_ids``: the
+        first frame of new episodes replaces those envs' newest slot, their older frames never arrive,
+        and only they receive anything. No buffer (identical behaviour) when latency is 0."""
+        if self.lat_max == 0:
+            return frame
+        L = self.lat_max + 1
+        if self._lat_buf is None:
+            self._lat_buf = tuple(t.unsqueeze(0).repeat(L, *([1] * t.dim())) for t in frame)
+            self._lat_buf[3].zero_()                       # det: nothing in flight yet
+            self._lat_buf[5].zero_()                       # take
+        if reset_ids is None:
+            self._lat_ptr = (self._lat_ptr + 1) % L
+            for b, t in zip(self._lat_buf, frame):
+                b[self._lat_ptr] = t
+        else:
+            self._lat_buf[3][:, reset_ids] = False
+            self._lat_buf[5][:, reset_ids] = False
+            for b, t in zip(self._lat_buf, frame):
+                b[self._lat_ptr, reset_ids] = t[reset_ids]
+        slot = (self._lat_ptr - self.latency) % L
+        out = [b[slot, torch.arange(self.E, device=self.device)] for b in self._lat_buf]
+        if reset_ids is not None:                          # the others already got this slot last decision
+            m = torch.zeros(self.E, dtype=torch.bool, device=self.device)
+            m[reset_ids] = True
+            out[3] = out[3] & m[:, None]
+            out[5] = out[5] & m
+        return tuple(out)
 
     def _merge_det(self, det, env_ids):
         old = self.det
@@ -346,7 +390,8 @@ class WindowMissionCore:
         if bo:                                   # stress knob: no camera frames in [t0, t1)
             take = take & ~((t >= float(bo[0])) & (t < float(bo[1])))
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
-        self.det = self.perception.observe(cam_c, R_WC, self.scene, take, self.gen)
+        frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.gen)
+        self.det = self.perception.add_detections(*self._deliver(frame))
         self.est = self.perception.estimate()
         self.est_err = PerceptionSurrogate.center_error(self.est, self.scene, self.err_cap)
 

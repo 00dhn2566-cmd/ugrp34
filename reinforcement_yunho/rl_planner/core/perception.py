@@ -128,6 +128,14 @@ class PerceptionSurrogate:
     def observe(self, cam_c: torch.Tensor, R_WC: torch.Tensor, scene: SceneTensors,
                 take: torch.Tensor, gen: torch.Generator) -> Detections:
         """One camera frame for envs where ``take`` is True. Updates the ray accumulators."""
+        return self.add_detections(*self.capture(cam_c, R_WC, scene, take, gen))
+
+    @torch.no_grad()
+    def capture(self, cam_c: torch.Tensor, R_WC: torch.Tensor, scene: SceneTensors,
+                take: torch.Tensor, gen: torch.Generator) -> tuple:
+        """Synthetic detector output for one frame, not yet fed to the triangulator: the arguments
+        of :meth:`add_detections` (ray camera centre, ray R_WC, corner pixels, det, conf, take), so
+        the frame can also be delivered later (detection latency, core/env_core.py)."""
         p = self.cfg
         E, W = self.E, self.W
         P = scene.corners                                     # (E,W,4,3)
@@ -176,7 +184,7 @@ class PerceptionSurrogate:
         if pd > 0:
             yaw_err = torch.deg2rad(torch.randn(E, generator=gen, device=self.device) * pd)
             ray_R = m3.rot_z(yaw_err) @ R_WC
-        return self.add_detections(ray_c, ray_R, noisy_uv, det, conf, take)
+        return ray_c, ray_R, noisy_uv, det, conf, take
 
     @torch.no_grad()
     def add_detections(self, cam_c: torch.Tensor, R_WC: torch.Tensor, corners_px: torch.Tensor,

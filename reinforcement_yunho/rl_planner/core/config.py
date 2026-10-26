@@ -75,7 +75,8 @@ def load_config(extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg
 
 # training-time augmentations: an evaluation falls back to default.yaml for these, so policies
 # trained with different augmentations are compared on the same distribution
-TRAIN_ONLY_KEYS = (("domain_randomization", "blackout_prob"), ("curriculum", "fixed_level"))
+TRAIN_ONLY_KEYS = (("domain_randomization", "blackout_prob"), ("domain_randomization", "latency_steps"),
+                   ("curriculum", "fixed_level"))
 # runtime-only sections (not part of the MDP): always today's default.yaml, never the training snapshot
 RUNTIME_SECTIONS = ("safety",)
 
