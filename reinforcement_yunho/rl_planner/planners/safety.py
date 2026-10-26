@@ -12,8 +12,9 @@ mission is nominal:
            then hand control back. Thresholds come from nominal flights
            (scripts/perception_gaps.py): the RL policy's longest such streak was
            0.3 s before the first detection and 1.8 s after it (L5, 512 scenes).
-* fence  — clamp every waypoint into the arena box (scene.bounds shrunk by
-           ``fence_margin_m``).
+* fence  — clamp every waypoint into the arena box: ``fence_margin_m`` inside the x/y
+           bounds; altitude [z_min + 0.25, z_max - 0.3], the same waypoint clamp the
+           policy was trained with (so nominal flight is never touched).
 
 It reads only what the real stack has (detections, own pose, own estimates), so
 the same class runs in simulation (:class:`SafePlanner`) and on board
@@ -35,8 +36,8 @@ class SafetyFilter:
         self.lost_steps = max(1, int(round(float(s.get("lost_hold_s", 2.0)) / float(step_dt))))
         self.start_steps = max(1, int(round(float(s.get("start_grace_s", 0.5)) / float(step_dt))))
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
-        self.lo = torch.tensor([float(b["x_min"]) + m, -float(b["y_abs"]) + m, float(b["z_min"]) + m], device=device)
-        self.hi = torch.tensor([float("inf"), float(b["y_abs"]) - m, float(b["z_max"]) - m], device=device)
+        self.lo = torch.tensor([float(b["x_min"]) + m, -float(b["y_abs"]) + m, float(b["z_min"]) + 0.25], device=device)
+        self.hi = torch.tensor([float("inf"), float(b["y_abs"]) - m, float(b["z_max"]) - 0.3], device=device)
         E = int(num_envs)
         self.since_seen = torch.zeros(E, dtype=torch.long, device=device)
         self.ever_seen = torch.zeros(E, dtype=torch.bool, device=device)
@@ -65,11 +66,13 @@ class SafetyFilter:
         self.hold_pos = torch.where((hold & ~self.holding)[:, None], pos, self.hold_pos)
         self.holding = hold
         self.hold_steps += hold.long()
-        wp = pos + m3.heading_to_world(actions[:, :3] * step_max, yaw)
-        wp = torch.where(hold[:, None], self.hold_pos, wp)
+        wp_raw = pos + m3.heading_to_world(actions[:, :3] * step_max, yaw)
+        wp = torch.where(hold[:, None], self.hold_pos, wp_raw)
         wp = torch.maximum(torch.minimum(wp, self.hi), self.lo)
+        touched = hold | (wp != wp_raw).any(-1)          # untouched envs keep the planner's action bit-for-bit
         out = actions.clone()
-        out[:, :3] = (m3.world_to_heading(wp - pos, yaw) / step_max).clamp(-1.0, 1.0)
+        out[:, :3] = torch.where(touched[:, None], (m3.world_to_heading(wp - pos, yaw) / step_max).clamp(-1.0, 1.0),
+                                 actions[:, :3])
         if out.shape[1] > 3:
             out[:, 3] = torch.where(hold, torch.zeros_like(out[:, 3]), out[:, 3])
         return out
