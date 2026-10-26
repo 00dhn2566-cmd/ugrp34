@@ -1,0 +1,3 @@
+# 강풍: 수평 외란 가속 0.6~1.0 m/s^2 (학습 0~0.3)
+domain_randomization:
+  wind_accel: [0.6, 1.0]

@@ -97,6 +97,11 @@ perception:
   max_incidence_deg: 70.0            # 창문 법선과 시선 사이 각
   min_parallax_deg: 2.0              # recon_rays MIN_PARALLAX_DEG 게이트
   ridge: 1.0e-6                      # 최소자승 정칙화
+  # --- 스트레스 테스트용 손잡이 (기본값 = 효과 없음, 학습에는 쓰지 않음) ---
+  noise_scale: 1.0                   # 레벨별 코너 잡음 σ 에 곱하는 배율
+  calib_fx_scale: 1.0                # 실제 카메라 초점거리 / 보정값 (삼각측량은 보정값 사용 → 보정 오차)
+  pose_noise_m: 0.0                  # 광선을 쏘는 카메라 위치 잡음 σ [m] (VIO 오차)
+  pose_noise_deg: 0.0                # 광선을 쏘는 카메라 yaw 잡음 σ [deg] (VIO 오차)
 
 # ---------------------------------------------------------------------------
 # 행동 — 정책 출력 = 다음 웨이포인트 (README §7.3, CONVENTIONS "RL boundaries")

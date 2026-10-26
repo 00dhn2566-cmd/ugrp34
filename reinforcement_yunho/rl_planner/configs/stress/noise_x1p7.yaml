@@ -1,0 +1,3 @@
+# 코너 잡음 σ 1.7배 (L4 기준 최대 ~15 px) — 학습 범위 밖
+perception:
+  noise_scale: 1.7

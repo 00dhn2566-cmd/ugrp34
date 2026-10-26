@@ -136,8 +136,10 @@ class PerceptionSurrogate:
         zc = pc[..., 2]
         front = (zc > 0.2).all(-1)
         zs = zc.clamp_min(1e-3)
-        u = self.fx * pc[..., 0] / zs + self.cx
-        v = self.fy * pc[..., 1] / zs + self.cy
+        # true camera may differ from the calibration the triangulator uses (stress test knob)
+        cal = float(p.get("calib_fx_scale", 1.0))
+        u = self.fx * cal * pc[..., 0] / zs + self.cx
+        v = self.fy * cal * pc[..., 1] / zs + self.cy
         mg = float(p["image_margin_px"])
         inside = ((u >= mg) & (u <= self.width - mg) & (v >= mg) & (v <= self.height - mg)).all(-1)
 
@@ -166,7 +168,15 @@ class PerceptionSurrogate:
             out = torch.rand(E, W, C, 1, generator=gen, device=self.device) < float(p["outlier_prob"])
             noise = noise + out * torch.randn(E, W, C, 2, generator=gen, device=self.device) * sig * 6.0
         noisy_uv = uv + noise
-        return self.add_detections(cam_c, R_WC, noisy_uv, det, conf, take)
+        # rays are cast from the ESTIMATED camera pose (VIO error knobs; no draws when 0)
+        ray_c, ray_R = cam_c, R_WC
+        pn, pd = float(p.get("pose_noise_m", 0.0)), float(p.get("pose_noise_deg", 0.0))
+        if pn > 0:
+            ray_c = cam_c + torch.randn(E, 3, generator=gen, device=self.device) * pn
+        if pd > 0:
+            yaw_err = torch.deg2rad(torch.randn(E, generator=gen, device=self.device) * pd)
+            ray_R = m3.rot_z(yaw_err) @ R_WC
+        return self.add_detections(ray_c, ray_R, noisy_uv, det, conf, take)
 
     @torch.no_grad()
     def add_detections(self, cam_c: torch.Tensor, R_WC: torch.Tensor, corners_px: torch.Tensor,

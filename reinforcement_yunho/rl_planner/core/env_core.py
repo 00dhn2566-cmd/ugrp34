@@ -177,7 +177,7 @@ class WindowMissionCore:
             self.wind_acc[env_ids] = 0.0
 
         lv = self.level[env_ids]
-        sig = self.table.uniform("corner_noise_px", lv, self.gen)
+        sig = self.table.uniform("corner_noise_px", lv, self.gen) * float(self.cfg["perception"].get("noise_scale", 1.0))
         miss = self.table.uniform("miss_prob", lv, self.gen)
         self.perception.reset(env_ids, sigma_px=sig, miss_prob=miss)
         self.controller.reset(env_ids)

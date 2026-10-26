@@ -55,10 +55,14 @@ def main(argv=None) -> int:
         raise SystemExit("--policy <export dir> is required for the rl planner")
 
     if a.policy:   # evaluate with the exact config the policy was trained with (+ explicit overrides)
-        with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
-            base = json.load(f)["config"]
         import yaml
-        from rl_planner.core.config import apply_override, deep_merge
+        from rl_planner.core.config import DEFAULT_CONFIG, apply_override, deep_merge
+        with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
+            trained = json.load(f)["config"]
+        with open(DEFAULT_CONFIG, encoding="utf-8") as f:
+            base = yaml.safe_load(f)
+        # training values win; keys added to default.yaml later (e.g. stress knobs) keep their defaults
+        base = deep_merge(base, trained)
         for p in a.config:
             with open(p, encoding="utf-8") as f:
                 base = deep_merge(base, yaml.safe_load(f) or {})

@@ -1,0 +1,4 @@
+# VIO 자세 오차: 프레임마다 카메라 위치 σ 3 cm, yaw σ 0.5° — 학습에 없던 조건
+perception:
+  pose_noise_m: 0.03
+  pose_noise_deg: 0.5
