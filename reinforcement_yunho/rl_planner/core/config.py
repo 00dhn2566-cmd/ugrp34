@@ -76,18 +76,29 @@ def load_config(extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg
 # training-time augmentations: an evaluation falls back to default.yaml for these, so policies
 # trained with different augmentations are compared on the same distribution
 TRAIN_ONLY_KEYS = (("domain_randomization", "blackout_prob"), ("curriculum", "fixed_level"))
+# runtime-only sections (not part of the MDP): always today's default.yaml, never the training snapshot
+RUNTIME_SECTIONS = ("safety",)
+
+
+def default_section(name: str) -> dict:
+    with open(DEFAULT_CONFIG, encoding="utf-8") as f:
+        return copy.deepcopy(yaml.safe_load(f).get(name) or {})
 
 
 def config_for_policy(trained: Mapping, extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg:
     """Evaluation config for a trained policy: default.yaml <- the policy's training config (so the
     MDP matches; keys added to default.yaml later keep their defaults) <- extra yamls <- overrides.
-    TRAIN_ONLY_KEYS revert to default.yaml before the extras, which can still set them."""
+    TRAIN_ONLY_KEYS and RUNTIME_SECTIONS revert to default.yaml before the extras, which can still
+    set them."""
     with open(DEFAULT_CONFIG, encoding="utf-8") as f:
         default = yaml.safe_load(f)
     cfg = deep_merge(default, trained)
     for sec, key in TRAIN_ONLY_KEYS:
         if key in default.get(sec, {}):
             cfg[sec][key] = copy.deepcopy(default[sec][key])
+    for sec in RUNTIME_SECTIONS:
+        if sec in default:
+            cfg[sec] = copy.deepcopy(default[sec])
     for path in extra:
         with open(path, encoding="utf-8") as f:
             cfg = deep_merge(cfg, yaml.safe_load(f) or {})

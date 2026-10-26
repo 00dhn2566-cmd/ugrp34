@@ -252,3 +252,5 @@ def test_eval_config_turns_training_only_augmentations_off():
     assert c["reward"]["crash"] == -30                    # everything else follows the training config
     c = config_for_policy(trained, overrides=["domain_randomization.blackout_prob=0.3"])
     assert c["domain_randomization"]["blackout_prob"] == 0.3
+    trained["safety"]["lost_hold_s"] = 99.0              # runtime section: today's default, not the snapshot
+    assert config_for_policy(trained)["safety"]["lost_hold_s"] == cfg_cpu()["safety"]["lost_hold_s"]

@@ -37,7 +37,7 @@ from typing import Mapping, Optional
 import torch
 
 from ..core import math3d as m3
-from ..core.config import Cfg
+from ..core.config import Cfg, default_section
 from ..core.dynamics import RigidBodyState
 from ..core.observations import build_spec, compute_group, _gather
 from ..core.perception import PerceptionSurrogate
@@ -84,8 +84,7 @@ class OnboardPlanner:
         self.actions = torch.zeros(1, self.action_dim, device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
         self.step_dt = float(self.policy.meta["timing"]["decision_dt_s"])
-        if safety is not None:
-            self.cfg["safety"] = {**(self.cfg.get("safety") or {}), **safety}
+        self.cfg["safety"] = {**default_section("safety"), **(safety or {})}   # runtime setting, not the training snapshot
         self.safety = SafetyFilter(self.cfg, 1, self.device, self.step_dt)
         self._seen = False                       # any window detected since the last step()
         self.episode_length_s = float(self.cfg["sim"]["episode_length_s"])
