@@ -113,6 +113,18 @@ def target_detection(core):
     return torch.cat((det, age, bearing, side), -1)
 
 
+GAP_SCALE = 10.0     # [s] detection_gap saturates here
+
+
+@register("detection_gap", 2)
+def detection_gap(core):
+    """Seconds since any window / the target window was last detected, on the wall clock: unlike the
+    frame-counted age in target_detection it keeps growing while the camera delivers no frames, so a
+    memoryless policy can tell a long outage from a missed detection."""
+    g = core.perception.gap * core.step_dt / GAP_SCALE
+    return torch.stack((g.amin(dim=1), _gather(g, core.target_idx)), -1).clamp_max(1.0)
+
+
 @register("next_estimate", 7)
 def next_estimate(core):
     nxt = (core.target_idx + 1).clamp_max(core.W - 1)

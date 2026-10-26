@@ -266,6 +266,68 @@ def test_detection_latency_delivers_frames_late():
         assert torch.equal(hist[2][k], hist[0][k - 2])
 
 
+def test_detection_gap_keeps_counting_through_a_camera_outage():
+    """detection_gap counts decisions on the wall clock; target_detection's age counts camera frames
+    and freezes while no frames arrive, so only the gap tells a long outage from a missed frame."""
+    from rl_planner.core.observations import REGISTRY
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    cfg = cfg_cpu("sim.num_envs=16", "perception.blackout_s=[0.5,2.0]")
+    env = TorchWindowEnv(cfg, num_envs=16, device="cpu", seed=2)
+    core = env.core
+    core.fixed_level = 3
+    core.reseed(5)
+    env._reset_all()
+    hover = torch.zeros(16, env.num_actions)
+    for _ in range(5):
+        env.step(hover)                                    # t = 0.5 s: the outage starts at the next frame
+    tgt = core.target_idx[:, None]
+    gap0 = REGISTRY["detection_gap"].fn(core)[:, 1].clone()
+    age0 = core.perception.det_age.gather(1, tgt).squeeze(1).clone()
+    for k in range(1, 11):
+        _, _, d, _ = env.step(hover)
+        assert not bool(d.any())
+        gap = REGISTRY["detection_gap"].fn(core)[:, 1]
+        assert torch.allclose(gap, (gap0 + k * core.step_dt / 10.0).clamp_max(1.0), atol=1e-5)
+        assert torch.equal(core.perception.det_age.gather(1, tgt).squeeze(1), age0)
+    for _ in range(10):
+        env.step(hover)                                    # frames are back after 2 s
+    assert bool((REGISTRY["detection_gap"].fn(core)[:, 1] == 0).any())
+
+
+def test_expand_obs_keeps_the_trained_policy():
+    """scripts/expand_obs.py: appending an observation term leaves the first-layer output unchanged."""
+    from rl_planner.core.observations import build_spec
+    from rl_planner.scripts.expand_obs import expand_checkpoint, layouts
+    old = cfg_cpu().to_dict()
+    new = cfg_cpu("observation.policy=[lin_vel_heading,gravity_body,ang_vel_body,altitude,last_action,"
+                  "target_estimate,detection_gap,target_detection,next_estimate,progress]").to_dict()
+    g = torch.Generator().manual_seed(0)
+    ck = {"iter": 7, "infos": None}
+    for key, (lay_o, lay_n) in (("actor_state_dict", (layouts(old)[0], layouts(new)[0])),
+                                ("critic_state_dict", (layouts(old)[1], layouts(new)[1]))):
+        D = lay_o[-1][2]
+        ck[key] = {"obs_normalizer._mean": torch.randn(1, D, generator=g),
+                   "obs_normalizer._std": torch.rand(1, D, generator=g) + 0.5,
+                   "obs_normalizer._var": torch.rand(1, D, generator=g) + 0.5,
+                   "mlp.0.weight": torch.randn(32 if key[0] == "a" else 48, D, generator=g)}
+    ck["optimizer_state_dict"] = {"state": {0: {"exp_avg": torch.randn(32, layouts(old)[0][-1][2], generator=g),
+                                                "exp_avg_sq": torch.rand(32, layouts(old)[0][-1][2], generator=g)}},
+                                  "param_groups": []}
+    out = expand_checkpoint(ck, old, new)
+    for key, (lay_o, lay_n) in (("actor_state_dict", (layouts(old)[0], layouts(new)[0])),
+                                ("critic_state_dict", (layouts(old)[1], layouts(new)[1]))):
+        x_old = torch.randn(4, lay_o[-1][2], generator=g)
+        x_new = torch.randn(4, lay_n[-1][2], generator=g)              # new term: arbitrary values
+        src = {k: (s, e) for k, s, e in lay_o}
+        for k, s, e in lay_n:
+            if k in src:
+                x_new[:, s:e] = x_old[:, src[k][0]:src[k][1]]
+        f = lambda sd, x: ((x - sd["obs_normalizer._mean"]) / (sd["obs_normalizer._std"] + 1e-2)) @ sd["mlp.0.weight"].T  # noqa: E731
+        assert torch.allclose(f(ck[key], x_old), f(out[key], x_new), atol=1e-5)
+    assert out["optimizer_state_dict"]["state"][0]["exp_avg"].shape == (32, layouts(new)[0][-1][2])
+    assert len(build_spec(new, "policy")) == len(build_spec(old, "policy")) + 1
+
+
 def test_eval_config_turns_training_only_augmentations_off():
     from rl_planner.core.config import config_for_policy
     trained = cfg_cpu("domain_randomization.blackout_prob=0.5", "curriculum.fixed_level=5",

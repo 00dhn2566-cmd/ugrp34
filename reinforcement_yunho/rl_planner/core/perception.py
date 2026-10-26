@@ -96,6 +96,7 @@ class PerceptionSurrogate:
         self.last_side = z(E, W)
         self.last_conf = z(E, W)
         self.det_age = torch.full((E, W), 1.0e3, device=device)
+        self.gap = torch.full((E, W), 1.0e3, device=device)   # decisions since detected (wall clock: see tick)
         self.last_corners_px = z(E, W, C, 2)   # latest corner pixels fed in (debug / integration tests)
         self.last_det = torch.zeros(E, W, dtype=torch.bool, device=device)
         # per-env noise (domain randomisation)
@@ -111,6 +112,7 @@ class PerceptionSurrogate:
             t[env_ids] = 0.0
         self.last_det[env_ids] = False
         self.det_age[env_ids] = 1.0e3
+        self.gap[env_ids] = 1.0e3
         if sigma_px is not None:
             self.sigma_px[env_ids] = sigma_px
         if miss_prob is not None:
@@ -212,8 +214,14 @@ class PerceptionSurrogate:
         self.last_side = torch.where(det, side_px, self.last_side)
         self.last_conf = torch.where(det, conf, self.last_conf)
         self.det_age = torch.where(det, torch.zeros_like(self.det_age), self.det_age + take[:, None].float())
+        self.gap = torch.where(det, torch.zeros_like(self.gap), self.gap)
         self._est_cache = None
         return Detections(det, conf * detf, bearing, side_px * detf, take)
+
+    def tick(self) -> None:
+        """One decision passed. ``gap`` counts decisions since each window was detected whether or not a
+        camera frame arrived, so it keeps growing through an outage (``det_age`` counts frames and stops)."""
+        self.gap = self.gap + 1.0
 
     def _unoccluded(self, cam_c, P, scene: SceneTensors) -> torch.Tensor:
         """(E,W): every corner ray of window j passes through the opening of any

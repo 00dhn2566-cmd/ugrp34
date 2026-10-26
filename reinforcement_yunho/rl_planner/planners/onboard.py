@@ -87,6 +87,7 @@ class OnboardPlanner:
         self.cfg["safety"] = {**default_section("safety"), **(safety or {})}   # runtime setting, not the training snapshot
         self.safety = SafetyFilter(self.cfg, 1, self.device, self.step_dt)
         self._seen = False                       # any window detected since the last step()
+        self._framed = False                     # a camera frame arrived since the last step()
         self.episode_length_s = float(self.cfg["sim"]["episode_length_s"])
         self.t0: Optional[float] = None
         self.t_now = 0.0
@@ -146,6 +147,7 @@ class OnboardPlanner:
                                                   torch.ones(1, dtype=torch.bool, device=self.device))
         self.est = self.perception.estimate()
         self._seen = self._seen or bool(det.any())
+        self._framed = True
 
     def mark_passed(self) -> None:
         self.mission.target += 1
@@ -184,6 +186,12 @@ class OnboardPlanner:
         self._auto_pass()
         if self.det is None:              # no frame yet: empty detection
             self.add_frame(drone_state["position"], drone_state["orientation"], None)
+        elif not self._framed:            # no camera frame since the last decision: nothing detected now
+            cam_c, R_WC = self.perception.camera_pose(self.state.pos, self.state.quat)
+            no = torch.zeros(1, self.W, dtype=torch.bool, device=self.device)
+            self.det = self.perception.add_detections(cam_c, R_WC, torch.zeros(1, self.W, 4, 2, device=self.device),
+                                                      no, torch.zeros(1, self.W, device=self.device), no[:, 0])
+        self._framed = False
         obs = compute_group(self, self.policy_spec)
         self.last_obs = obs                      # exactly what the policy saw (debug / logging)
         raw = self.policy.act_obs(obs).clamp(-1.0, 1.0)
@@ -192,6 +200,7 @@ class OnboardPlanner:
         act = self.safety.filter(raw, seen, _gather(self.est.valid, self.target_idx), self.state.pos, self.yaw,
                                  self.step_max, _gather(self.est.sigma, self.target_idx))
         self.prev_actions, self.actions = self.actions, act
+        self.perception.tick()                   # same decision clock as simulation (detection_gap)
         wp = self.state.pos + m3.heading_to_world(act[:, :3] * self.step_max, self.yaw)
         wp[:, 2] = wp[:, 2].clamp(*self.wp_z)
         cur = [float(v) for v in self.state.pos[0]]

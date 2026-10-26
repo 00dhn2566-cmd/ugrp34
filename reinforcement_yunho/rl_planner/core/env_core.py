@@ -391,6 +391,7 @@ class WindowMissionCore:
             take = take & ~((t >= float(bo[0])) & (t < float(bo[1])))
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
         frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.gen)
+        self.perception.tick()
         self.det = self.perception.add_detections(*self._deliver(frame))
         self.est = self.perception.estimate()
         self.est_err = PerceptionSurrogate.center_error(self.est, self.scene, self.err_cap)
