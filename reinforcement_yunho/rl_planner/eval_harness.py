@@ -1,8 +1,11 @@
 """One-episode-per-env evaluation on a fixed, seeded scene set (README §7.4).
 
-Every planner sees the identical scenes and identical sensor-noise draws: the
-env is rebuilt with the same seed, and the per-step random draws have a fixed
-shape, so the RNG stream does not depend on what the planner does.
+Every planner sees the identical scenes and identical camera-noise draws: before
+each planner the caller re-seeds the core (``core.reseed``) and resets all envs.
+Camera noise is drawn with a fixed shape every decision from its own stream, and
+the draws whose count depends on the planner (resets after an episode ends,
+observation noise) come from separate streams, so each env's first episode is
+the same experiment for every planner. ``scene_fingerprint`` lets callers check it.
 """
 from __future__ import annotations
 
@@ -58,6 +61,15 @@ def run_planner(env, planner, max_steps: int | None = None, record_k: int = 0) -
     if nrec:
         out["traj"] = {"paths": traj, "scene": scene_k}
     return out
+
+
+def scene_fingerprint(scene) -> str:
+    """Short hash of the scene tensors (to assert that planners were compared on the same scenes)."""
+    import hashlib
+    h = hashlib.sha1()
+    for t in (scene.center, scene.normal, scene.size, scene.n_windows, scene.start):
+        h.update(t.detach().float().cpu().numpy().tobytes())
+    return h.hexdigest()[:12]
 
 
 def summarize(rec: Mapping[str, torch.Tensor]) -> dict:

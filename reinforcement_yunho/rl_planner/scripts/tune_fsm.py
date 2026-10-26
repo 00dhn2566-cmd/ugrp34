@@ -55,6 +55,7 @@ def main(argv=None) -> int:
             cfg["fsm"].update(params)
             env = TorchWindowEnv(cfg, num_envs=a.num_scenes, seed=a.seed)
             env.core.fixed_level = L
+            env.core.reseed(a.seed)          # same scene set as evaluate.py --seed for this level
             env._reset_all()
             s = summarize(run_planner(env, FSMPlanner(cfg, a.num_scenes, env.device)))
             res[L] = s

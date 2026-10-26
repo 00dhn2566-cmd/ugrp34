@@ -170,3 +170,31 @@ def test_fsm_baseline_solves_level0():
     env._reset_all()
     s = summarize(run_planner(env, FSMPlanner(cfg, 32, "cpu")))
     assert s["success_rate"] >= 0.9
+
+
+def test_planners_see_identical_scenes_and_camera_noise():
+    """eval_harness contract: after core.reseed + reset every planner gets the same scenes, and
+    the camera-noise stream does not move with how often envs reset or read observations."""
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    from rl_planner.eval_harness import scene_fingerprint
+    cfg = cfg_cpu("sim.num_envs=16")
+    env = TorchWindowEnv(cfg, num_envs=16, device="cpu", seed=3)
+    env.core.fixed_level = 3
+    hover = torch.zeros(16, env.num_actions)
+    back = hover.clone()
+    back[:, 0] = -1.0                                  # flies out of bounds -> early resets
+    runs = []
+    for act, extra_obs in ((hover, False), (back, True)):
+        env.core.reseed(7)
+        env._reset_all()
+        fp = scene_fingerprint(env.core.scene)
+        resets = 0
+        for _ in range(30):
+            if extra_obs:                              # a policy planner reads observations again
+                env.core.compute_observations()
+            _, _, d, _ = env.step(act)
+            resets += int(d.sum())
+        runs.append((fp, env.core.gen.get_state(), resets))
+    assert runs[0][0] == runs[1][0]
+    assert torch.equal(runs[0][1], runs[1][1])
+    assert runs[1][2] > runs[0][2]

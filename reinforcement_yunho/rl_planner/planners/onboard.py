@@ -83,7 +83,7 @@ class OnboardPlanner:
         self.t0: Optional[float] = None
         self.t_now = 0.0
         self.obs_noise_enabled = False
-        self.gen = torch.Generator(device=self.device)
+        self.obs_gen = torch.Generator(device=self.device)   # never drawn: obs noise is off on board
         self.policy_spec = build_spec(self.cfg, "policy")
         b = self.cfg["scene"]["bounds"]
         self.wp_z = (float(b["z_min"]) + 0.25, float(b["z_max"]) - 0.3)

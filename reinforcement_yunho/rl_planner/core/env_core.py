@@ -50,8 +50,10 @@ class WindowMissionCore:
         self.max_episode_length = int(math.ceil(self.episode_length_s / self.step_dt))
         self.g = float(sim["gravity"])
 
-        self.gen = torch.Generator(device=self.device)
-        self.gen.manual_seed(int(seed))
+        self.gen = torch.Generator(device=self.device)        # per-step camera noise
+        self.reset_gen = torch.Generator(device=self.device)  # episode draws
+        self.obs_gen = torch.Generator(device=self.device)    # observation noise
+        self.reseed(seed)
 
         self.table = LevelTable(cfg, self.device)
         self.n_levels = num_levels(cfg)
@@ -130,9 +132,20 @@ class WindowMissionCore:
     def target_idx(self) -> torch.Tensor:
         return self.mission.target_index()
 
+    def reseed(self, seed: int) -> None:
+        """Seed the three RNG streams. ``gen`` draws the camera noise with a fixed shape every
+        decision; ``reset_gen`` draws everything per episode (curriculum, scene, DR, noise
+        levels, first frame); ``obs_gen`` draws observation noise. How often envs reset or a
+        planner reads observations only advances its own stream, so after reseed + reset
+        every planner sees the same scenes and camera noise in each env's first episode."""
+        s = int(seed)
+        self.gen.manual_seed(s)
+        self.reset_gen.manual_seed(s + 1)
+        self.obs_gen.manual_seed(s + 2)
+
     def _u(self, lohi, n) -> torch.Tensor:
         lo, hi = float(lohi[0]), float(lohi[1])
-        return lo + (hi - lo) * torch.rand(n, generator=self.gen, device=self.device)
+        return lo + (hi - lo) * torch.rand(n, generator=self.reset_gen, device=self.device)
 
     @property
     def episode_time(self) -> torch.Tensor:
@@ -153,7 +166,7 @@ class WindowMissionCore:
             return None, None
         self._log_episodes(env_ids)
         self._update_levels(env_ids)
-        sample_scene(self.cfg, self.table, self.level, self.gen, self.scene, env_ids)
+        sample_scene(self.cfg, self.table, self.level, self.reset_gen, self.scene, env_ids)
 
         n = env_ids.numel()
         dr = self.cfg["domain_randomization"]
@@ -177,8 +190,8 @@ class WindowMissionCore:
             self.wind_acc[env_ids] = 0.0
 
         lv = self.level[env_ids]
-        sig = self.table.uniform("corner_noise_px", lv, self.gen) * float(self.cfg["perception"].get("noise_scale", 1.0))
-        miss = self.table.uniform("miss_prob", lv, self.gen)
+        sig = self.table.uniform("corner_noise_px", lv, self.reset_gen) * float(self.cfg["perception"].get("noise_scale", 1.0))
+        miss = self.table.uniform("miss_prob", lv, self.reset_gen)
         self.perception.reset(env_ids, sigma_px=sig, miss_prob=miss)
         self.controller.reset(env_ids)
         self.motor.reset(env_ids, self.mass[env_ids] * self.g, tc)
@@ -208,7 +221,7 @@ class WindowMissionCore:
         take = torch.zeros(self.E, dtype=torch.bool, device=self.device)
         take[env_ids] = True
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
-        det = self.perception.observe(cam_c, R_WC, self.scene, take, self.gen)
+        det = self.perception.observe(cam_c, R_WC, self.scene, take, self.reset_gen)
         self.det = det if self.det is None else self._merge_det(det, env_ids)
         self.est = self.perception.estimate()
         self.est_err = PerceptionSurrogate.center_error(self.est, self.scene, self.err_cap)
@@ -236,7 +249,7 @@ class WindowMissionCore:
         first = self._first_reset[env_ids]
         cur = self.cfg["curriculum"]
         init_max = int(cur["init_level_max"])
-        init = (torch.rand(env_ids.numel(), generator=self.gen, device=self.device) * (init_max + 1)).floor().long()
+        init = (torch.rand(env_ids.numel(), generator=self.reset_gen, device=self.device) * (init_max + 1)).floor().long()
         lv = self.level[env_ids]
         up = self.mission.success[env_ids]
         if cur["promote_on"] == "windows":

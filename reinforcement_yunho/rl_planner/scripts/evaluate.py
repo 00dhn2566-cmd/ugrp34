@@ -86,7 +86,7 @@ def main(argv=None) -> int:
 
     import torch
 
-    from rl_planner.eval_harness import per_env_rows, run_planner, save_json, summarize, write_csv
+    from rl_planner.eval_harness import per_env_rows, run_planner, save_json, scene_fingerprint, summarize, write_csv
     from rl_planner.planners.fsm import FSMPlanner
 
     def make_env():
@@ -107,16 +107,18 @@ def main(argv=None) -> int:
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = a.out or (os.path.join(os.path.dirname(a.policy.rstrip("/")), f"eval_{a.backend}_L{level}_{stamp}") if a.policy
                     else os.path.join("/data/runs/rl_planner/eval", f"{stamp}_{a.backend}_L{level}"))
-    summary, rows = {}, []
+    summary, rows, scene_fp = {}, [], {}
     env, closer = make_env()          # Isaac allows one env per process: re-seed between planners instead
-    for i, name in enumerate(planners):
-        if i > 0:
-            env.core.gen.manual_seed(seed)
-            if a.backend == "torch":
-                env._reset_all()
-            else:
-                env.core.fixed_level = level
-                env.wrapper.unwrapped._reset_idx(None)
+    for name in planners:
+        env.core.reseed(seed)          # identical scenes + camera noise for every planner (eval_harness)
+        if a.backend == "torch":
+            env._reset_all()
+        else:
+            env.core.fixed_level = level
+            env.wrapper.unwrapped._reset_idx(None)
+        scene_fp[name] = scene_fingerprint(env.core.scene)
+        if scene_fp[name] != scene_fp[planners[0]]:
+            raise SystemExit(f"[eval] planners would see different scenes: {scene_fp}")
         if name == "fsm":
             planner = FSMPlanner(cfg, n, env.device)
         elif name == "rl":
@@ -134,7 +136,7 @@ def main(argv=None) -> int:
                                                 for k, v in summary[name].items()))
     closer()
     meta = {"backend": a.backend, "level": level, "seed": seed, "num_scenes": n, "policy": a.policy,
-            "planners": planners}
+            "planners": planners, "scene_fingerprint": scene_fp[planners[0]]}
     save_json(os.path.join(out, "summary.json"), {"meta": meta, "summary": summary})
     write_csv(os.path.join(out, "episodes.csv"), rows)
     keys = ["success_rate", "crash_rate", "timeout_rate", "windows_passed_frac", "mean_time_success_s",

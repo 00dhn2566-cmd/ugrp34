@@ -45,7 +45,7 @@ def _noise(core, x, key):
     s = float(core.cfg["observation"]["noise"].get(key, 0.0))
     if s <= 0 or not core.obs_noise_enabled:
         return x
-    return x + torch.randn(x.shape, generator=core.gen, device=x.device) * s
+    return x + torch.randn(x.shape, generator=core.obs_gen, device=x.device) * s
 
 
 def _gather(t: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
