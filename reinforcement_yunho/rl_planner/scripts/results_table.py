@@ -73,15 +73,18 @@ def fmt_p(p):
 
 
 def pct(v):
-    return f"{100 * v:.1f}%"
+    return "–" if v != v else f"{100 * v:.1f}%"
 
 
 def num(v, nd):
     return "–" if v != v else f"{v:.{nd}f}"       # NaN (no successful episode) -> dash
 
 
+NA = {k: float("nan") for k in ("success_rate", "crash_rate", "mean_time_success_s", "mean_clearance_m", "est_err_at_pass_m")}
+
+
 def row(label, s):
-    f, r = s["fsm"], s["rl"]
+    f, r = s.get("fsm", NA), s["rl"]                 # some evaluations ran the policy alone
     pr = s.get("_paired")
     pair = (f"{pr[0]} / {pr[1]} ({fmt_p(pr[2])}) | {num(pr[3], 2)} |" if pr else "– | – |")
     return (f"| {label} | {pct(f['success_rate'])} / **{pct(r['success_rate'])}** | {pair} "
