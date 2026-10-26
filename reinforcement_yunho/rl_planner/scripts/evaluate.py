@@ -49,26 +49,15 @@ def main(argv=None) -> int:
     ap.add_argument("--record", type=int, default=8, help="save trajectories of the first N scenes")
     a = ap.parse_args(argv)
 
-    from rl_planner.core.config import Cfg, load_config
+    from rl_planner.core.config import load_config
     planners = [p.strip() for p in a.planners.split(",") if p.strip()]   # "+safe" suffix = behind SafetyFilter
     if any(p.split("+")[0] == "rl" for p in planners) and not a.policy:
         raise SystemExit("--policy <export dir> is required for the rl planner")
 
-    if a.policy:   # evaluate with the exact config the policy was trained with (+ explicit overrides)
-        import yaml
-        from rl_planner.core.config import DEFAULT_CONFIG, apply_override, deep_merge
+    if a.policy:   # the config the policy was trained with (training-only augmentations off) + overrides
+        from rl_planner.core.config import config_for_policy
         with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
-            trained = json.load(f)["config"]
-        with open(DEFAULT_CONFIG, encoding="utf-8") as f:
-            base = yaml.safe_load(f)
-        # training values win; keys added to default.yaml later (e.g. stress knobs) keep their defaults
-        base = deep_merge(base, trained)
-        for p in a.config:
-            with open(p, encoding="utf-8") as f:
-                base = deep_merge(base, yaml.safe_load(f) or {})
-        for o in a.set:
-            apply_override(base, o)
-        cfg = Cfg(base)
+            cfg = config_for_policy(json.load(f)["config"], a.config, a.set)
     else:
         cfg = load_config(a.config, a.set)
     ev = cfg["eval"]

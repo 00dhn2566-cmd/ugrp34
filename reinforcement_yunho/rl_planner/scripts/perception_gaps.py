@@ -34,21 +34,14 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     import torch
-    import yaml
 
-    from rl_planner.core.config import DEFAULT_CONFIG, Cfg, deep_merge
+    from rl_planner.core.config import config_for_policy
     from rl_planner.envs.torch_env import TorchWindowEnv
     from rl_planner.planners.fsm import FSMPlanner
     from rl_planner.planners.policy import PolicyPlanner
 
     with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
-        trained = json.load(f)["config"]
-    with open(DEFAULT_CONFIG, encoding="utf-8") as f:
-        base = deep_merge(yaml.safe_load(f), trained)
-    for p in a.config:
-        with open(p, encoding="utf-8") as f:
-            base = deep_merge(base, yaml.safe_load(f) or {})
-    cfg = Cfg(base)
+        cfg = config_for_policy(json.load(f)["config"], a.config)
     n = a.num_scenes
     seed = int(cfg["eval"]["seed"] if a.seed is None else a.seed)
     env = TorchWindowEnv(cfg, num_envs=n, seed=seed)

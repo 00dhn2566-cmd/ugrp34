@@ -73,6 +73,29 @@ def load_config(extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg
     return Cfg(cfg)
 
 
+# training-time augmentations: an evaluation falls back to default.yaml for these, so policies
+# trained with different augmentations are compared on the same distribution
+TRAIN_ONLY_KEYS = (("domain_randomization", "blackout_prob"), ("curriculum", "fixed_level"))
+
+
+def config_for_policy(trained: Mapping, extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg:
+    """Evaluation config for a trained policy: default.yaml <- the policy's training config (so the
+    MDP matches; keys added to default.yaml later keep their defaults) <- extra yamls <- overrides.
+    TRAIN_ONLY_KEYS revert to default.yaml before the extras, which can still set them."""
+    with open(DEFAULT_CONFIG, encoding="utf-8") as f:
+        default = yaml.safe_load(f)
+    cfg = deep_merge(default, trained)
+    for sec, key in TRAIN_ONLY_KEYS:
+        if key in default.get(sec, {}):
+            cfg[sec][key] = copy.deepcopy(default[sec][key])
+    for path in extra:
+        with open(path, encoding="utf-8") as f:
+            cfg = deep_merge(cfg, yaml.safe_load(f) or {})
+    for o in overrides:
+        apply_override(cfg, o)
+    return Cfg(cfg)
+
+
 def config_hash(cfg: Mapping) -> str:
     blob = json.dumps(cfg, sort_keys=True, default=str).encode()
     return hashlib.sha1(blob).hexdigest()[:10]

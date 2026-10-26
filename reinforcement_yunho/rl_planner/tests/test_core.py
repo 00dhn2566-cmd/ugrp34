@@ -241,3 +241,14 @@ def test_safety_filter_holds_blind_drone_and_passes_nominal_missions():
     env._reset_all()
     s = summarize(run_planner(env, SafePlanner(FSMPlanner(cfg, 32, "cpu"), cfg, 32, "cpu", env.core.step_dt)))
     assert s["success_rate"] >= 0.9
+
+
+def test_eval_config_turns_training_only_augmentations_off():
+    from rl_planner.core.config import config_for_policy
+    trained = cfg_cpu("domain_randomization.blackout_prob=0.5", "curriculum.fixed_level=5",
+                      "reward.crash=-30").to_dict()
+    c = config_for_policy(trained)
+    assert c["domain_randomization"]["blackout_prob"] == 0.0 and c["curriculum"]["fixed_level"] is None
+    assert c["reward"]["crash"] == -30                    # everything else follows the training config
+    c = config_for_policy(trained, overrides=["domain_randomization.blackout_prob=0.3"])
+    assert c["domain_randomization"]["blackout_prob"] == 0.3
