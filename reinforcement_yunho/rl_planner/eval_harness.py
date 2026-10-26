@@ -20,14 +20,28 @@ RECORD_KEYS = ("success", "crashed", "crash_reason", "windows_passed", "n_window
 
 
 @torch.no_grad()
-def run_planner(env, planner, max_steps: int | None = None) -> Dict[str, torch.Tensor]:
+def run_planner(env, planner, max_steps: int | None = None, record_k: int = 0) -> Dict[str, torch.Tensor]:
+    """Run one episode per env. ``record_k`` > 0 also stores the first k envs' trajectories
+    (positions per decision until their first episode ends) and their scenes in out["traj"]."""
     core = env.core
     E = env.num_envs
     finished = torch.zeros(E, dtype=torch.bool, device=env.device)
     out = {k: torch.zeros_like(v) for k, v in core.episode_record.items()}
     planner.reset(torch.arange(E, device=env.device))
     steps = max_steps or core.max_episode_length + 5
+    nrec = min(record_k, E)
+    traj = [[] for _ in range(nrec)]
+    scene_k = None
+    if nrec:
+        sc = core.scene
+        scene_k = {"center": sc.center[:nrec].cpu(), "normal": sc.normal[:nrec].cpu(), "size": sc.size[:nrec].cpu(),
+                   "n_windows": sc.n_windows[:nrec].cpu(), "start": sc.start[:nrec].cpu()}
     for _ in range(steps):
+        if nrec:
+            pos = core.state.pos[:nrec].detach().cpu()
+            for i in range(nrec):
+                if not bool(finished[i]):
+                    traj[i].append(pos[i].tolist())
         act = planner.act(core)
         _, _, dones, _ = env.step(act)
         d = dones.bool()
@@ -41,6 +55,8 @@ def run_planner(env, planner, max_steps: int | None = None) -> Dict[str, torch.T
         if bool(finished.all()):
             break
     out["finished"] = finished
+    if nrec:
+        out["traj"] = {"paths": traj, "scene": scene_k}
     return out
 
 
@@ -78,7 +94,7 @@ def write_csv(path: str, rows: List[dict]) -> None:
 def per_env_rows(planner_name: str, rec: Mapping[str, torch.Tensor]) -> List[dict]:
     rows = []
     E = rec["finished"].shape[0]
-    cpu = {k: v.detach().cpu() for k, v in rec.items()}
+    cpu = {k: v.detach().cpu() for k, v in rec.items() if k != "traj"}
     for e in range(E):
         r = {"planner": planner_name, "env": e}
         for k in RECORD_KEYS + ("finished",):

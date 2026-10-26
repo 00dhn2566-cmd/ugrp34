@@ -164,6 +164,8 @@ curriculum:
     - {n_windows: [2, 3], spacing: [2.8, 3.6], lateral: [-0.6, 0.6], corner_noise_px: [2.0, 6.0], miss_prob: [0.0, 0.05]}
     - {n_windows: [3, 3], spacing: [2.6, 3.6], lateral: [-0.6, 0.6], corner_noise_px: [2.0, 9.0], miss_prob: [0.0, 0.1]}
     - {n_windows: [3, 5], spacing: [2.6, 3.6], lateral: [-0.6, 0.6], corner_noise_px: [2.0, 9.0], miss_prob: [0.0, 0.1], yaw_deg: [-20.0, 20.0]}
+    # L5 스트레스: 실측보다 거친 검출(σ 최대 12 px, 누락 20%), 창문 yaw ±30°, 좁은 간격 — 강건성 비교용
+    - {n_windows: [3, 5], spacing: [2.6, 3.2], lateral: [-0.6, 0.6], corner_noise_px: [4.0, 12.0], miss_prob: [0.05, 0.2], yaw_deg: [-30.0, 30.0]}
 
 # ---------------------------------------------------------------------------
 # 도메인 랜덤화 (README §7.1) — 에피소드마다 환경별로 샘플

@@ -46,6 +46,7 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", default=None)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--record", type=int, default=8, help="save trajectories of the first N scenes")
     a = ap.parse_args(argv)
 
     from rl_planner.core.config import Cfg, load_config
@@ -119,7 +120,10 @@ def main(argv=None) -> int:
             planner = PolicyPlanner(a.policy, device=env.device, cfg=cfg)
         else:
             raise SystemExit(f"unknown planner {name!r}")
-        rec = run_planner(env, planner)
+        rec = run_planner(env, planner, record_k=a.record)
+        if "traj" in rec:
+            os.makedirs(out, exist_ok=True)
+            torch.save(rec["traj"], os.path.join(out, f"traj_{name}.pt"))
         summary[name] = summarize(rec)
         rows += per_env_rows(name, rec)
         print(f"[eval] {name:4s} " + "  ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"

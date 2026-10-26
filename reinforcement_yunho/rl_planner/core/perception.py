@@ -96,6 +96,8 @@ class PerceptionSurrogate:
         self.last_side = z(E, W)
         self.last_conf = z(E, W)
         self.det_age = torch.full((E, W), 1.0e3, device=device)
+        self.last_corners_px = z(E, W, C, 2)   # latest corner pixels fed in (debug / integration tests)
+        self.last_det = torch.zeros(E, W, dtype=torch.bool, device=device)
         # per-env noise (domain randomisation)
         self.sigma_px = torch.full((E,), 2.0, device=device)
         self.miss_prob = z(E)
@@ -104,8 +106,10 @@ class PerceptionSurrogate:
     # ------------------------------------------------------------------ #
     def reset(self, env_ids: torch.Tensor, sigma_px=None, miss_prob=None) -> None:
         for t in (self.A, self.b, self.s, self.wsum, self.n_rays, self.n_obs, self.d0, self.e1,
-                  self.e2, self.ext, self.ext_val, self.last_bearing, self.last_side, self.last_conf):
+                  self.e2, self.ext, self.ext_val, self.last_bearing, self.last_side, self.last_conf,
+                  self.last_corners_px):
             t[env_ids] = 0.0
+        self.last_det[env_ids] = False
         self.det_age[env_ids] = 1.0e3
         if sigma_px is not None:
             self.sigma_px[env_ids] = sigma_px
@@ -161,13 +165,29 @@ class PerceptionSurrogate:
         if float(p["outlier_prob"]) > 0:
             out = torch.rand(E, W, C, 1, generator=gen, device=self.device) < float(p["outlier_prob"])
             noise = noise + out * torch.randn(E, W, C, 2, generator=gen, device=self.device) * sig * 6.0
-        un, vn = uv[..., 0] + noise[..., 0], uv[..., 1] + noise[..., 1]
+        noisy_uv = uv + noise
+        return self.add_detections(cam_c, R_WC, noisy_uv, det, conf, take)
+
+    @torch.no_grad()
+    def add_detections(self, cam_c: torch.Tensor, R_WC: torch.Tensor, corners_px: torch.Tensor,
+                       det: torch.Tensor, conf: torch.Tensor, take: torch.Tensor) -> Detections:
+        """Feed detector output (synthetic or REAL) into the triangulator.
+
+        corners_px (E,W,4,2) in CORNER_ORDER, det (E,W) bool, conf (E,W), take (E,) frame taken.
+        This is the deployment seam: planners/onboard.py calls it with the vision
+        module's §5 messages, so the policy sees estimates built exactly as in training.
+        """
+        un, vn = corners_px[..., 0], corners_px[..., 1]
         d_c = m3.normalize(torch.stack(((un - self.cx) / self.fx, (vn - self.cy) / self.fy,
                                         torch.ones_like(un)), -1))
         d_w = torch.einsum("eij,ewkj->ewki", R_WC, d_c)       # (E,W,4,3)
 
         self._accumulate(det, conf, cam_c, d_w)
+        self.last_corners_px = corners_px.clone()
+        self.last_det = det.clone()
 
+        sides = (corners_px - corners_px.roll(-1, dims=2)).norm(dim=-1)
+        side_px = sides.min(dim=-1).values
         bearing = m3.normalize(d_w.mean(dim=2))
         detf = det.float()
         self.last_bearing = torch.where(det[..., None], bearing, self.last_bearing)

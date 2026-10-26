@@ -43,10 +43,10 @@ def quat_from_rotmat(R: torch.Tensor) -> torch.Tensor:
     """Rotation matrix (..., 3, 3) -> unit quaternion (w, x, y, z), w >= 0."""
     m = R
     t = m[..., 0, 0] + m[..., 1, 1] + m[..., 2, 2]
-    qw = 0.5 * torch.sqrt((1 + t).clamp_min(1e-12))
-    qx = 0.5 * torch.sqrt((1 + m[..., 0, 0] - m[..., 1, 1] - m[..., 2, 2]).clamp_min(1e-12))
-    qy = 0.5 * torch.sqrt((1 - m[..., 0, 0] + m[..., 1, 1] - m[..., 2, 2]).clamp_min(1e-12))
-    qz = 0.5 * torch.sqrt((1 - m[..., 0, 0] - m[..., 1, 1] + m[..., 2, 2]).clamp_min(1e-12))
+    qw = 0.5 * torch.sqrt((1 + t).clamp_min(0.0))
+    qx = 0.5 * torch.sqrt((1 + m[..., 0, 0] - m[..., 1, 1] - m[..., 2, 2]).clamp_min(0.0))
+    qy = 0.5 * torch.sqrt((1 - m[..., 0, 0] + m[..., 1, 1] - m[..., 2, 2]).clamp_min(0.0))
+    qz = 0.5 * torch.sqrt((1 - m[..., 0, 0] - m[..., 1, 1] + m[..., 2, 2]).clamp_min(0.0))
     qx = torch.copysign(qx, m[..., 2, 1] - m[..., 1, 2])
     qy = torch.copysign(qy, m[..., 0, 2] - m[..., 2, 0])
     qz = torch.copysign(qz, m[..., 1, 0] - m[..., 0, 1])
