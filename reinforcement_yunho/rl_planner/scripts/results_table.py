@@ -169,36 +169,18 @@ ABLATIONS = (("full_s1", "전체 (시드 1)"), ("full_s2", "전체 (시드 2)"),
              ("symcritic_s1", "대칭 비평가 (특권 정보 없음)"))
 
 
-def first_iter(run_dir: str, tag: str, thr: float):
-    """First training iteration at which the 10-iteration running mean of ``tag`` reaches ``thr``."""
-    try:
-        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-    except ImportError:
-        return None
-    import glob
-    for f in sorted(glob.glob(os.path.join(run_dir, "events.out.tfevents.*"))):
-        ea = EventAccumulator(f, size_guidance={"scalars": 0})
-        ea.Reload()
-        if tag not in ea.Tags().get("scalars", []):
-            continue
-        v = [e.value for e in ea.Scalars(tag)]
-        st = [e.step for e in ea.Scalars(tag)]
-        for i in range(len(v)):
-            w = v[max(0, i - 9):i + 1]
-            if sum(w) / len(w) >= thr:
-                return st[i]
-    return None
-
-
 def ablation_table(root: str, runs_root: str = "/data/runs/rl_planner/window_mission") -> int:
     import glob
-    out = ["| 학습 설정 (각 500 반복) | L5 도달 반복 | L4 성공 / 충돌 / 시간 [s] | L5 성공 / 충돌 / 시간 [s] |",
-           "|---|---|---|---|"]
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from compare_runs import milestones, read_scalars
+    out = ["| 학습 설정 (각 500 반복) | L5 도달 반복 | L5·학습 성공 95% 반복 | 제자리 비행 반복 (시간 초과 > 50%) "
+           "| L4 성공 / 충돌 / 시간 [s] | L5 성공 / 충돌 / 시간 [s] |",
+           "|---|---|---|---|---|---|"]
     for key, label in ABLATIONS:
         cells = []
         runs = sorted(glob.glob(os.path.join(runs_root, f"*_abl_{key}")))
-        it = first_iter(runs[-1], "Metrics/curriculum_level", 4.9) if runs and key != "nocurr_s1" else None
-        cells.append("–" if it is None else str(it))
+        m = milestones(read_scalars(runs[-1]), 500) if runs else {}
+        cells += ["–" if m.get(k) is None else str(m[k]) for k in ("l5", "l5_95", "hover_iters")]
         for L in (4, 5):
             p = os.path.join(root, f"{key}_L{L}", "summary.json")
             if not os.path.exists(p):

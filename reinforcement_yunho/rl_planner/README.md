@@ -41,6 +41,8 @@ rl_planner/
     safety.py                 실행 시 안전 필터: 인지 상실 시 제자리 정지 비행 + 경계(가상 울타리) — 온보드 기본 적용
   scripts/train.py          rsl_rl PPO 학습 (비대칭 actor-critic, 커리큘럼, DR)
   scripts/evaluate.py       고정 시드 장면에서 RL vs 상태기계 (성공률·충돌률·시간·여유), 계획기 이름 뒤 +safe = 안전 필터
+  scripts/(분석)            tune_fsm · results_table · report · compare_runs(학습 곡선·정체 비교) · analyze_traj ·
+                            perception_gaps · play_isaac — 쓰임은 RESULTS.md §9
   eval_harness.py           평가 공통 루틴
   tests/                    단위 테스트 (팀 공용 기하 규약 일치 포함)
 ```
