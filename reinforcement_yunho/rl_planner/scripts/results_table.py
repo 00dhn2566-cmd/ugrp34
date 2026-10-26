@@ -21,10 +21,10 @@ STRESS_NAMES = {
     "vio_noise": "VIO 자세 잡음 (3 cm, 0.5°)",
     "wind_strong": "강풍 0.6~1.0 m/s²",
     "heavy": "과중량 (질량 ×1.1~1.2, 추력 ×0.85~0.9)",
-    "blackout": "카메라 끊김 3~6 s",
-    "blind": "검출 전무 (성공 불가 — 충돌 여부만 의미)",
     "latency_100ms": "검출 지연 0.1 s",
     "latency_200ms": "검출 지연 0.2 s",
+    "blackout": "카메라 끊김 3~6 s",
+    "blind": "검출 전무 (성공 불가 — 충돌 여부만 의미)",
 }
 
 
