@@ -2,6 +2,7 @@
 
     python rl_planner/scripts/results_table.py /data/runs/rl_planner/eval_main > tables.md
     python rl_planner/scripts/results_table.py --safety /data/runs/rl_planner/eval_safety
+    python rl_planner/scripts/results_table.py --ablation /data/runs/rl_planner/eval_ablation
 """
 from __future__ import annotations
 
@@ -140,7 +141,57 @@ def safety_table(root: str) -> int:
     return 0
 
 
+ABLATIONS = (("full_s1", "전체 (시드 1)"), ("full_s2", "전체 (시드 2)"), ("full_s3", "전체 (시드 3)"),
+             ("noshaping_s1", "추정 개선 보상 없음"), ("nocurr_s1", "커리큘럼 없음 (L5 고정)"),
+             ("symcritic_s1", "대칭 비평가 (특권 정보 없음)"))
+
+
+def first_iter(run_dir: str, tag: str, thr: float):
+    """First training iteration at which the 10-iteration running mean of ``tag`` reaches ``thr``."""
+    try:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    except ImportError:
+        return None
+    import glob
+    for f in sorted(glob.glob(os.path.join(run_dir, "events.out.tfevents.*"))):
+        ea = EventAccumulator(f, size_guidance={"scalars": 0})
+        ea.Reload()
+        if tag not in ea.Tags().get("scalars", []):
+            continue
+        v = [e.value for e in ea.Scalars(tag)]
+        st = [e.step for e in ea.Scalars(tag)]
+        for i in range(len(v)):
+            w = v[max(0, i - 9):i + 1]
+            if sum(w) / len(w) >= thr:
+                return st[i]
+    return None
+
+
+def ablation_table(root: str, runs_root: str = "/data/runs/rl_planner/window_mission") -> int:
+    import glob
+    out = ["| 학습 설정 (각 500 반복) | L5 도달 반복 | L4 성공 / 충돌 / 시간 [s] | L5 성공 / 충돌 / 시간 [s] |",
+           "|---|---|---|---|"]
+    for key, label in ABLATIONS:
+        cells = []
+        runs = sorted(glob.glob(os.path.join(runs_root, f"*_abl_{key}")))
+        it = first_iter(runs[-1], "Metrics/curriculum_level", 4.9) if runs and key != "nocurr_s1" else None
+        cells.append("–" if it is None else str(it))
+        for L in (4, 5):
+            p = os.path.join(root, f"{key}_L{L}", "summary.json")
+            if not os.path.exists(p):
+                cells.append("–")
+                continue
+            with open(p) as f:
+                r = json.load(f)["summary"]["rl"]
+            cells.append(f"{pct(r['success_rate'])} / {pct(r['crash_rate'])} / {num(r['mean_time_success_s'], 1)}")
+        out.append(f"| {label} | " + " | ".join(cells) + " |")
+    print("\n".join(out))
+    return 0
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--safety":
         raise SystemExit(safety_table(sys.argv[2]))
+    if len(sys.argv) > 2 and sys.argv[1] == "--ablation":
+        raise SystemExit(ablation_table(sys.argv[2]))
     raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else "/data/runs/rl_planner/eval_main"))
