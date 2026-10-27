@@ -120,6 +120,25 @@ tensorboard --logdir /data/runs/rl_planner
 쪽 속도 상한으로 낮출 수 있다 (RESULTS.md §11 속도 다이얼).
 실제 방 크기는 `OnboardPlanner(..., safety={"bounds": {"x_min": .., "y_abs": .., "z_min": .., "z_max": ..}})` (VIO 좌표).
 
+**둘러보기 모드** (RESULTS.md §12 — 창문이 엉뚱한 데 놓인 코스, 창문 50 개): 창문이 통과 직후 화면 밖(좌우 최대 90°, 위아래
+±1.2 m)에 있을 수 있는 코스 `configs/scan/course.yaml` (`scene.layout: scatter`). 판단 기준은 "창문 통과 직후, 아직 안 지난 창문 중
+방금 지난 창문에서 가장 가까운 창문" (`mission.selection: nearest`, `core/selector.py`) — 정책은 자기가 본 창문 중에서 이 규칙으로
+고른 창문만 본다. 정책이 yaw 를 직접 돌리고 (`action.yaw`, ±90°/s; 좌우는 몸을 돌려, 위아래는 고도를 바꿔 훑음) 통과 뒤 어디까지
+둘러봤는지(`search_state`)를 관측한다. 온보드는 `out["yaw"]` (heading 설정점, world, rad)를 함께 낸다 — 팀 `waypoints_config`
+에는 yaw 가 없으니 제어기에 yaw 입력을 따로 넣어야 한다. 이때 검출 메시지의 `order_index` 는 추적 번호(창문마다 고정)로 쓰인다.
+
+```bash
+# 학습 (1단계: 일자 코스 정책에서 yaw·관측을 붙여 웜스타트)
+$PY rl_planner/scripts/expand_obs.py --run <speed_a run> --yaw --add search_state --out ws.pt
+$PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 3000 --resume ws.pt \
+    --config rl_planner/configs/train/general.yaml --config rl_planner/configs/train/speed.yaml \
+    --config rl_planner/configs/scan/course.yaml --config rl_planner/configs/train/scan.yaml
+# 평가 세트 (꺾인 코스 + 창문 50 개 + 교란 26 조건) / 비행 그림·애니메이션 / 둘러보기 통계
+$PY rl_planner/scripts/benchmark.py --suite rl_planner/configs/scan/suite.yaml --out <root> --policy p=<export> --planner p:rl+safe --set safety.scan_hold=true
+$PY rl_planner/scripts/plot_course.py --policy <export> --config rl_planner/configs/scan/long50.yaml --png c.png --gif c.gif
+$PY rl_planner/scripts/scan_stats.py --policy <export> --config rl_planner/configs/scan/long50.yaml
+```
+
 ## 5. MDP 정의 (설정: `configs/default.yaml`)
 
 **결정 주기** 10 Hz (물리·제어 100 Hz × decimation 10). **에피소드** 최대 45 s.
@@ -219,7 +238,8 @@ latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임
 
 - **인지는 대리 모델**이다. 검출 확률·잡음 모델은 실측 숫자(8.87 px 등)에 맞췄지만 실제 YOLO 의 실패 양상(배경 오검출,
   창문 혼동)은 없다. 창문 식별(색+순서)은 맞게 연결된다고 가정. → 다음 단계: Isaac RTX 카메라 + 실제 검출기로 평가.
-- 창문은 **무한 벽 속 개구부**로 판정한다 (돌아가기 불가). 기체는 반경 0.30 m 구. 프레임 두께·부분 가림 없음.
+- 창문은 **무한 벽 속 개구부**로 판정한다 (돌아가기 불가; 둘러보기 코스는 창문을 둘러싼 1.6 m 판). 기체는 반경 0.30 m 구.
+  프레임 두께·부분 가림 없음.
 - 저수준 제어는 Lee 기하 제어기다 (Isaac Lab 드론 예제와 같은 계열). 성진 PID 와 응답이 다르므로 실기 전환 전
   `controller.type` 교체 후 재학습/재평가 필요.
 - 통과 카운트는 관측에서 "자기가 통과한 개수"로 쓴다 (실기에서는 추정 창문 평면 통과로 판단 — `onboard.py` 가 그렇게 함).
@@ -239,3 +259,6 @@ latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임
 6. 속도: 기체 한계 2.0 m/s 를 계획기에 허용할지 (명목 7.1 s) 아니면 운용 한계 1.6 m/s 로 둘지 (8.2 s). 그리고 빠른 정책과
    범용 정책 중 무엇을 쓸지 — 카메라 장착 오차가 2° 를 넘을 수 있거나 창문이 40° 넘게 기울어 있으면 범용 정책이 낫다
    (RESULTS.md §11). 2 m/s 에서의 실제 모션 블러·검출기 지연은 실기로 확인해야 한다.
+7. 둘러보기 모드 (RESULTS.md §12): ① 저수준 제어기에 yaw 설정점 입력 (지금 `waypoints_config` 는 위치만) ② 실제 대회 규칙이
+   "통과 직후 가장 가까운 창문" 인지, 아니면 색 순서인지 ③ 창문 추적기 (검출을 창문별로 이어 붙이기 — 둘러보기에서는 색이 순서가
+   아니다) ④ yaw 속도 상한 (지금 90°/s; 모션 블러와 맞바꿈).
