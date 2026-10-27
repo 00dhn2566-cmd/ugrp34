@@ -610,6 +610,36 @@ def test_safety_hold_retraces_the_path_flown_since_the_last_pass():
         assert not bool(f.holding[0])
 
 
+def test_safety_gate_caps_the_forward_step_of_an_unstable_approach():
+    """safety.approach_gate_m: inside the gate an approach that is not stable (estimate too loose or too few frames,
+    or outside the funnel e0 + k * d around the estimated centre) keeps its lateral / vertical command and has its
+    forward step capped at gate_scale; a stable approach, one outside the gate and one with the gate off are untouched
+    bit for bit. gate_unknown also caps it while windows are in sight but the target has no valid estimate."""
+    from rl_planner.planners.safety import SafetyFilter
+    act, yaw, sm = torch.tensor([[0.9, 0.3, -0.2]]), torch.zeros(1), torch.tensor([1.25, 0.9, 0.5])
+    seen, valid, invalid = torch.tensor([True]), torch.tensor([True]), torch.tensor([False])
+    centre, normal = torch.tensor([[3.0, 0.0, 1.5]]), torch.tensor([[-1.0, 0.0, 0.0]])   # approach side is -x
+    base = ("safety.hold_brake_acc=null", "safety.slow_after_s=null", "safety.retreat_after_s=null")
+    gate = ("safety.approach_gate_m=1.5", "safety.gate_sigma_m=0.1", "safety.gate_min_frames=8",
+            "safety.gate_funnel=[0.05,0.3]", "safety.gate_scale=0.5")
+
+    def run(sets, pos, sigma=0.05, frames=20.0, tv=valid):
+        f = SafetyFilter(cfg_cpu(*base, *sets), 1, "cpu", 0.1)
+        return f.filter(act, seen, tv, torch.tensor([pos]), yaw, sm, torch.tensor([sigma]),
+                        target_center=centre, target_normal=normal, target_frames=torch.tensor([frames]))
+
+    capped = torch.tensor([[0.5, 0.3, -0.2]])
+    assert torch.equal(run(gate, [2.0, 0.1, 1.5]), act)                     # d 1.0 m, offset 0.10 <= 0.35: stable
+    assert torch.equal(run(gate, [2.0, 0.5, 1.5]), capped)                  # offset 0.50 > 0.35: outside the funnel
+    assert torch.equal(run(gate, [2.0, 0.1, 1.5], sigma=0.2), capped)       # estimate too loose
+    assert torch.equal(run(gate, [2.0, 0.1, 1.5], frames=5.0), capped)      # too few frames
+    assert torch.equal(run(gate, [1.0, 0.5, 1.5]), act)                     # d 2.0 m: outside the gate
+    assert torch.equal(run(gate, [3.2, 0.5, 1.5]), act)                     # behind the plane
+    assert torch.equal(run(gate, [2.0, 0.1, 1.5], tv=invalid), act)         # no estimate: only with gate_unknown
+    assert torch.equal(run((*gate, "safety.gate_unknown=true"), [2.0, 0.1, 1.5], tv=invalid), capped)
+    assert torch.equal(run(("safety.approach_gate_m=null",), [2.0, 0.5, 1.5]), act)
+
+
 def test_rescale_action_keeps_the_commanded_displacement():
     """scripts/rescale_action.py: with a larger action.step_max the rescaled actor commands the same waypoint
     displacement (mean action x step_max) and the same exploration noise in metres, given the previous action in

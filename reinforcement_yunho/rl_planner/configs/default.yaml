@@ -252,6 +252,13 @@ safety:
   crumb_spacing_m: 0.1               # 경로 기록 간격 (최근 crumb_buffer 개, 64 × 0.1 m = 6.4 m)
   crumb_buffer: 64
   crumb_clear_m: 0.6                 # 통과한 창문 쪽으로는 이 거리 안까지 물러나지 않음 (기체 반경 0.3 m + 여유)
+  approach_gate_m: null              # 안정 접근 관문 [m]: 목표 창문 추정 평면에서 이 거리 안인데 접근이 불안정하면 전진 보폭만 줄임 (null = 끔)
+                                     # 불안정 = 추정 σ > gate_sigma_m, 프레임 < gate_min_frames, 또는 추정 중심에서 평면 방향 벗어남 > e0 + k·거리 (RESULTS.md §11)
+  gate_sigma_m: 0.1
+  gate_min_frames: 8
+  gate_funnel: [0.05, 0.3]           # [e0 m, k] 깔때기
+  gate_scale: 0.5                    # 그때 전진 보폭 상한 (step_max 배율)
+  gate_unknown: false                # true 면 창문이 보이는데 목표 추정이 아직 없을 때도 전진 보폭을 줄임
 
 # ---------------------------------------------------------------------------
 # 학습 (rsl_rl PPO — Isaac Lab 기본 러너)
