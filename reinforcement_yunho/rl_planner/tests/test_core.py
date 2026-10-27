@@ -229,9 +229,9 @@ def test_safety_filter_holds_blind_drone_and_passes_nominal_missions():
         for _ in range(60):
             _, _, d, _ = env.step(pl.act(env.core))
             crashed |= d.bool() & env.core.episode_record["crashed"]   # auto-reset: read the record
-        if guarded:
+        if guarded:                         # holds where it brakes to a stop (hold_brake_acc), < 1 m back
             assert not bool(crashed.any())
-            assert float((env.core.state.pos - p0).norm(dim=-1).max()) < 0.3
+            assert float((env.core.state.pos - p0).norm(dim=-1).max()) < 0.8
         else:
             assert bool(crashed.all())
 
@@ -537,7 +537,7 @@ def test_safety_slowdown_ramps_the_step_and_leaves_seen_envs_untouched():
     """safety.slow_after_s: blind (no detection) with an unknown target -> the waypoint step shrinks linearly
     from slow_after_s to the hold (lost_hold_s); envs that see a window keep the planner's action bit-for-bit."""
     from rl_planner.planners.safety import SafetyFilter
-    cfg = cfg_cpu("safety.slow_after_s=1.0", "safety.lost_hold_s=3.0", "safety.slow_min_scale=0.25")
+    cfg = cfg_cpu("safety.slow_after_s=1.0", "safety.lost_hold_s=3.0", "safety.slow_min_scale=0.25", "safety.hold_brake_acc=null")
     f = SafetyFilter(cfg, 2, "cpu", 0.1)
     act = torch.tensor([[0.8, 0.3, -0.2], [0.8, 0.3, -0.2]])
     pos = torch.tensor([[1.0, 0.0, 1.2], [1.0, 0.0, 1.2]])
@@ -563,7 +563,7 @@ def test_safety_hold_brake_latches_the_stopping_point():
     pos, vel = torch.tensor([[1.0, 0.0, 1.2]]), torch.tensor([[1.2, -0.5, 0.3]])
     act, yaw, sm = torch.tensor([[0.8, 0.0, 0.0]]), torch.zeros(1), torch.tensor([0.8, 0.6, 0.4])
     unknown = torch.zeros(1, dtype=torch.bool)
-    for extra, want in ((), pos[0]), (("safety.hold_brake_acc=2.0",), pos[0] + torch.tensor([1.2, -0.5, 0.0]) * 1.3 / 4.0):
+    for extra, want in (("safety.hold_brake_acc=null",), pos[0]), (("safety.hold_brake_acc=2.0",), pos[0] + torch.tensor([1.2, -0.5, 0.0]) * 1.3 / 4.0):
         f = SafetyFilter(cfg_cpu("safety.lost_hold_s=0.3", *extra), 1, "cpu", 0.1)
         f.filter(act, torch.tensor([True]), unknown, pos, yaw, sm, vel=vel)       # first detection
         for _ in range(4):

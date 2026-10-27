@@ -24,7 +24,7 @@ rl_planner/
   configs/default.yaml      ← 모든 숫자의 단일 진실원 (기체·제어·씬·인지·보상·커리큘럼·DR·학습)
   configs/stress/           ← 평가 스트레스 조건 (부분 yaml)
   configs/general/          ← 범용 강건성 평가 세트: 조건 yaml + suite.yaml (레벨·묶음·이름, RESULTS.md §10)
-  configs/train/            ← 학습 프리셋 (general.yaml: 넓은 DR + 넓은 배치 L6 + 검출 공백 관측)
+  configs/train/            ← 학습 프리셋 (general.yaml: 넓은 DR + 넓은 배치 L6 + 검출 공백 관측, speed.yaml: 넓은 행동 범위 + 모션 블러 DR)
   core/                     ← 백엔드 무관 MDP (torch, Isaac 없이 테스트 가능)
     scene.py                  창문 배치 샘플러 (커리큘럼 레벨별 범위)
     perception.py             인지 대리 모델: 4-corner 검출기 + conf 가중 광선 삼각측량 (recon_rays 와 동일 수식)
@@ -45,8 +45,9 @@ rl_planner/
   scripts/train.py          rsl_rl PPO 학습 (비대칭 actor-critic, 커리큘럼, DR)
   scripts/evaluate.py       고정 시드 장면에서 RL vs 상태기계 (성공률·충돌률·시간·여유), 계획기 이름 뒤 +safe = 안전 필터
   scripts/benchmark.py      범용 평가 세트 (조건 수십 개 × 정책 여러 개, 같은 장면) 실행·표 (--table, 짝 비교 --pair)
-  scripts/(분석)            tune_fsm · results_table · report · compare_runs(학습 곡선·정체 비교) · analyze_traj ·
-                            perception_gaps · play_isaac — 쓰임은 RESULTS.md §9
+  scripts/(분석·도구)       tune_fsm · results_table · report · compare_runs(학습 곡선·정체 비교) · analyze_traj ·
+                            perception_gaps · play_isaac · export(중간 체크포인트) · expand_obs / rescale_action(웜스타트) — RESULTS.md §9
+  docs/                     그림·전체 표 (tables_eval_main.md, tables_general.md)
   eval_harness.py           평가 공통 루틴
   tests/                    단위 테스트 (팀 공용 기하 규약 일치 포함)
 ```
@@ -108,10 +109,10 @@ tensorboard --logdir /data/runs/rl_planner
 다음 웨이포인트와 성진 스키마 `waypoints_config` (`{waypoints:[현재, 다음], limits, dt}`) 를 돌려준다.
 정책 출력은 **안전 필터**(`planners/safety.py`)를 거친다: 창문이 하나도 검출되지 않고 목표 창문을 모르는(추정이 없거나
 σ > 0.3 m) 상태가 시작 후 0.5 s / 첫 검출 이후 3 s 를 넘으면 그 자리에 정지 비행하고(`hold: true`), 다시 보이면 정책에
-돌려준다. 웨이포인트는 경기장 상자 안으로 제한한다. 선택: `safety.slow_after_s` 이면 깜깜이(검출 없음 + 목표 모름)가 그 시간을 넘을 때부터
-정지 비행 시점까지 보폭을 선형으로 줄인다 (정지가 벽 앞 전속력에서 시작되지 않게, RESULTS.md §10). `safety.hold_brake_acc` [m/s²] 이면
-정지 위치를 정지 시작 위치가 아니라 제동 정지점(현재 위치 + v|v|/2a, 수평 — PX4 Hold 방식)으로 잡는다 (지나친 창문을 거꾸로
-되돌아오지 않게). 배포 후보와 권장 설정은 RESULTS.md §10 끝.
+돌려준다. 웨이포인트는 경기장 상자 안으로 제한한다. 깜깜이(검출 없음 + 목표 모름)가 `safety.slow_after_s` (기본 2 s)를 넘으면
+정지 비행 시점까지 보폭을 선형으로 줄이고 (정지가 벽 앞 전속력에서 시작되지 않게), 정지 위치는 정지를 건 위치가 아니라 제동 정지점
+(현재 위치 + v|v|/2a, `safety.hold_brake_acc` 기본 1.5 m/s², 수평 — PX4 Hold 방식)으로 잡는다 (지나친 창문을 거꾸로 되돌아오지
+않게). 두 기본값은 검증 시드 격자로 골랐다 (RESULTS.md §10; null 이면 이전 필터). 배포 후보는 RESULTS.md §10 끝.
 실제 방 크기는 `OnboardPlanner(..., safety={"bounds": {"x_min": .., "y_abs": .., "z_min": .., "z_max": ..}})` (VIO 좌표).
 
 ## 5. MDP 정의 (설정: `configs/default.yaml`)
@@ -206,6 +207,8 @@ latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임
 | 학습 중간 체크포인트 평가 | `scripts/export.py --run <run> --ckpt model_N.pt --out <dir>` → evaluate/benchmark/onboard 에 그대로 |
 | 탐색 잡음 상한 | `train.policy.std_max` (행동이 [-1,1] 로 잘려 엔트로피 보너스가 잡음을 키우는 것을 막음) |
 | 상태기계 재튜닝 | `scripts/tune_fsm.py --set <설정> --grid key=v1,v2 --device cpu` (검증 시드) |
+| 행동 범위(속도 상한) 바꾸기 | `action.step_max` — 학습된 정책은 `scripts/rescale_action.py --step-max ...` 로 옮겨 `--resume` (RESULTS.md §11) |
+| 모션 블러 | `perception.exposure_s` (평가) / `domain_randomization.exposure_s: [lo, hi]` (학습), `perception.blur_conf_px` |
 
 ## 7. 가정과 한계 (정직하게)
 

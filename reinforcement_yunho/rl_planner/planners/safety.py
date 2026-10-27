@@ -75,7 +75,7 @@ class SafetyFilter:
         """actions (E,A) in [-1,1]; seen (E,) any window detected since the last decision;
         target_valid (E,) the current target window has a valid estimate; target_sigma (E,) its
         1-sigma position uncertainty [m] (a valid estimate looser than sigma_safe_m counts as unknown);
-        vel (E,3) world-frame velocity (needed with hold_brake_acc)."""
+        vel (E,3) world-frame velocity (for hold_brake_acc; without it the hold latches the current position)."""
         self.since_seen = torch.where(seen, torch.zeros_like(self.since_seen), self.since_seen + 1)
         self.ever_seen |= seen
         if not self.enabled:
@@ -85,7 +85,7 @@ class SafetyFilter:
         known = target_valid if target_sigma is None else target_valid & (target_sigma <= self.sigma_safe)
         hold = (self.since_seen > limit) & ~known
         latch = pos
-        if self.brake_acc is not None:                # braking stop point (horizontal), as PX4 Hold
+        if self.brake_acc is not None and vel is not None:   # braking stop point (horizontal), as PX4 Hold
             vh = torch.cat((vel[:, :2], torch.zeros_like(vel[:, 2:])), -1)
             latch = pos + vh * (vh.norm(dim=-1, keepdim=True) / (2.0 * self.brake_acc))
         self.hold_pos = torch.where((hold & ~self.holding)[:, None], latch, self.hold_pos)

@@ -8,6 +8,10 @@
 Every planner runs the same scenes and the same sensor-noise draws (fresh env with
 the same seed per planner). Outputs to --out (default <policy run>/eval or
 /data/runs/rl_planner/eval/<stamp>): summary.json, episodes.csv, table.md.
+
+With --policy every planner shares the policy's evaluation config, so the state machine also runs with the
+policy's perception settings (e.g. perception.ray_forget 0.8 of the general policies, which hurts it —
+RESULTS.md §10). scripts/benchmark.py gives each planner its own config on the same scenes.
 """
 from __future__ import annotations
 
@@ -60,6 +64,9 @@ def main(argv=None) -> int:
             cfg = config_for_policy(json.load(f)["config"], a.config, a.set)
     else:
         cfg = load_config(a.config, a.set)
+    if a.policy and any(p.split("+")[0] == "fsm" for p in planners) and float(cfg["perception"].get("ray_forget", 1.0)) != 1.0:
+        print(f"[eval] note: the state machine runs with the policy's perception.ray_forget={cfg['perception']['ray_forget']} "
+              "(its own baseline uses 1.0 — compare with scripts/benchmark.py)")
     ev = cfg["eval"]
     n = int(a.num_scenes or ev["num_scenes"])
     level = int(ev["level"] if a.level is None else a.level)
