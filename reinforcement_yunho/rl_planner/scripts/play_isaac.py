@@ -32,6 +32,9 @@ def main(argv=None) -> int:
     ap.add_argument("--height", type=int, default=360)
     ap.add_argument("--every", type=int, default=1, help="render every N decisions")
     ap.add_argument("--config", action="append", default=[], help="extra yaml merged over the config (e.g. tuned fsm)")
+    ap.add_argument("--set", action="append", default=[], help="dotted override, e.g. safety.slow_after_s=2.0")
+    ap.add_argument("--safe", action="store_true", help="run the planner behind the safety filter (planners/safety.py)")
+    ap.add_argument("--title", default=None, help="label prefix in the frame header (default: planner name)")
     a = ap.parse_args(argv)
 
     from isaaclab.app import AppLauncher
@@ -44,23 +47,16 @@ def main(argv=None) -> int:
     from PIL import Image, ImageDraw
     from pxr import Gf, UsdGeom, UsdShade, Sdf
 
-    from rl_planner.core.config import Cfg, load_config
+    from rl_planner.core.config import config_for_policy, load_config
     from rl_planner.envs.isaaclab_env import WindowMissionIsaacEnv, make_env_cfg
     from rl_planner.planners.fsm import FSMPlanner, STATE_NAMES
+    from rl_planner.planners.safety import SafePlanner
 
-    if a.policy:
+    if a.policy:                        # same evaluation config as evaluate.py / benchmark.py (training-only DR off)
         with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
-            cfg = Cfg(json.load(f)["config"])
+            cfg = config_for_policy(json.load(f)["config"], a.config, a.set)
     else:
-        cfg = load_config()
-    if a.config:
-        import yaml
-        from rl_planner.core.config import deep_merge
-        merged = dict(cfg)
-        for path in a.config:
-            with open(path, encoding="utf-8") as f:
-                merged = deep_merge(merged, yaml.safe_load(f) or {})
-        cfg = Cfg(merged)
+        cfg = load_config(a.config, a.set)
     cfg["seed"] = a.seed
     cfg["sim"]["num_envs"] = 1
     env = WindowMissionIsaacEnv(make_env_cfg(cfg, num_envs=1, device="cuda:0"))
@@ -72,6 +68,9 @@ def main(argv=None) -> int:
         planner = PolicyPlanner(a.policy, device=env.device, cfg=cfg)
     else:
         planner = FSMPlanner(cfg, 1, env.device)
+    fsm = planner
+    if a.safe:
+        planner = SafePlanner(planner, cfg, 1, env.device, core.step_dt)
     planner.reset(torch.arange(1, device=env.device))
 
     stage = omni.usd.get_context().get_stage()
@@ -183,9 +182,11 @@ def main(argv=None) -> int:
                     font = ImageFont.load_default(size=18)
                 except Exception:  # noqa: BLE001
                     font = None
-                label = f"{a.planner.upper()}  t={core.episode_time[0]:.1f}s  passed {int(core.mission.target[0])}/{n_win}"
+                label = f"{a.title or a.planner.upper()}  t={core.episode_time[0]:.1f}s  passed {int(core.mission.target[0])}/{n_win}"
                 if a.planner == "fsm":
-                    label += f"  state={STATE_NAMES[int(planner.state[0])]}"
+                    label += f"  state={STATE_NAMES[int(fsm.state[0])]}"
+                if a.safe and bool(planner.safety.holding[0]):
+                    label += "  [safety hold]"
                 dr.rectangle((0, 0, 2 * a.width, 30), fill=(20, 20, 20))
                 dr.text((8, 5), label, fill=(255, 255, 255), font=font)
                 frames.append(canvas)

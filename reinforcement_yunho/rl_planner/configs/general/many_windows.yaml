@@ -1,0 +1,6 @@
+# 창문 6~8 개 (어떤 정책도 최대 5 개로 학습) — 진행 관측 (남은 창문 / 5) 이 학습 범위 1 을 넘는다
+scene:
+  max_windows: 8
+curriculum:
+  override:
+    n_windows: [6, 8]
