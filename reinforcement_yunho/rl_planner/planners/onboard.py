@@ -26,6 +26,11 @@ Minimal use (one window mission, 10 Hz):
     every 0.1 s:             out = planner.step(drone_state)                     # §6.1 dict
                              send out["waypoints_config"] to the trajectory/PID stack
     after crossing a window: planner.mark_passed()   (or let it detect the crossing itself)
+
+Look-around policies (RESULTS.md §12; policy_meta action.yaw, mission.selection nearest) also steer the heading:
+``out["yaw"]`` is the heading set-point [rad, world] (the waypoints_config schema has no yaw — the controller needs
+it as a separate input), and the target is the nearest window seen from the last pass (core/selector.py), so the
+vision message's ``order_index`` is only a track id there, not the course order.
 """
 from __future__ import annotations
 
@@ -41,6 +46,7 @@ from ..core.config import Cfg, default_section
 from ..core.dynamics import RigidBodyState
 from ..core.observations import build_spec, compute_group, _gather
 from ..core.perception import PerceptionSurrogate
+from ..core.selector import TargetSelector
 from .policy import PolicyPlanner
 from .safety import SafetyFilter
 
@@ -49,17 +55,19 @@ _PLANNER_LIMITS = os.path.join(os.path.dirname(_RB), "overall_gilnam", "planning
 
 
 class _Mission:
-    def __init__(self, n_windows: int, device):
-        self.target = torch.zeros(1, dtype=torch.long, device=device)
-        self.n = n_windows
+    def __init__(self, n_windows: int, max_windows: int, device):
+        self.target = torch.zeros(1, dtype=torch.long, device=device)      # windows passed so far
+        self.passed = torch.zeros(1, max_windows, dtype=torch.bool, device=device)
+        self.n, self.W = n_windows, max_windows
 
-    def target_index(self, W):
-        return self.target.clamp_max(W - 1)
+    def target_index(self, W=None):
+        return self.target.clamp_max((W or self.W) - 1)
 
 
 class _Scene:
-    def __init__(self, n_windows: int, device):
+    def __init__(self, n_windows: int, max_windows: int, device):
         self.n_windows = torch.tensor([n_windows], device=device)
+        self.valid = torch.arange(max_windows, device=device)[None] < n_windows
 
 
 class OnboardPlanner:
@@ -75,8 +83,11 @@ class OnboardPlanner:
         self.perception = PerceptionSurrogate(self.cfg, 1, self.W, self.device)
         self.perception.reset(torch.tensor([0], device=self.device), sigma_px=torch.tensor([0.0], device=self.device),
                               miss_prob=torch.tensor([0.0], device=self.device))
-        self.mission = _Mission(n_windows, self.device)
-        self.scene = _Scene(n_windows, self.device)
+        self.mission = _Mission(n_windows, self.W, self.device)
+        self.scene = _Scene(n_windows, self.W, self.device)
+        self.selector = TargetSelector(self.cfg, 1, self.W, self.device)
+        self.yaw_rate = float(torch.deg2rad(torch.tensor(float(self.cfg["action"].get("yaw_rate_max_deg", 60.0)))))
+        self.yaw_cmd: Optional[torch.Tensor] = None
         self.state = RigidBodyState(1, self.device)
         a = self.cfg["action"]
         self.action_dim = 4 if a["yaw"] else 3
@@ -89,6 +100,8 @@ class OnboardPlanner:
         self._seen = False                       # any window detected since the last step()
         self._framed = False                     # a camera frame arrived since the last step()
         self.episode_length_s = float(self.cfg["sim"]["episode_length_s"])
+        self.episode_len_s = torch.tensor([self.episode_length_s + float(self.cfg["sim"].get("episode_s_per_window") or 0.0)
+                                           * n_windows], device=self.device)
         self.t0: Optional[float] = None
         self.t_now = 0.0
         self.obs_noise_enabled = False
@@ -103,6 +116,7 @@ class OnboardPlanner:
         self.yaw = torch.zeros(1, device=self.device)
         self.body_x_w = torch.tensor([[1.0, 0.0, 0.0]], device=self.device)
         self._prev_d: Optional[float] = None
+        self._prev_k = -1
 
     # --- attributes the observation terms read (same names as WindowMissionCore) ---
     @property
@@ -150,8 +164,14 @@ class OnboardPlanner:
         self._framed = True
 
     def mark_passed(self) -> None:
+        """The drone flew through the window it was flying to (the selector's choice)."""
+        k = self.selector.sel
+        self.mission.passed[0, k] = True
         self.mission.target += 1
         self._prev_d = None
+        t = torch.tensor([self.t_now], device=self.device)
+        self.selector.on_pass(torch.ones(1, dtype=torch.bool, device=self.device), self.state.pos, self.state.vel_w,
+                              self.yaw, t, _gather(self.est.center, k), _gather(self.est.valid, k))
 
     # ------------------------------------------------------------------ decision
     def _set_state(self, drone_state: Mapping) -> None:
@@ -167,8 +187,10 @@ class OnboardPlanner:
 
     def _auto_pass(self) -> None:
         """Advance the target when the drone crosses the ESTIMATED window plane inside the opening."""
-        k = self.target_idx
-        if not bool(_gather(self.est.valid, k)[0]):
+        k = self.selector.sel
+        if int(k[0]) != self._prev_k:            # another window chosen: its plane has no history yet
+            self._prev_k, self._prev_d = int(k[0]), None
+        if not bool(_gather(self.est.valid, k)[0]) or not bool(self.selector.has[0]):
             return
         c, n = _gather(self.est.center, k), _gather(self.est.normal, k)
         d = float(((self.state.pos - c) * n).sum())
@@ -183,6 +205,11 @@ class OnboardPlanner:
             self.t0 = t_s if self.t0 is None else self.t0
             self.t_now = t_s - self.t0
         self._set_state(drone_state)
+        if self.yaw_cmd is None:                 # first decision: the look-around starts here
+            self.yaw_cmd = self.yaw.clone()
+            self.selector.reset(torch.zeros(1, dtype=torch.long, device=self.device), self.state.pos, self.yaw,
+                                torch.tensor([self.t_now], device=self.device))
+        self.selector.select(self.scene, self.mission, self.est, self.perception)   # passes reported since the last step
         self._auto_pass()
         if self.det is None:              # no frame yet: empty detection
             self.add_frame(drone_state["position"], drone_state["orientation"], None)
@@ -192,14 +219,18 @@ class OnboardPlanner:
             self.det = self.perception.add_detections(cam_c, R_WC, torch.zeros(1, self.W, 4, 2, device=self.device),
                                                       no, torch.zeros(1, self.W, device=self.device), no[:, 0])
         self._framed = False
+        self.selector.scan(self.yaw, self.state.pos[:, 2])
+        self.selector.select(self.scene, self.mission, self.est, self.perception)
         obs = compute_group(self, self.policy_spec)
         self.last_obs = obs                      # exactly what the policy saw (debug / logging)
         raw = self.policy.act_obs(obs).clamp(-1.0, 1.0)
         seen = torch.tensor([self._seen], device=self.device)
         self._seen = False
-        act = self.safety.filter(raw, seen, _gather(self.est.valid, self.target_idx), self.state.pos, self.yaw,
-                                 self.step_max, _gather(self.est.sigma, self.target_idx), self.state.vel_w,
-                                 self.target_idx)
+        sel = self.selector.sel
+        act = self.safety.filter(raw, seen, _gather(self.est.valid, sel) & self.selector.has, self.state.pos, self.yaw,
+                                 self.step_max, _gather(self.est.sigma, sel), self.state.vel_w, self.target_idx)
+        if self.action_dim == 4:                 # heading set-point, integrated like the training env
+            self.yaw_cmd = self.yaw_cmd + act[:, 3] * self.yaw_rate * self.step_dt
         self.prev_actions, self.actions = self.actions, act
         self.perception.tick()                   # same decision clock as simulation (detection_gap)
         wp = self.state.pos + m3.heading_to_world(act[:, :3] * self.step_max, self.yaw)
@@ -210,7 +241,8 @@ class OnboardPlanner:
         return {"waypoint": nxt, "action": [float(v) for v in act[0]], "policy_action": [float(v) for v in raw[0]],
                 "hold": bool(self.safety.holding[0]), "target_index": int(self.mission.target[0]),
                 "done": int(self.mission.target[0]) >= self.mission.n, "waypoints_config": wc,
-                "estimate_valid": bool(_gather(self.est.valid, self.target_idx)[0])}
+                "estimate_valid": bool(_gather(self.est.valid, sel)[0] & self.selector.has[0]),
+                "yaw": float(self.yaw_cmd[0]), "selected_window": int(sel[0]) if bool(self.selector.has[0]) else -1}
 
     def validate_waypoints_config(self, wc: dict) -> None:
         """Validate against 성진's schema (reinforcement_yunho/interface)."""

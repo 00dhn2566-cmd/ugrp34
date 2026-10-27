@@ -1,0 +1,7 @@
+# 극한 배치 (course.yaml 위에): 다음 창문 높이 변화 ±1.6 m (창문 높이 0.7~2.8 m), 창문 기울기 ±40°, 간격 2.5~5.0 m
+curriculum:
+  override:
+    rise: [-1.6, 1.6]
+    height: [0.7, 2.8]
+    yaw_deg: [-40.0, 40.0]
+    spacing: [2.5, 5.0]

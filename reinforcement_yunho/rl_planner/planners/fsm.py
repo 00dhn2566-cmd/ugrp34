@@ -38,9 +38,12 @@ LEG_BUDGET = 40          # decisions (4 s at 10 Hz) per leg before moving on
 class FSMPlanner:
     name = "fsm"
 
-    def __init__(self, cfg: Mapping, num_envs: int, device):
+    def __init__(self, cfg: Mapping, num_envs: int, device, follow_selector: bool = False):
+        """``follow_selector``: fly to the planner-side choice (core.selector, mission.selection) instead of the
+        windows in course order, restarting at SEARCH whenever that choice changes (look-around courses, §12)."""
         f = cfg["fsm"]
         self.f = f
+        self.follow = bool(follow_selector)
         self.E, self.device = num_envs, torch.device(device)
         self.step_max = torch.tensor(cfg["action"]["step_max"], dtype=torch.float32, device=self.device)
         self.action_dim = 4 if cfg["action"]["yaw"] else 3
@@ -73,6 +76,12 @@ class FSMPlanner:
         pos = core.state.pos
         est = core.est
         pr = core.perception
+        if self.follow:
+            new = core.selector.sel
+            changed = new != self.idx
+            self.idx = new.clone()
+            for t in (self.state, self.probe, self.rounds, self.leg):
+                t.masked_fill_(changed, 0)                       # SEARCH == 0
         idx = self.idx.clamp_max(core.W - 1)
         n_win = core.scene.n_windows
         finished = self.idx >= n_win

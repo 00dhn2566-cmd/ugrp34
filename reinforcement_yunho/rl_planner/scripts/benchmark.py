@@ -30,7 +30,7 @@ if ROOT not in sys.path:
 
 CONFIGS = os.path.join(os.path.dirname(HERE), "configs")
 SUITE = os.path.join(CONFIGS, "general", "suite.yaml")
-TIERS = (("nominal", "명목"), ("in_dr", "학습 DR 범위 안"), ("beyond", "학습 DR 범위 밖"),
+TIERS = (("nominal", "명목"), ("long", "창문 50 개"), ("in_dr", "학습 DR 범위 안"), ("beyond", "학습 DR 범위 밖"),
          ("held_out", "학습에 없던 교란"), ("compound", "복합"), ("safety", "안전 (성공 불가)"))
 
 
@@ -56,7 +56,7 @@ def run(a) -> int:
 
     policies = dict(p.split("=", 1) for p in a.policy)
     planners = []
-    for spec in a.planner:                        # "fsm", "fsm+safe", "<policy>:rl", "<policy>:rl+safe"
+    for spec in a.planner:                        # "fsm", "fsm+safe", "<policy>:rl[+safe]", "<policy>:scan[+safe]"
         pol, _, kind = spec.rpartition(":")
         if pol and pol not in policies:
             raise SystemExit(f"--planner {spec}: unknown policy {pol!r} (give --policy {pol}=<export dir>)")
@@ -113,6 +113,10 @@ def run(a) -> int:
                     planner = FSMPlanner(cfg, a.num_scenes, env.device)
                 elif base == "rl":
                     planner = PolicyPlanner(policies[pol], device=env.device, cfg=cfg)
+                elif base == "scan":                  # scripted look-around around a heading-fixed policy (§12)
+                    from rl_planner.planners.scan import ScanSupervisor
+                    planner = ScanSupervisor(PolicyPlanner(policies[pol], device=env.device, cfg=cfg), cfg,
+                                             a.num_scenes, env.device, env.core.step_dt)
                 else:
                     raise SystemExit(f"unknown planner kind {kind!r}")
                 if guard == "safe":

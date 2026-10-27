@@ -55,10 +55,16 @@ def test_onboard_matches_training_obs_and_actions():
     max_diff = 0.0
     holds = 0
     term_diff = {}
+    nearest = cfg.get("mission", {}).get("selection", "order") == "nearest"
+    yaw_diff = 0.0
     for t in range(150):
         ds = drone_state()
         ob.add_frame(ds["position"], ds["orientation"], vision_msg())
-        ob.mission.target[:] = core.mission.target            # same pass count as the referee
+        if nearest:                                           # report the referee's passes as they happen
+            while int(ob.mission.target[0]) < int(core.mission.target[0]):
+                ob.mark_passed()
+        else:
+            ob.mission.target[:] = core.mission.target        # same pass count as the referee
         out = ob.step(ds, t_s=float(core.episode_time[0]))
         o_env = core.compute_observations()["policy"][0]
         o_ob = ob.last_obs[0]
@@ -71,7 +77,9 @@ def test_onboard_matches_training_obs_and_actions():
         _, _, done, _ = env.step(torch.tensor([out["action"]]))
         if bool(done[0]):
             break
+        yaw_diff = max(yaw_diff, abs(out["yaw"] - float(core.yaw_cmd[0])))   # heading set-point (yaw policies)
     print("per-term max |obs_env - obs_onboard|:", {k: round(v, 6) for k, v in term_diff.items()})
     assert max(term_diff.values()) < 1e-3, f"observation mismatch: {term_diff}"
     assert max_diff < 1e-3, f"onboard actions differ from training-env actions by {max_diff}"
     assert holds == 0, f"safety hold triggered {holds} times on a nominal mission"
+    assert yaw_diff < 1e-3, f"onboard heading set-point differs from the env's by {yaw_diff} rad"

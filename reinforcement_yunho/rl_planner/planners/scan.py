@@ -75,7 +75,9 @@ class ScanSupervisor:
         self.phase = torch.where(retry | ((self.phase >= 2) & ~sel.has), torch.zeros_like(self.phase), self.phase)
         p = sel.candidate_positions(core.est, core.perception)
         tgt = p.gather(1, sel.sel.view(-1, 1, 1).expand(-1, 1, 3)).squeeze(1)
-        look = torch.atan2(tgt[:, 1] - core.state.pos[:, 1], tgt[:, 0] - core.state.pos[:, 0])
+        rel = tgt - core.state.pos
+        look = torch.atan2(rel[:, 1], rel[:, 0])
+        look = torch.where(rel[:, :2].norm(dim=-1) > 1.0, look, core.yaw_cmd)   # inside 1 m: keep the heading
         faced = (self.phase == 2) & (_wrap(look - core.yaw).abs() < self.face)
         self.phase = torch.where(faced, torch.full_like(self.phase, 3), self.phase)
         searching = self.phase < 2

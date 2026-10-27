@@ -1,0 +1,5 @@
+# 긴 코스 중 아무 때나 카메라 끊김 1 번 (5~200 s 사이 시작, 1~4 s)
+domain_randomization:
+  blackout_prob: 1.0
+  blackout_start_s: [5.0, 200.0]
+  blackout_len_s: [1.0, 4.0]
