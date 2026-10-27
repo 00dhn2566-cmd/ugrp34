@@ -198,7 +198,8 @@ class OnboardPlanner:
         seen = torch.tensor([self._seen], device=self.device)
         self._seen = False
         act = self.safety.filter(raw, seen, _gather(self.est.valid, self.target_idx), self.state.pos, self.yaw,
-                                 self.step_max, _gather(self.est.sigma, self.target_idx), self.state.vel_w)
+                                 self.step_max, _gather(self.est.sigma, self.target_idx), self.state.vel_w,
+                                 self.target_idx)
         self.prev_actions, self.actions = self.actions, act
         self.perception.tick()                   # same decision clock as simulation (detection_gap)
         wp = self.state.pos + m3.heading_to_world(act[:, :3] * self.step_max, self.yaw)

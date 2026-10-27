@@ -18,6 +18,12 @@ mission is nominal:
            pos + v|v|/(2a) along the horizontal velocity (PX4 Hold brakes and holds where it stops). A hold
            that begins at ~1.1 m/s otherwise overshoots by its stopping distance and is pulled back, through
            the window it just flew through when one was that close (RESULTS.md §10).
+           ``retreat_after_s``: a hold that has seen nothing for that long backs up along the path flown since the
+           last window pass (breadcrumbs every ``crumb_spacing_m``, none within ``crumb_clear_m`` of the pass point)
+           at ``retreat_speed`` [m/s], at most ``retreat_max_m`` — the path flown is free, and further back the
+           window fits in the image again. A fast policy otherwise holds ~1.6 m short of a window it has not
+           estimated yet, too close to see all four corners, and waits for a detection that never comes
+           (RESULTS.md §11; drones that need vision to navigate retrace their route on signal loss the same way).
 * slow   — (``slow_after_s``) after that long without any detection while the target is unknown, the
            waypoint step shrinks linearly to ``slow_min_scale`` by the time the hold starts, so the hold
            does not begin at full speed next to a wall: the RL policies fly ~1.1 m/s and were 0.5 m from
@@ -50,6 +56,12 @@ class SafetyFilter:
         self.slow_min = float(s.get("slow_min_scale", 0.25))
         hb = s.get("hold_brake_acc")                  # None: hold where the hold began
         self.brake_acc = None if hb is None else float(hb)
+        rr = s.get("retreat_after_s")                 # None: hold in place until the next detection
+        self.retreat_steps = None if rr is None else max(0, int(round(float(rr) / float(step_dt))))
+        self.retreat_step_m = float(s.get("retreat_speed", 0.3)) * float(step_dt)
+        self.retreat_max = float(s.get("retreat_max_m", 3.0))
+        self.crumb_m = float(s.get("crumb_spacing_m", 0.1))
+        self.crumb_clear = float(s.get("crumb_clear_m", 0.6))
         ss = s.get("sigma_safe_m", 0.3)               # None: any valid target estimate counts as known
         self.sigma_safe = float("inf") if ss is None else float(ss)
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
@@ -61,21 +73,37 @@ class SafetyFilter:
         self.holding = torch.zeros(E, dtype=torch.bool, device=device)
         self.hold_pos = torch.zeros(E, 3, device=device)
         self.hold_steps = torch.zeros(E, dtype=torch.long, device=device)   # per episode, for logging
+        self.hold_age = torch.zeros(E, dtype=torch.long, device=device)     # steps into the current hold
+        if self.retreat_steps is not None:            # breadcrumb ring buffer (newest at head - 1)
+            N = max(1, int(s.get("crumb_buffer", 64)))
+            self.crumbs = torch.zeros(E, N, 3, device=device)
+            self.head = torch.zeros(E, dtype=torch.long, device=device)
+            self.n_crumbs = torch.zeros(E, dtype=torch.long, device=device)
+            self.pass_pos = torch.zeros(E, 3, device=device)
+            self.last_target = torch.full((E,), -1, dtype=torch.long, device=device)
+            self.retreated = torch.zeros(E, device=device)
 
     def reset(self, env_ids) -> None:
         self.since_seen[env_ids] = 0
         self.ever_seen[env_ids] = False
         self.holding[env_ids] = False
         self.hold_steps[env_ids] = 0
+        self.hold_age[env_ids] = 0
+        if self.retreat_steps is not None:
+            self.n_crumbs[env_ids] = 0
+            self.last_target[env_ids] = -1
+            self.retreated[env_ids] = 0.0
 
     @torch.no_grad()
     def filter(self, actions: torch.Tensor, seen: torch.Tensor, target_valid: torch.Tensor,
                pos: torch.Tensor, yaw: torch.Tensor, step_max: torch.Tensor,
-               target_sigma: torch.Tensor | None = None, vel: torch.Tensor | None = None) -> torch.Tensor:
+               target_sigma: torch.Tensor | None = None, vel: torch.Tensor | None = None,
+               target_idx: torch.Tensor | None = None) -> torch.Tensor:
         """actions (E,A) in [-1,1]; seen (E,) any window detected since the last decision;
         target_valid (E,) the current target window has a valid estimate; target_sigma (E,) its
         1-sigma position uncertainty [m] (a valid estimate looser than sigma_safe_m counts as unknown);
-        vel (E,3) world-frame velocity (for hold_brake_acc; without it the hold latches the current position)."""
+        vel (E,3) world-frame velocity (for hold_brake_acc; without it the hold latches the current position);
+        target_idx (E,) index of the window to pass next (for retreat_after_s: the path is kept since the last pass)."""
         self.since_seen = torch.where(seen, torch.zeros_like(self.since_seen), self.since_seen + 1)
         self.ever_seen |= seen
         if not self.enabled:
@@ -91,6 +119,9 @@ class SafetyFilter:
         self.hold_pos = torch.where((hold & ~self.holding)[:, None], latch, self.hold_pos)
         self.holding = hold
         self.hold_steps += hold.long()
+        self.hold_age = torch.where(hold, self.hold_age + 1, torch.zeros_like(self.hold_age))
+        if self.retreat_steps is not None and target_idx is not None:
+            self._retrace(hold, pos, target_idx)
         wp_raw = pos + m3.heading_to_world(actions[:, :3] * step_max, yaw)
         wp = wp_raw
         slowed = torch.zeros_like(hold)
@@ -108,6 +139,34 @@ class SafetyFilter:
         if out.shape[1] > 3:
             out[:, 3] = torch.where(hold, torch.zeros_like(out[:, 3]), out[:, 3])
         return out
+
+
+    def _retrace(self, hold: torch.Tensor, pos: torch.Tensor, target_idx: torch.Tensor) -> None:
+        """Record breadcrumbs while flying; during a hold older than retreat_after_s move the hold point back along them."""
+        N = self.crumbs.shape[1]
+        ar = torch.arange(pos.shape[0], device=pos.device)
+        passed = target_idx != self.last_target          # a window was passed (or the episode began): forget the path
+        self.last_target = target_idx.clone()
+        self.n_crumbs = torch.where(passed, torch.zeros_like(self.n_crumbs), self.n_crumbs)
+        self.pass_pos = torch.where(passed[:, None], pos, self.pass_pos)
+        newest = self.crumbs[ar, (self.head - 1) % N]
+        moved = (self.n_crumbs == 0) | ((pos - newest).norm(dim=-1) >= self.crumb_m)
+        rec = ~hold & moved & ((pos - self.pass_pos).norm(dim=-1) >= self.crumb_clear)
+        self.crumbs[ar, self.head] = torch.where(rec[:, None], pos, self.crumbs[ar, self.head])
+        self.head = torch.where(rec, (self.head + 1) % N, self.head)
+        self.n_crumbs = torch.where(rec, (self.n_crumbs + 1).clamp_max(N), self.n_crumbs)
+        self.retreated = torch.where(hold, self.retreated, torch.zeros_like(self.retreated))
+        go = hold & (self.hold_age > self.retreat_steps) & (self.n_crumbs > 0) & (self.retreated < self.retreat_max)
+        if not bool(go.any()):
+            return
+        d = self.crumbs[ar, (self.head - 1) % N] - self.hold_pos
+        dist = d.norm(dim=-1)
+        step = torch.minimum(dist, torch.full_like(dist, self.retreat_step_m))
+        self.hold_pos = torch.where(go[:, None], self.hold_pos + d / dist.clamp_min(1e-6)[:, None] * step[:, None], self.hold_pos)
+        self.retreated = self.retreated + torch.where(go, step, torch.zeros_like(step))
+        reached = go & (dist <= self.retreat_step_m)
+        self.head = torch.where(reached, (self.head - 1) % N, self.head)
+        self.n_crumbs = torch.where(reached, self.n_crumbs - 1, self.n_crumbs)
 
 
 class SafePlanner:
@@ -128,4 +187,5 @@ class SafePlanner:
         target_valid = core.est.valid.gather(1, idx).squeeze(1)
         target_sigma = core.est.sigma.gather(1, idx).squeeze(1)
         return self.safety.filter(a, core.det.detected.any(-1), target_valid,
-                                  core.state.pos, core.yaw, core.step_max, target_sigma, core.state.vel_w)
+                                  core.state.pos, core.yaw, core.step_max, target_sigma, core.state.vel_w,
+                                  core.target_idx)

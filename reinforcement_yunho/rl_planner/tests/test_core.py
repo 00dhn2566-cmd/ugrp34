@@ -572,6 +572,44 @@ def test_safety_hold_brake_latches_the_stopping_point():
         assert torch.allclose(f.hold_pos[0], want, atol=1e-6)
 
 
+def test_safety_hold_retraces_the_path_flown_since_the_last_pass():
+    """safety.retreat_after_s: a blind hold backs up along the breadcrumbs of the path flown since the last window
+    pass at retreat_speed, never closer than crumb_clear_m to the pass point and at most retreat_max_m; a detection
+    ends it. Off (null) the hold stays where it latched."""
+    from rl_planner.planners.safety import SafetyFilter
+    act, yaw, sm = torch.tensor([[0.8, 0.0, 0.0]]), torch.zeros(1), torch.tensor([0.8, 0.6, 0.4])
+    unknown, tgt = torch.zeros(1, dtype=torch.bool), torch.tensor([1])
+    base = ("safety.lost_hold_s=0.3", "safety.hold_brake_acc=null", "safety.slow_after_s=null")
+    for extra, max_m in ((("safety.retreat_after_s=null",), None), (("safety.retreat_after_s=0.5", "safety.retreat_speed=0.5"), 3.0),
+                         (("safety.retreat_after_s=0.5", "safety.retreat_speed=0.5", "safety.retreat_max_m=0.8"), 0.8)):
+        f = SafetyFilter(cfg_cpu(*base, *extra), 1, "cpu", 0.1)
+        # window 0 passed at x = 0; fly to x = 2 along a dog-leg (y = 0 -> 0.5), seeing windows on the way
+        path = [torch.tensor([[0.1 * k, 0.0 if k < 10 else 0.05 * (k - 10), 1.2]]) for k in range(21)]
+        for p in path:
+            f.filter(act, torch.tensor([True]), unknown, p, yaw, sm, target_idx=tgt)
+        here = path[-1]
+        trace = []
+        for _ in range(80):                                   # blind: hold after 0.3 s, retreat after 0.5 s more
+            f.filter(act, torch.tensor([False]), unknown, here, yaw, sm, target_idx=tgt)
+            if bool(f.holding[0]):
+                trace.append(f.hold_pos[0].clone())
+        assert bool(f.holding[0]) and torch.equal(trace[0], here[0])
+        if max_m is None:
+            assert torch.equal(trace[-1], here[0])
+            continue
+        steps = [float((b - a).norm()) for a, b in zip(trace, trace[1:])]
+        assert max(steps) <= 0.05 + 1e-5                       # 0.5 m/s at 10 Hz
+        travelled = sum(steps)
+        assert travelled <= max_m + 0.05 + 1e-5
+        on_path = min(float((trace[-1] - p[0]).norm()) for p in path)
+        assert on_path < 0.06                                  # it stays on the flown path ...
+        assert float((trace[-1] - path[0][0]).norm()) >= 0.6 - 1e-5   # ... and short of the pass point
+        if max_m == 3.0:                                       # the whole path back to the clearance was used
+            assert abs(float(trace[-1][0]) - 0.6) < 0.06 and abs(float(trace[-1][1])) < 1e-6
+        f.filter(act, torch.tensor([True]), unknown, here, yaw, sm, target_idx=tgt)   # a detection ends the hold
+        assert not bool(f.holding[0])
+
+
 def test_rescale_action_keeps_the_commanded_displacement():
     """scripts/rescale_action.py: with a larger action.step_max the rescaled actor commands the same waypoint
     displacement (mean action x step_max) and the same exploration noise in metres, given the previous action in
