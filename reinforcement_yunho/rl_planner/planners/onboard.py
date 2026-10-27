@@ -117,6 +117,7 @@ class OnboardPlanner:
         self.body_x_w = torch.tensor([[1.0, 0.0, 0.0]], device=self.device)
         self._prev_d: Optional[float] = None
         self._prev_k = -1
+        self._pass_pending: Optional[torch.Tensor] = None
 
     # --- attributes the observation terms read (same names as WindowMissionCore) ---
     @property
@@ -164,11 +165,17 @@ class OnboardPlanner:
         self._framed = True
 
     def mark_passed(self) -> None:
-        """The drone flew through the window it was flying to (the selector's choice)."""
-        k = self.selector.sel
+        """The drone flew through the window it was flying to (the selector's choice). The look-around restarts from
+        the drone state of the next step() (in simulation: the state right after the decision with the pass)."""
+        k = self.selector.sel.clone()
         self.mission.passed[0, k] = True
         self.mission.target += 1
         self._prev_d = None
+        self._pass_pending = k
+
+    def _restart_look_around(self) -> None:
+        k = self._pass_pending
+        self._pass_pending = None
         t = torch.tensor([self.t_now], device=self.device)
         self.selector.on_pass(torch.ones(1, dtype=torch.bool, device=self.device), self.state.pos, self.state.vel_w,
                               self.yaw, t, _gather(self.est.center, k), _gather(self.est.valid, k))
@@ -209,8 +216,13 @@ class OnboardPlanner:
             self.yaw_cmd = self.yaw.clone()
             self.selector.reset(torch.zeros(1, dtype=torch.long, device=self.device), self.state.pos, self.yaw,
                                 torch.tensor([self.t_now], device=self.device))
+        if self._pass_pending is not None:       # mark_passed() since the last step
+            self._restart_look_around()
         self.selector.select(self.scene, self.mission, self.est, self.perception)   # passes reported since the last step
         self._auto_pass()
+        if self._pass_pending is not None:       # crossing detected just now from this state
+            self._restart_look_around()
+            self.selector.select(self.scene, self.mission, self.est, self.perception)
         if self.det is None:              # no frame yet: empty detection
             self.add_frame(drone_state["position"], drone_state["orientation"], None)
         elif not self._framed:            # no camera frame since the last decision: nothing detected now
