@@ -1,0 +1,43 @@
+# 범용 강건성 평가 세트 (scripts/benchmark.py) — RESULTS.md §10.
+# 조건 = 레벨 + 부분 설정 yaml 목록 (rl_planner/configs 기준 경로). 같은 시드 512 장면, 모든 계획기 같은 장면·같은 교란.
+# tier — nominal: 명목 / in_dr: 범용 정책 학습 DR 범위 안 (configs/train/general.yaml) / beyond: 그 범위 밖 /
+#        held_out: 어떤 정책도 학습에서 겪지 않은 교란 / compound: 여러 교란 동시 / safety: 성공 불가, 충돌 여부만
+conditions:
+  - {name: nominal_L4, level: 4, tier: nominal, label: "명목 L4"}
+  - {name: nominal_L5, level: 5, tier: nominal, label: "명목 L5"}
+  - {name: gust, level: 4, configs: [general/gust.yaml], tier: in_dr, label: "돌풍 σ 0.3 m/s²"}
+  - {name: wind_strong, level: 4, configs: [stress/wind_strong.yaml], tier: in_dr, label: "강풍 0.6~1.0 m/s²"}
+  - {name: frame_drop30, level: 4, configs: [general/frame_drop30.yaml], tier: in_dr, label: "프레임 30% 누락"}
+  - {name: latency_jitter, level: 4, configs: [general/latency_jitter.yaml], tier: in_dr, label: "검출 지연 0.1~0.2 s 변동"}
+  - {name: cam_mount2, level: 4, configs: [general/cam_mount2.yaml], tier: in_dr, label: "카메라 장착 오차 2°"}
+  - {name: ctrl_soft, level: 4, configs: [general/ctrl_soft.yaml], tier: in_dr, label: "제어기 게인 ×0.7"}
+  - {name: ctrl_stiff, level: 4, configs: [general/ctrl_stiff.yaml], tier: in_dr, label: "제어기 게인 ×1.3"}
+  - {name: ctrl_integral, level: 4, configs: [general/ctrl_integral.yaml], tier: in_dr, label: "속도 적분항 I 1.0"}
+  - {name: geom_wide, level: 4, configs: [general/geom_wide.yaml], tier: in_dr, label: "넓은 배치 (yaw ±40°, 좌우 ±1 m)"}
+  - {name: narrow, level: 4, configs: [general/narrow.yaml], tier: in_dr, label: "좁은 창문 0.85~0.95 m"}
+  - {name: blackout3, level: 4, configs: [general/blackout3.yaml], tier: in_dr, label: "카메라 끊김 3 s"}
+  - {name: blackout7, level: 4, configs: [general/blackout7.yaml], tier: in_dr, label: "카메라 끊김 7 s"}
+  - {name: gust_severe, level: 4, configs: [general/gust_severe.yaml], tier: beyond, label: "강한 돌풍 (바람 0.3~0.6 + σ 0.6)"}
+  - {name: wind_severe, level: 4, configs: [general/wind_severe.yaml], tier: beyond, label: "매우 강한 바람 1.0~1.3 m/s²"}
+  - {name: frame_drop50, level: 4, configs: [general/frame_drop50.yaml], tier: beyond, label: "프레임 50% 누락"}
+  - {name: latency_severe, level: 4, configs: [general/latency_severe.yaml], tier: beyond, label: "검출 지연 0.3~0.5 s 변동"}
+  - {name: cam_mount4, level: 4, configs: [general/cam_mount4.yaml], tier: beyond, label: "카메라 장착 오차 4°"}
+  - {name: ctrl_soft_severe, level: 4, configs: [general/ctrl_soft_severe.yaml], tier: beyond, label: "제어기 게인 ×0.5"}
+  - {name: ctrl_integral_severe, level: 4, configs: [general/ctrl_integral_severe.yaml], tier: beyond, label: "속도 적분항 I 2.5"}
+  - {name: narrow_severe, level: 4, configs: [general/narrow_severe.yaml], tier: beyond, label: "매우 좁은 창문 0.80~0.85 m"}
+  - {name: yaw55, level: 4, configs: [general/yaw55.yaml], tier: beyond, label: "창문 yaw ±55°"}
+  - {name: blackout10, level: 4, configs: [general/blackout10.yaml], tier: beyond, label: "카메라 끊김 10 s"}
+  - {name: vio_drift, level: 4, configs: [general/vio_drift.yaml], tier: held_out, label: "VIO 드리프트 0.03 m/√s"}
+  - {name: vio_noise, level: 4, configs: [stress/vio_noise.yaml], tier: held_out, label: "VIO 자세 잡음 (3 cm, 0.5°)"}
+  - {name: obs_noise_x3, level: 4, configs: [general/obs_noise_x3.yaml], tier: held_out, label: "자기 상태 관측 잡음 ×3"}
+  - {name: outliers, level: 4, configs: [stress/outliers.yaml], tier: held_out, label: "코너 아웃라이어 3%"}
+  - {name: noise_x1p7, level: 4, configs: [stress/noise_x1p7.yaml], tier: held_out, label: "코너 잡음 ×1.7"}
+  - {name: calib_3pct, level: 4, configs: [stress/calib_3pct.yaml], tier: held_out, label: "초점거리 보정 오차 3%"}
+  - {name: heavy, level: 4, configs: [stress/heavy.yaml], tier: held_out, label: "과중량 (추력/무게 ≈ 1.5)"}
+  - {name: slow_motor, level: 4, configs: [general/slow_motor.yaml], tier: held_out, label: "느린 모터 70~100 ms"}
+  - {name: fps5, level: 4, configs: [general/fps5.yaml], tier: held_out, label: "카메라 5 Hz"}
+  - {name: far, level: 4, configs: [general/far.yaml], tier: held_out, label: "먼 창문 (첫 4~6 m, 간격 3.6~5 m)"}
+  - {name: start_offset, level: 4, configs: [general/start_offset.yaml], tier: held_out, label: "시작 위치 크게 어긋남"}
+  - {name: combo_mid, level: 4, configs: [general/combo_mid.yaml], tier: compound, label: "복합 (중간, L4)"}
+  - {name: combo_hard, level: 5, configs: [general/combo_hard.yaml], tier: compound, label: "복합 (거침, L5)"}
+  - {name: blind, level: 4, configs: [stress/blind.yaml], tier: safety, label: "검출 전무 (충돌 여부만)"}

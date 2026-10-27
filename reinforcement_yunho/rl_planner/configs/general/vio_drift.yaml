@@ -1,0 +1,3 @@
+# VIO 위치 드리프트: 랜덤워크 σ 0.03 m/√s (10 s 에 약 0.1 m)
+perception:
+  pose_drift_m: 0.03

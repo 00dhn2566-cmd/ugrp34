@@ -65,6 +65,8 @@ def runner_cfg(cfg) -> dict:
             "obs_normalization": bool(t["empirical_normalization"]),
             "distribution_cfg": {"class_name": "GaussianDistribution", "init_std": float(pol["init_noise_std"]),
                                  "std_type": "scalar"},
+            **({"class_name": "RNNModel", "rnn_type": pol["actor_type"], "rnn_hidden_dim": int(pol["rnn_hidden_dim"]),
+                "rnn_num_layers": int(pol["rnn_num_layers"])} if pol.get("actor_type", "mlp") != "mlp" else {}),
         },
         "critic": {
             "class_name": "MLPModel",
@@ -75,6 +77,26 @@ def runner_cfg(cfg) -> dict:
         "algorithm": {"class_name": "PPO", "rnd_cfg": None, "symmetry_cfg": None, **alg},
         "multi_gpu": None,
     }
+
+
+def export_recurrent_jit(actor, path: str) -> None:
+    """TorchScript of an rsl_rl RNNModel actor as a pure function ``(obs (B,D), state (S,B,H)) -> (action, state)``.
+    rsl_rl's own JIT export keeps a batch-1 hidden state inside the module; evaluation runs 512 envs at
+    once and resets them one by one, so the state lives in the caller (PolicyPlanner) instead."""
+    import torch
+
+    from rl_planner.planners.policy import RecurrentExport
+    mod = RecurrentExport(actor)
+    mod.eval()
+    torch.jit.script(mod).save(path)
+
+
+def recurrent_meta(actor) -> dict:
+    """``state_shape`` = (S, H): the caller keeps a zero-initialised (S, num_envs, H) state per env."""
+    rnn = actor.rnn.rnn
+    kind = "lstm" if type(rnn).__name__ == "LSTM" else "gru"
+    return {"type": kind, "state_shape": [rnn.num_layers * (2 if kind == "lstm" else 1), rnn.hidden_size],
+            "call": "action, state = policy(obs, state); state[:, done_env_ids] = 0 at every episode start"}
 
 
 def make_env(cfg, backend: str, num_envs: int, device: str):
@@ -138,7 +160,11 @@ def main(argv=None) -> int:
     if not a.no_export:
         exp = os.path.join(run_dir, "export")
         os.makedirs(exp, exist_ok=True)
-        runner.export_policy_to_jit(exp, filename=JIT_NAME)
+        actor = runner.alg.get_policy()
+        if actor.is_recurrent:                 # batched export with explicit state (planners/policy.py)
+            export_recurrent_jit(actor, os.path.join(exp, JIT_NAME))
+        else:
+            runner.export_policy_to_jit(exp, filename=JIT_NAME)
         try:
             runner.export_policy_to_onnx(exp, filename="policy.onnx")
         except Exception as e:  # noqa: BLE001 — ONNX is a convenience copy
@@ -146,6 +172,8 @@ def main(argv=None) -> int:
         import json
         meta = build_meta(cfg, core, {"run_dir": run_dir, "git": git, "backend": backend,
                                       "iterations": int(cfg["train"]["max_iterations"])})
+        if actor.is_recurrent:
+            meta["recurrent"] = recurrent_meta(actor)
         with open(os.path.join(exp, META_NAME), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
         print(f"[train] exported policy to {exp}")

@@ -1,0 +1,4 @@
+# 창문 yaw ±55° (검출 한계 입사각 70°)
+curriculum:
+  override:
+    yaw_deg: [-55.0, 55.0]

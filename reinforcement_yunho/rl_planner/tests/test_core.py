@@ -340,3 +340,175 @@ def test_eval_config_turns_training_only_augmentations_off():
     assert c["domain_randomization"]["blackout_prob"] == 0.3
     trained["safety"]["lost_hold_s"] = 99.0              # runtime section: today's default, not the snapshot
     assert config_for_policy(trained)["safety"]["lost_hold_s"] == cfg_cpu()["safety"]["lost_hold_s"]
+
+
+# ----------------------------------------------------------------------------- general-robustness knobs
+def _env(*over, n=16, seed=3, level=3):
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    cfg = cfg_cpu(f"sim.num_envs={n}", *over)
+    env = TorchWindowEnv(cfg, num_envs=n, device="cpu", seed=seed)
+    env.core.fixed_level = level
+    env.core.reseed(seed)
+    env._reset_all()
+    return env
+
+
+def test_robustness_knobs_off_draw_nothing_extra():
+    """Every new knob defaults to off: no disturbance draws, no mounting error, no controller variation."""
+    env = _env()
+    s0 = env.core.dist_gen.get_state()
+    for _ in range(5):
+        env.step(torch.zeros(16, env.num_actions))
+    assert torch.equal(env.core.dist_gen.get_state(), s0)
+    assert env.core.R_err is None and env.core.controller.kp_s is None
+    assert float(env.core.gust.abs().max()) == 0.0 and float(env.core.drift.abs().max()) == 0.0
+
+
+def test_gusts_follow_the_ou_statistics():
+    env = _env("domain_randomization.gust_accel=[0.5,0.5]", "domain_randomization.gust_tau_s=1.0", n=256)
+    core = env.core
+    xs = []
+    for _ in range(60):
+        core.pre_decision(torch.zeros(256, env.num_actions))       # gust update only (no physics needed)
+        xs.append(core.gust[:, 0].clone())
+    x = torch.stack(xs)
+    assert abs(float(x.std()) - 0.5) < 0.05
+    lag = 10                                                        # 1 s at 10 Hz -> correlation e^-1
+    c = float((x[:-lag] * x[lag:]).mean() / x.var())
+    assert abs(c - math.exp(-1.0)) < 0.1
+    assert float(core.gust[:, 2].abs().max()) == 0.0                # horizontal only
+
+
+def test_frame_drop_rate_and_drop_dr():
+    env = _env("perception.frame_drop_prob=0.3", n=64)
+    taken = []
+    for _ in range(40):
+        env.step(torch.zeros(64, env.num_actions))
+        taken.append(env.core.det.frame_taken.float().mean())
+    assert abs(float(torch.stack(taken).mean()) - 0.7) < 0.05
+    env = _env("domain_randomization.frame_drop_prob=[0.0,0.4]", n=64)
+    p = env.core.drop_p
+    assert float(p.min()) >= 0.0 and float(p.max()) <= 0.4 and float(p.std()) > 0.05
+
+
+def test_latency_jitter_delivers_each_frame_at_most_once_and_in_order():
+    """latency 1 + jitter U{0..2}: frames arrive 1-3 decisions late, never twice, never older than one
+    already delivered (latest-frame semantics)."""
+    env = _env("perception.latency_steps=1", "perception.latency_jitter_steps=2", n=32)
+    core = env.core
+    last = torch.full((32,), -1, dtype=torch.long)
+    delivered = torch.zeros(32)
+    for k in range(30):
+        env.step(torch.zeros(32, env.num_actions))
+        cur = core._last_cap.clone()
+        assert bool((cur >= last).all())
+        delivered += (cur > last).float()
+        last = cur
+    assert 0.5 * 30 < float(delivered.mean()) < 30                 # some frames are superseded and dropped
+    assert core.lat_max == 3
+
+
+def test_camera_mount_error_biases_the_triangulation():
+    cfg, sc, pr = _single_window_perception(0.0)
+    q = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    R_err = m3.rot_axis_angle(torch.tensor([[0.0, 1.0, 0.0]]), torch.tensor([math.radians(2.0)]))
+    errs = {}
+    for name, R in (("nominal", None), ("mount_2deg", R_err)):
+        pr.reset(torch.tensor([0]), sigma_px=torch.tensor([0.0]), miss_prob=torch.tensor([0.0]))
+        for y in (-0.6, 0.6, 0.0):
+            c, Rwc = pr.camera_pose(torch.tensor([[0.0, y, 1.2]]), q)
+            pr.add_detections(*pr.capture(c, Rwc, sc, torch.tensor([True]), torch.Generator().manual_seed(0), R_err=R))
+        est = pr.estimate()
+        errs[name] = float((est.center[0, 0] - sc.center[0, 0]).norm())
+    assert errs["nominal"] < 1e-3
+    assert 0.05 < errs["mount_2deg"] < 0.3                           # ~ range x tan(2 deg) = 0.14 m
+
+
+def test_velocity_integral_cancels_wind_drift():
+    """With zero actions the waypoint follows the drone, so a P-only cascade drifts downwind at a_w / kv
+    (0.2 m/s here); the velocity integral (domain_randomization.ctrl_ki) stops the drift after a_w / ki."""
+    speed, drift = {}, {}
+    for ki in (0.0, 1.5):
+        env = _env("domain_randomization.wind_accel=[0.6,0.6]", "domain_randomization.mass_scale=[1.0,1.0]",
+                   f"domain_randomization.ctrl_ki=[{ki},{ki}]", "domain_randomization.drag_scale=[1.0,1.0]",
+                   "perception.det_conf_min=1.01", n=8, level=0)
+        p0 = env.core.state.pos.clone()
+        for _ in range(80):
+            env.step(torch.zeros(8, env.num_actions))
+        speed[ki] = float(env.core.state.vel_w[:, :2].norm(dim=-1).mean())
+        drift[ki] = float((env.core.state.pos - p0)[:, :2].norm(dim=-1).mean())
+    assert speed[0.0] > 0.15 and speed[1.5] < 0.03
+    assert drift[1.5] < 0.6 / 1.5 + 0.05 < drift[0.0]
+
+
+def test_gain_scale_and_privileged_dr_params():
+    env = _env("domain_randomization.ctrl_kp_scale=[0.5,1.5]", "domain_randomization.ctrl_kv_scale=[0.7,0.7]",
+               "domain_randomization.cam_rot_err_deg=[1.0,3.0]",
+               "observation.critic=[target_gt,next_gt,estimate_error,dr_params]", n=32)
+    kp, kv, ki = env.core.controller.variation()
+    assert 0.5 <= float(kp.min()) < float(kp.max()) <= 1.5 and torch.allclose(kv, torch.full_like(kv, 0.7))
+    assert float(ki.abs().max()) == 0.0
+    deg = torch.rad2deg(env.core.cam_err_rad)
+    assert float(deg.min()) >= 1.0 - 1e-4 and float(deg.max()) <= 3.0 + 1e-4
+    obs, _, _, _ = env.step(torch.zeros(32, env.num_actions))
+    assert obs["critic"].shape[1] == 16 + 12 and torch.isfinite(obs["critic"]).all()
+
+
+def test_level_scale_turns_dr_down_on_easy_levels():
+    env = _env("domain_randomization.wind_accel=[0.5,0.5]", "domain_randomization.gust_accel=[0.4,0.4]",
+               "domain_randomization.level_scale=[0.0,0.0,0.5,1.0,1.0,1.0]", n=8, level=2)
+    assert torch.allclose(env.core.wind_acc[:, :2].norm(dim=-1), torch.full((8,), 0.25), atol=1e-5)
+    assert torch.allclose(env.core.gust_sigma, torch.full((8,), 0.2), atol=1e-6)
+    env = _env("domain_randomization.wind_accel=[0.5,0.5]", "domain_randomization.level_scale=[0.0,0.0,0.5,1.0]",
+               n=8, level=0)
+    assert float(env.core.wind_acc.abs().max()) == 0.0
+
+
+def test_curriculum_override_applies_on_every_level():
+    from rl_planner.core.config import level_params
+    cfg = cfg_cpu("curriculum.override={opening_w: [0.8, 0.85], yaw_deg: [-45, 45]}")
+    for lv in range(6):
+        p = level_params(cfg, lv)
+        assert list(p["opening_w"]) == [0.8, 0.85] and list(p["yaw_deg"]) == [-45, 45]
+    assert list(level_params(cfg, 0)["corner_noise_px"]) == [1.0, 2.0]          # other keys keep the level's
+
+
+def test_eval_config_reverts_dr_section_and_stress_knobs():
+    from rl_planner.core.config import config_for_policy
+    trained = cfg_cpu("domain_randomization.wind_accel=[0.0,0.8]", "domain_randomization.gust_accel=[0.0,0.4]",
+                      "perception.frame_drop_prob=0.2", "curriculum.override={opening_w: [0.8, 0.9]}").to_dict()
+    c = config_for_policy(trained)
+    d = cfg_cpu()
+    assert c["domain_randomization"] == d["domain_randomization"]
+    assert c["perception"]["frame_drop_prob"] == 0.0 and c["curriculum"]["override"] == {}
+    c = config_for_policy(trained, overrides=["domain_randomization.wind_accel=[0.6,1.0]"])
+    assert list(c["domain_randomization"]["wind_accel"]) == [0.6, 1.0]
+
+
+def test_recurrent_policy_export_matches_training_model_and_resets_per_env(tmp_path):
+    """scripts/train.py exports a GRU actor as (obs, state) -> (action, state); PolicyPlanner keeps one state
+    per env and zeroes it on reset, so batched evaluation equals running each env alone."""
+    import json
+
+    from rsl_rl.models import RNNModel
+    from tensordict import TensorDict
+
+    from rl_planner.planners.policy import PolicyPlanner
+    from rl_planner.scripts.train import export_recurrent_jit, recurrent_meta, runner_cfg
+    cfg = cfg_cpu("train.policy.actor_type=gru", "train.policy.rnn_hidden_dim=16")
+    rc = runner_cfg(cfg)
+    a = {k: v for k, v in rc["actor"].items() if k != "class_name"}
+    td = lambda x: TensorDict({"policy": x, "critic": torch.zeros(x.shape[0], 16)}, batch_size=[x.shape[0]])  # noqa: E731
+    m = RNNModel(td(torch.zeros(4, 41)), rc["obs_groups"], "actor", 3, **a)
+    export_recurrent_jit(m, str(tmp_path / "policy.pt"))
+    (tmp_path / "policy_meta.json").write_text(json.dumps({"config": cfg.to_dict(), "recurrent": recurrent_meta(m)}))
+    pp = PolicyPlanner(str(tmp_path))
+    g = torch.Generator().manual_seed(0)
+    xs = [torch.randn(4, 41, generator=g) for _ in range(5)]
+    m.eval()
+    with torch.no_grad():
+        ref = [m(td(x)) for x in xs]
+        out = [pp.act_obs(x) for x in xs]
+    assert all(torch.allclose(r, o, atol=1e-6) for r, o in zip(ref, out))
+    pp.reset(torch.tensor([1]))
+    assert torch.allclose(pp.act_obs(xs[0])[1], PolicyPlanner(str(tmp_path)).act_obs(xs[0])[1], atol=1e-6)

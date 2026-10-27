@@ -1,0 +1,5 @@
+# 매우 좁은 창문: 개구부 0.80~0.85 m (한쪽 여유 0.10~0.13 m)
+curriculum:
+  override:
+    opening_w: [0.80, 0.85]
+    opening_h: [0.80, 0.85]

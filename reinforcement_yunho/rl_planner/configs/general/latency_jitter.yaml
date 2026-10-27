@@ -1,0 +1,4 @@
+# 검출 지연 0.1~0.2 s 변동 (지연 1 + 변동 0~1 스텝, 옛 프레임은 버림)
+perception:
+  latency_steps: 1
+  latency_jitter_steps: 1

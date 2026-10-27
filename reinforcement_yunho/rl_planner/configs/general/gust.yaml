@@ -1,0 +1,4 @@
+# 돌풍: 수평 OU 과정 σ 0.3 m/s², 상관 시간 1 s (평균 바람은 기본 0~0.3)
+domain_randomization:
+  gust_accel: [0.3, 0.3]
+  gust_tau_s: 1.0

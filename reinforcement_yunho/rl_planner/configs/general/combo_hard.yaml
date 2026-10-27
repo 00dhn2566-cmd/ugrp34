@@ -1,0 +1,16 @@
+# 복합 (거침): 잡음 ×1.5, 지연 0.2~0.3 s, 프레임 25% 누락, 바람 0.4~0.7 + 돌풍 0.4, 장착 2°, 초점 2%,
+# VIO 자세 잡음 (3 cm, 0.5°) + 드리프트 0.02 m/√s, 속도 적분항 1.0
+perception:
+  noise_scale: 1.5
+  latency_steps: 2
+  latency_jitter_steps: 1
+  frame_drop_prob: 0.25
+  cam_rot_err_deg: 2.0
+  calib_fx_scale: 1.02
+  pose_noise_m: 0.03
+  pose_noise_deg: 0.5
+  pose_drift_m: 0.02
+domain_randomization:
+  wind_accel: [0.4, 0.7]
+  gust_accel: [0.4, 0.4]
+  ctrl_ki: [1.0, 1.0]

@@ -1,0 +1,5 @@
+# 먼 창문: 첫 창문 4~6 m, 간격 3.6~5.0 m
+curriculum:
+  override:
+    first_gap: [4.0, 6.0]
+    spacing: [3.6, 5.0]

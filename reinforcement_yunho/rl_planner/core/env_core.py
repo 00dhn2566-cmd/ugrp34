@@ -53,6 +53,7 @@ class WindowMissionCore:
         self.gen = torch.Generator(device=self.device)        # per-step camera noise
         self.reset_gen = torch.Generator(device=self.device)  # episode draws
         self.obs_gen = torch.Generator(device=self.device)    # observation noise
+        self.dist_gen = torch.Generator(device=self.device)   # per-step disturbances (gusts, frame drops, jitter, drift)
         self.reseed(seed)
 
         self.table = LevelTable(cfg, self.device)
@@ -94,13 +95,44 @@ class WindowMissionCore:
         self.dr_enabled = bool(cfg["domain_randomization"]["enabled"])
         # detection latency [decision steps] = fixed stress knob + per-episode DR. Captured frames wait
         # in a ring buffer and reach the triangulator / observations that many decisions later.
-        lat_dr = cfg["domain_randomization"].get("latency_steps") or (0, 0)
-        self.lat_fixed = int(cfg["perception"].get("latency_steps") or 0)
-        self.lat_dr = (int(lat_dr[0]), int(lat_dr[1])) if self.dr_enabled else (0, 0)
-        self.lat_max = self.lat_fixed + self.lat_dr[1]
+        dr, pc = cfg["domain_randomization"], cfg["perception"]
+        rng = lambda k, off: tuple(float(v) for v in (dr.get(k) or off)) if self.dr_enabled else tuple(off)  # noqa: E731
+        lat_dr = rng("latency_steps", (0, 0))
+        self.lat_fixed = int(pc.get("latency_steps") or 0)
+        self.lat_dr = (int(lat_dr[0]), int(lat_dr[1]))
         self.latency = torch.full((self.E,), self.lat_fixed + self.lat_dr[0], dtype=torch.long, device=self.device)
+        # latency jitter: each decision delivers the frame captured latency + U{0..jitter} decisions ago,
+        # unless a newer one already arrived (latest-frame semantics: late frames are dropped)
+        jit_dr = rng("latency_jitter_steps", (0, 0))
+        self.jit_fixed = int(pc.get("latency_jitter_steps") or 0)
+        self.jit_dr = (int(jit_dr[0]), int(jit_dr[1]))
+        self.jit_max = self.jit_fixed + self.jit_dr[1]
+        self.jitter = torch.full((self.E,), self.jit_fixed + self.jit_dr[0], dtype=torch.long, device=self.device)
+        self.lat_max = self.lat_fixed + self.lat_dr[1] + self.jit_max
         self._lat_buf: Optional[tuple] = None              # (lat_max+1, E, ...) per add_detections argument
         self._lat_ptr = 0                                  # slot of the newest captured frame
+        self._lat_cap = self._last_cap = None              # jitter: capture index per slot / last delivered
+        self._cap_n = 0
+        # general-robustness knobs (all off by default: no draws, bit-identical behaviour)
+        self.gust_dr, self.gust_tau = rng("gust_accel", (0.0, 0.0)), float(dr.get("gust_tau_s", 1.0))
+        self.gust_sigma = torch.zeros(self.E, device=self.device)
+        self.gust = torch.zeros(self.E, 3, device=self.device)
+        self.drop_fixed, self.drop_dr = float(pc.get("frame_drop_prob") or 0.0), rng("frame_drop_prob", (0.0, 0.0))
+        self.drop_p = torch.full((self.E,), self.drop_fixed, device=self.device)
+        self.drift_fixed, self.drift_dr = float(pc.get("pose_drift_m") or 0.0), rng("pose_drift_m", (0.0, 0.0))
+        self.drift_sigma = torch.full((self.E,), self.drift_fixed, device=self.device)
+        self.drift = torch.zeros(self.E, 3, device=self.device)
+        self.cam_fixed, self.cam_dr = float(pc.get("cam_rot_err_deg") or 0.0), rng("cam_rot_err_deg", (0.0, 0.0))
+        self.cam_err_rad = torch.zeros(self.E, device=self.device)
+        self.R_err = None                                  # (E,3,3) camera mounting error, when enabled
+        self.ctrl_dr = (rng("ctrl_kp_scale", (1.0, 1.0)), rng("ctrl_kv_scale", (1.0, 1.0)), rng("ctrl_ki", (0.0, 0.0)))
+        self._gust_on = self.gust_dr[1] > 0
+        self._drop_on = self.drop_fixed > 0 or self.drop_dr[1] > 0
+        self._drift_on = self.drift_fixed > 0 or self.drift_dr[1] > 0
+        self._cam_on = self.cam_fixed > 0 or self.cam_dr[1] > 0
+        self._ctrl_on = self.ctrl_dr != ((1.0, 1.0), (1.0, 1.0), (0.0, 0.0))
+        ls = dr.get("level_scale") if self.dr_enabled else None
+        self.level_scale = None if ls is None else torch.tensor([float(v) for v in ls], device=self.device)
         self.curriculum_enabled = bool(cfg["curriculum"]["enabled"])
         fl = cfg["curriculum"].get("fixed_level")       # yaml: train without curriculum (ablation)
         self.fixed_level: Optional[int] = None if fl is None else int(fl)   # evaluation pins a level
@@ -144,15 +176,18 @@ class WindowMissionCore:
         return self.mission.target_index()
 
     def reseed(self, seed: int) -> None:
-        """Seed the three RNG streams. ``gen`` draws the camera noise with a fixed shape every
+        """Seed the four RNG streams. ``gen`` draws the camera noise with a fixed shape every
         decision; ``reset_gen`` draws everything per episode (curriculum, scene, DR, noise
-        levels, first frame); ``obs_gen`` draws observation noise. How often envs reset or a
-        planner reads observations only advances its own stream, so after reseed + reset
-        every planner sees the same scenes and camera noise in each env's first episode."""
+        levels, first frame); ``obs_gen`` draws observation noise; ``dist_gen`` draws the per-step
+        disturbances (gusts, frame drops, latency jitter, VIO drift — fixed shapes, only when
+        enabled). How often envs reset or a planner reads observations only advances its own
+        stream, so after reseed + reset every planner sees the same scenes, camera noise and
+        disturbances in each env's first episode."""
         s = int(seed)
         self.gen.manual_seed(s)
         self.reset_gen.manual_seed(s + 1)
         self.obs_gen.manual_seed(s + 2)
+        self.dist_gen.manual_seed(s + 3)
 
     def _u(self, lohi, n) -> torch.Tensor:
         lo, hi = float(lohi[0]), float(lohi[1])
@@ -181,6 +216,9 @@ class WindowMissionCore:
 
         n = env_ids.numel()
         dr = self.cfg["domain_randomization"]
+        sc = None                                 # per-env DR strength (curriculum level_scale)
+        if self.dr_enabled and self.level_scale is not None:
+            sc = self.level_scale[self.level[env_ids].clamp_max(self.level_scale.numel() - 1)]
         if self.dr_enabled:
             ms = self._u(dr["mass_scale"], n)
             self.mass[env_ids] = self.mass0 * ms
@@ -190,11 +228,13 @@ class WindowMissionCore:
             self.drag[env_ids] = float(self.cfg["drone"]["linear_drag"]) * self._u(dr["drag_scale"], n)
             tc = self._u(dr["motor_time_constant"], n)
             mag = self._u(dr["wind_accel"], n)
+            if sc is not None:
+                mag = mag * sc
             ang = self._u((0.0, 2 * math.pi), n)
             self.wind_acc[env_ids] = torch.stack((mag * torch.cos(ang), mag * torch.sin(ang), torch.zeros_like(mag)), -1)
             p_bo = float(dr.get("blackout_prob", 0.0))
             if p_bo > 0:                          # camera outage DR (no draws when off)
-                has = torch.rand(n, generator=self.reset_gen, device=self.device) < p_bo
+                has = torch.rand(n, generator=self.reset_gen, device=self.device) < (p_bo if sc is None else p_bo * sc)
                 t0 = self._u(dr["blackout_start_s"], n)
                 t1 = t0 + self._u(dr["blackout_len_s"], n)
                 inf = torch.full_like(t0, float("inf"))
@@ -202,7 +242,10 @@ class WindowMissionCore:
             lo, hi = self.lat_dr
             if hi > lo:                           # detection latency DR (no draws when off)
                 k = (torch.rand(n, generator=self.reset_gen, device=self.device) * (hi - lo + 1)).long()
-                self.latency[env_ids] = self.lat_fixed + lo + k.clamp_max(hi - lo)
+                k = lo + k.clamp_max(hi - lo)
+                if sc is not None:
+                    k = (k.float() * sc).round().long()
+                self.latency[env_ids] = self.lat_fixed + k
         else:
             self.mass[env_ids] = self.mass0
             self.inertia[env_ids] = self.inertia0
@@ -210,6 +253,7 @@ class WindowMissionCore:
             self.drag[env_ids] = float(self.cfg["drone"]["linear_drag"])
             tc = torch.full((n,), float(self.cfg["drone"]["motor_time_constant"]), device=self.device)
             self.wind_acc[env_ids] = 0.0
+        self._robust_draws(env_ids, n, sc)
 
         lv = self.level[env_ids]
         sig = self.table.uniform("corner_noise_px", lv, self.reset_gen) * float(self.cfg["perception"].get("noise_scale", 1.0))
@@ -221,6 +265,41 @@ class WindowMissionCore:
         start = self.scene.start[env_ids].clone()
         yaw0 = torch.full((n,), float(self.cfg["controller"]["yaw_target"]), device=self.device)
         return start, m3.quat_from_yaw(yaw0)
+
+    def _robust_draws(self, env_ids: torch.Tensor, n: int, sc: Optional[torch.Tensor]) -> None:
+        """Per-episode draws of the general-robustness knobs (gusts, frame drops, latency jitter, VIO drift,
+        camera mounting error, controller mismatch). Each draws only when enabled, so with every knob
+        off the episode stream is untouched. ``sc``: per-env DR strength (domain_randomization.level_scale)."""
+        g = self.reset_gen
+        scale = (lambda x: x) if sc is None else (lambda x: x * sc)  # noqa: E731
+        self.gust[env_ids] = 0.0
+        self.drift[env_ids] = 0.0
+        if self._gust_on:                         # OU gusts, started from their stationary distribution
+            sig = scale(self._u(self.gust_dr, n))
+            self.gust_sigma[env_ids] = sig
+            self.gust[env_ids, :2] = torch.randn(n, 2, generator=g, device=self.device) * sig[:, None]
+        if self.drop_dr[1] > 0:
+            self.drop_p[env_ids] = self.drop_fixed + scale(self._u(self.drop_dr, n))
+        lo, hi = self.jit_dr
+        if hi > 0:
+            k = lo + (torch.rand(n, generator=g, device=self.device) * (hi - lo + 1)).long().clamp_max(hi - lo)
+            self.jitter[env_ids] = self.jit_fixed + (k if sc is None else (k.float() * sc).round().long())
+        if self.drift_dr[1] > 0:
+            self.drift_sigma[env_ids] = self.drift_fixed + scale(self._u(self.drift_dr, n))
+        if self._cam_on:                          # mounting error: random axis, magnitude fixed + DR
+            axis = m3.normalize(torch.randn(n, 3, generator=g, device=self.device))
+            mag = self.cam_fixed + (scale(self._u(self.cam_dr, n)) if self.cam_dr[1] > 0 else torch.zeros(n, device=self.device))
+            rad = torch.deg2rad(mag)
+            if self.R_err is None:
+                self.R_err = torch.eye(3, device=self.device).repeat(self.E, 1, 1)
+            self.R_err[env_ids] = m3.rot_axis_angle(axis, rad)
+            self.cam_err_rad[env_ids] = rad
+        if self._ctrl_on:                         # low-level controller mismatch (gains, velocity integral)
+            (kp_r, kv_r, ki_r) = self.ctrl_dr
+            kp, kv, ki = self._u(kp_r, n), self._u(kv_r, n), self._u(ki_r, n)
+            if sc is not None:
+                kp, kv, ki = 1.0 + (kp - 1.0) * sc, 1.0 + (kv - 1.0) * sc, ki * sc
+            self.controller.set_variation(env_ids, kp, kv, ki)
 
     def after_reset(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:
@@ -243,7 +322,8 @@ class WindowMissionCore:
         take = torch.zeros(self.E, dtype=torch.bool, device=self.device)
         take[env_ids] = True
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
-        frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.reset_gen)
+        frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.reset_gen,
+                                        ray_offset=self.drift if self._drift_on else None, R_err=self.R_err)
         det = self.perception.add_detections(*self._deliver(frame, env_ids))
         self.det = det if self.det is None else self._merge_det(det, env_ids)
         self.est = self.perception.estimate()
@@ -260,10 +340,14 @@ class WindowMissionCore:
         if self.lat_max == 0:
             return frame
         L = self.lat_max + 1
+        jit = self.jit_max > 0
         if self._lat_buf is None:
             self._lat_buf = tuple(t.unsqueeze(0).repeat(L, *([1] * t.dim())) for t in frame)
             self._lat_buf[3].zero_()                       # det: nothing in flight yet
             self._lat_buf[5].zero_()                       # take
+            if jit:
+                self._lat_cap = torch.full((L, self.E), -1, dtype=torch.long, device=self.device)
+                self._last_cap = torch.full((self.E,), -1, dtype=torch.long, device=self.device)
         if reset_ids is None:
             self._lat_ptr = (self._lat_ptr + 1) % L
             for b, t in zip(self._lat_buf, frame):
@@ -273,11 +357,32 @@ class WindowMissionCore:
             self._lat_buf[5][:, reset_ids] = False
             for b, t in zip(self._lat_buf, frame):
                 b[self._lat_ptr, reset_ids] = t[reset_ids]
-        slot = (self._lat_ptr - self.latency) % L
-        out = [b[slot, torch.arange(self.E, device=self.device)] for b in self._lat_buf]
+        delay = self.latency
+        if jit:
+            self._cap_n += 1
+            if reset_ids is None:
+                self._lat_cap[self._lat_ptr] = self._cap_n
+                # per-decision jitter (dist_gen, fixed shape); never drawn on resets, whose timing depends on the planner
+                u = torch.rand(self.E, generator=self.dist_gen, device=self.device)
+                delay = delay + (u * (self.jitter + 1).float()).long().clamp_max(self.jitter)
+            else:
+                self._lat_cap[self._lat_ptr, reset_ids] = self._cap_n
+                self._last_cap[reset_ids] = -1
+        slot = (self._lat_ptr - delay) % L
+        ar = torch.arange(self.E, device=self.device)
+        out = [b[slot, ar] for b in self._lat_buf]
+        m = None
         if reset_ids is not None:                          # the others already got this slot last decision
             m = torch.zeros(self.E, dtype=torch.bool, device=self.device)
             m[reset_ids] = True
+        if jit:                                            # deliver only frames newer than the last one delivered
+            cap = self._lat_cap[slot, ar]
+            fresh = cap > self._last_cap
+            if m is not None:
+                fresh = fresh & m
+            self._last_cap = torch.where(fresh, cap, self._last_cap)
+            m = fresh if m is None else m & fresh
+        if m is not None:
             out[3] = out[3] & m[:, None]
             out[5] = out[5] & m
         return tuple(out)
@@ -354,6 +459,10 @@ class WindowMissionCore:
     def pre_decision(self, actions: torch.Tensor) -> None:
         self.prev_actions = self.actions.clone()
         self.actions = actions.clamp(-1.0, 1.0)
+        if self._gust_on:                        # Ornstein-Uhlenbeck gusts, stationary std = gust_sigma
+            a = math.exp(-self.step_dt / self.gust_tau)
+            w = torch.randn(self.E, 2, generator=self.dist_gen, device=self.device)
+            self.gust[:, :2] = a * self.gust[:, :2] + (self.gust_sigma * math.sqrt(1.0 - a * a))[:, None] * w
         delta_h = self.actions[:, :3] * self.step_max
         wp = self.state.pos + m3.heading_to_world(delta_h, self.yaw)
         wp[:, 2] = wp[:, 2].clamp(*self.wp_z)
@@ -371,7 +480,8 @@ class WindowMissionCore:
         f_cmd, tau_cmd = self.controller.compute(s.pos, s.vel_w, s.quat, s.omega_b, self.wp, self.yaw_cmd,
                                                  self.mass, self.inertia_ctrl, self.thrust_max)
         f, tau = self.motor.step(f_cmd, tau_cmd, self.dt)
-        f_ext = self.mass[:, None] * self.wind_acc - self.drag[:, None] * s.vel_w
+        wind = self.wind_acc + self.gust if self._gust_on else self.wind_acc
+        f_ext = self.mass[:, None] * wind - self.drag[:, None] * s.vel_w
         return f, tau, f_ext
 
     def after_substep(self) -> None:
@@ -389,8 +499,14 @@ class WindowMissionCore:
         bo = self.cfg["perception"].get("blackout_s")
         if bo:                                   # stress knob: no camera frames in [t0, t1)
             take = take & ~((t >= float(bo[0])) & (t < float(bo[1])))
+        if self._drop_on:                        # random frame loss (dist_gen; no draws when off)
+            take = take & (torch.rand(self.E, generator=self.dist_gen, device=self.device) >= self.drop_p)
+        if self._drift_on:                       # VIO drift: random walk of the position rays are cast from
+            step = torch.randn(self.E, 3, generator=self.dist_gen, device=self.device)
+            self.drift = self.drift + step * (self.drift_sigma * math.sqrt(self.step_dt))[:, None]
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
-        frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.gen)
+        frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.gen,
+                                        ray_offset=self.drift if self._drift_on else None, R_err=self.R_err)
         self.perception.tick()
         self.det = self.perception.add_detections(*self._deliver(frame))
         self.est = self.perception.estimate()

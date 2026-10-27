@@ -74,9 +74,15 @@ def load_config(extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg
 
 
 # training-time augmentations: an evaluation falls back to default.yaml for these, so policies
-# trained with different augmentations are compared on the same distribution
-TRAIN_ONLY_KEYS = (("domain_randomization", "blackout_prob"), ("domain_randomization", "latency_steps"),
-                   ("curriculum", "fixed_level"))
+# trained with different augmentations are compared on the same distribution. The whole
+# domain_randomization section is one (a policy trained with wider DR is still evaluated on
+# default.yaml's ranges; stress yamls set their own), and so are the perception stress knobs.
+TRAIN_ONLY_SECTIONS = ("domain_randomization",)
+TRAIN_ONLY_KEYS = (("curriculum", "fixed_level"), ("curriculum", "override"),
+                   *(("perception", k) for k in ("noise_scale", "calib_fx_scale", "pose_noise_m", "pose_noise_deg",
+                                                 "blackout_s", "latency_steps", "latency_jitter_steps",
+                                                 "frame_drop_prob", "pose_drift_m", "cam_rot_err_deg",
+                                                 "outlier_prob")))
 # runtime-only sections (not part of the MDP): always today's default.yaml, never the training snapshot
 RUNTIME_SECTIONS = ("safety",)
 
@@ -89,11 +95,14 @@ def default_section(name: str) -> dict:
 def config_for_policy(trained: Mapping, extra: Iterable[str] = (), overrides: Iterable[str] = ()) -> Cfg:
     """Evaluation config for a trained policy: default.yaml <- the policy's training config (so the
     MDP matches; keys added to default.yaml later keep their defaults) <- extra yamls <- overrides.
-    TRAIN_ONLY_KEYS and RUNTIME_SECTIONS revert to default.yaml before the extras, which can still
-    set them."""
+    TRAIN_ONLY_SECTIONS / TRAIN_ONLY_KEYS and RUNTIME_SECTIONS revert to default.yaml before the extras,
+    which can still set them."""
     with open(DEFAULT_CONFIG, encoding="utf-8") as f:
         default = yaml.safe_load(f)
     cfg = deep_merge(default, trained)
+    for sec in TRAIN_ONLY_SECTIONS:
+        if sec in default:
+            cfg[sec] = copy.deepcopy(default[sec])
     for sec, key in TRAIN_ONLY_KEYS:
         if key in default.get(sec, {}):
             cfg[sec][key] = copy.deepcopy(default[sec][key])
@@ -140,9 +149,10 @@ def level_params(cfg: Mapping, level: int) -> dict:
         "miss_prob": perc["miss_prob"],
     }
     cur = cfg["curriculum"]
-    levels = cur["levels"] if cur.get("enabled", True) else []
-    if levels:
-        lv = levels[max(0, min(int(level), len(levels) - 1))]
+    levels = all_levels(cfg)
+    over = [levels[max(0, min(int(level), len(levels) - 1))]] if levels else []
+    over.append(cur.get("override") or {})          # evaluation stress: the same keys on top of every level
+    for lv in over:
         for k, v in lv.items():
             if k not in base:
                 raise KeyError(f"curriculum level key {k!r} is not a level parameter "
@@ -151,6 +161,14 @@ def level_params(cfg: Mapping, level: int) -> dict:
     return base
 
 
-def num_levels(cfg: Mapping) -> int:
+def all_levels(cfg: Mapping) -> list:
+    """curriculum.levels + curriculum.extra_levels (harder levels a training preset appends; evaluation at
+    the default levels is unchanged)."""
     cur = cfg["curriculum"]
-    return max(1, len(cur["levels"])) if cur.get("enabled", True) else 1
+    if not cur.get("enabled", True):
+        return []
+    return list(cur["levels"]) + list(cur.get("extra_levels") or [])
+
+
+def num_levels(cfg: Mapping) -> int:
+    return max(1, len(all_levels(cfg)))

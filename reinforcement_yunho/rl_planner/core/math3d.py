@@ -87,6 +87,16 @@ def rot_z(yaw: torch.Tensor) -> torch.Tensor:
                         torch.stack((z, z, o), -1)), -2)
 
 
+def rot_axis_angle(axis: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
+    """Rodrigues: unit axis (..., 3), angle (...) [rad] -> rotation matrix (..., 3, 3)."""
+    x, y, z = axis.unbind(-1)
+    c, s = torch.cos(angle), torch.sin(angle)
+    C = 1.0 - c
+    return torch.stack((torch.stack((c + x * x * C, x * y * C - z * s, x * z * C + y * s), -1),
+                        torch.stack((y * x * C + z * s, c + y * y * C, y * z * C - x * s), -1),
+                        torch.stack((z * x * C - y * s, z * y * C + x * s, c + z * z * C), -1)), -2)
+
+
 def world_to_heading(v_w: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
     """World vector -> yaw-only (gravity aligned) heading frame. v_w (..., 3), yaw (...)."""
     R = rot_z(yaw)

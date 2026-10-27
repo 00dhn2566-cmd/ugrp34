@@ -1,0 +1,4 @@
+# 검출 지연 0.3~0.5 s 변동 (지연 3 + 변동 0~2 스텝)
+perception:
+  latency_steps: 3
+  latency_jitter_steps: 2

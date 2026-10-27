@@ -164,6 +164,22 @@ def estimate_error(core):
     return torch.cat((err, rel_start), -1)
 
 
+@register("dr_params", 12, privileged=True)
+def dr_params(core):
+    """The episode's randomised conditions (domain randomisation + general-robustness knobs), so the
+    critic can tell a hard episode from a bad action: disturbance acceleration (wind + gust, heading
+    frame), mass and thrust-to-weight, detection latency and jitter, frame-drop probability, camera
+    outage now, controller gain scales and velocity integral, camera mounting error."""
+    wind = _heading(core, core.wind_acc + core.gust)[:, :2]
+    t = core.episode_time
+    outage = ((t >= core.blackout[:, 0]) & (t < core.blackout[:, 1])).float()
+    kp, kv, ki = core.controller.variation()
+    return torch.cat((wind, torch.stack((
+        core.mass / core.mass0 - 0.78, core.thrust_max / (core.mass * core.g) - 2.0,
+        core.latency.float() / 3.0, core.jitter.float() / 3.0, core.drop_p, outage,
+        kp - 1.0, kv - 1.0, ki, core.cam_err_rad * 10.0), -1)), -1)
+
+
 # ----------------------------------------------------------------------------- layout
 def build_spec(cfg: Mapping, group: str) -> List[Tuple[str, int, int]]:
     """[(name, start, end)] for an observation group."""

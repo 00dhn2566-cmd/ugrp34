@@ -1,0 +1,3 @@
+# 카메라 장착 오차 4°
+perception:
+  cam_rot_err_deg: 4.0

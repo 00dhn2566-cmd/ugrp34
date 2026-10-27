@@ -1,0 +1,5 @@
+# 강한 돌풍: 평균 바람 0.3~0.6 + 돌풍 σ 0.6 m/s²
+domain_randomization:
+  wind_accel: [0.3, 0.6]
+  gust_accel: [0.6, 0.6]
+  gust_tau_s: 1.0

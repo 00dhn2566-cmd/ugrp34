@@ -1,0 +1,3 @@
+# 비행 중 7 s 카메라 끊김 (3~10 s)
+perception:
+  blackout_s: [3.0, 10.0]

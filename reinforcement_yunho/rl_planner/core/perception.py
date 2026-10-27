@@ -134,15 +134,21 @@ class PerceptionSurrogate:
 
     @torch.no_grad()
     def capture(self, cam_c: torch.Tensor, R_WC: torch.Tensor, scene: SceneTensors,
-                take: torch.Tensor, gen: torch.Generator) -> tuple:
+                take: torch.Tensor, gen: torch.Generator, ray_offset: torch.Tensor | None = None,
+                R_err: torch.Tensor | None = None) -> tuple:
         """Synthetic detector output for one frame, not yet fed to the triangulator: the arguments
         of :meth:`add_detections` (ray camera centre, ray R_WC, corner pixels, det, conf, take), so
-        the frame can also be delivered later (detection latency, core/env_core.py)."""
+        the frame can also be delivered later (detection latency, core/env_core.py).
+
+        ``R_err`` (E,3,3): the real camera is mounted rotated by it (camera frame) — the image is
+        rendered from ``R_WC @ R_err`` while rays are cast with the nominal ``R_WC`` (extrinsic
+        calibration error). ``ray_offset`` (E,3): VIO position drift added to the ray origin."""
         p = self.cfg
         E, W = self.E, self.W
         P = scene.corners                                     # (E,W,4,3)
         rel = P - cam_c[:, None, None, :]
-        pc = torch.einsum("eji,ewkj->ewki", R_WC, rel)        # R_WC^T rel -> CV camera coords
+        R_img = R_WC if R_err is None else R_WC @ R_err
+        pc = torch.einsum("eji,ewkj->ewki", R_img, rel)       # R^T rel -> CV camera coords
         zc = pc[..., 2]
         front = (zc > 0.2).all(-1)
         zs = zc.clamp_min(1e-3)
@@ -179,10 +185,10 @@ class PerceptionSurrogate:
             noise = noise + out * torch.randn(E, W, C, 2, generator=gen, device=self.device) * sig * 6.0
         noisy_uv = uv + noise
         # rays are cast from the ESTIMATED camera pose (VIO error knobs; no draws when 0)
-        ray_c, ray_R = cam_c, R_WC
+        ray_c, ray_R = (cam_c, R_WC) if ray_offset is None else (cam_c + ray_offset, R_WC)
         pn, pd = float(p.get("pose_noise_m", 0.0)), float(p.get("pose_noise_deg", 0.0))
         if pn > 0:
-            ray_c = cam_c + torch.randn(E, 3, generator=gen, device=self.device) * pn
+            ray_c = ray_c + torch.randn(E, 3, generator=gen, device=self.device) * pn
         if pd > 0:
             yaw_err = torch.deg2rad(torch.randn(E, generator=gen, device=self.device) * pd)
             ray_R = m3.rot_z(yaw_err) @ R_WC

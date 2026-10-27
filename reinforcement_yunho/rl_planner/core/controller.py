@@ -28,6 +28,15 @@ class Controller:
         """-> (thrust (E,), torque_b (E,3)) commands before motor lag."""
         raise NotImplementedError
 
+    def set_variation(self, env_ids, kp_scale, kv_scale, ki) -> None:
+        """Per-env gain mismatch for DR / stress (domain_randomization.ctrl_*)."""
+        raise NotImplementedError(f"{type(self).__name__} does not support controller variation")
+
+    def variation(self):
+        """-> (kp scale, kv scale, ki) per env (E,) — the privileged critic term reads it."""
+        one = torch.ones(self.E, device=self.device)
+        return one, one, torch.zeros_like(one)
+
 
 class LeePositionController(Controller):
     def __init__(self, cfg: Mapping, num_envs: int, device):
@@ -41,11 +50,43 @@ class LeePositionController(Controller):
         self.tan_tilt = math.tan(math.radians(float(c["max_tilt_deg"])))
         self.g = float(cfg["sim"]["gravity"])
         self.torque_max = torch.tensor(cfg["drone"]["torque_max"], dtype=torch.float32, device=device)
+        self.dt = float(cfg["sim"]["physics_dt"])
+        self.i_max = float(c.get("i_max_acc", 1.5))
+        self.kp_s = self.kv_s = self.ki = self.i_acc = None   # per-env variation (set_variation), off by default
+
+    def set_variation(self, env_ids, kp_scale, kv_scale, ki) -> None:
+        """Per-env controller mismatch (domain randomisation / stress): position and velocity gains
+        scaled, plus a velocity-error integral (PX4-style velocity PID ``I``) with gain ``ki`` [1/s^2]."""
+        if self.kp_s is None:
+            z = lambda v: torch.full((self.E, 1), v, device=self.device)  # noqa: E731
+            self.kp_s, self.kv_s, self.ki = z(1.0), z(1.0), z(0.0)
+            self.i_acc = torch.zeros(self.E, 3, device=self.device)
+        self.kp_s[env_ids] = kp_scale[:, None]
+        self.kv_s[env_ids] = kv_scale[:, None]
+        self.ki[env_ids] = ki[:, None]
+        self.i_acc[env_ids] = 0.0
+
+    def variation(self):
+        """-> (kp scale, kv scale, ki) per env, (E,) each."""
+        if self.kp_s is None:
+            one = torch.ones(self.E, device=self.device)
+            return one, one, torch.zeros_like(one)
+        return self.kp_s[:, 0], self.kv_s[:, 0], self.ki[:, 0]
+
+    def reset(self, env_ids: torch.Tensor) -> None:
+        if self.i_acc is not None:
+            self.i_acc[env_ids] = 0.0
 
     def compute(self, pos, vel_w, quat, omega_b, target_pos, target_yaw, mass, inertia, thrust_max):
         e_p = target_pos - pos
-        v_cmd = torch.maximum(torch.minimum(self.kp_pos * e_p, self.v_max), -self.v_max)
-        a_cmd = self.kv * (v_cmd - vel_w)
+        if self.kp_s is None:
+            v_cmd = torch.maximum(torch.minimum(self.kp_pos * e_p, self.v_max), -self.v_max)
+            a_cmd = self.kv * (v_cmd - vel_w)
+        else:
+            v_cmd = torch.maximum(torch.minimum(self.kp_pos * self.kp_s * e_p, self.v_max), -self.v_max)
+            e_v = v_cmd - vel_w
+            self.i_acc = (self.i_acc + self.ki * e_v * self.dt).clamp(-self.i_max, self.i_max)
+            a_cmd = self.kv * self.kv_s * e_v + self.i_acc
         a_xy = a_cmd[:, :2]
         n_xy = a_xy.norm(dim=-1, keepdim=True)
         a_cmd = torch.cat((a_xy * (self.a_max / n_xy.clamp_min(1e-9)).clamp_max(1.0),

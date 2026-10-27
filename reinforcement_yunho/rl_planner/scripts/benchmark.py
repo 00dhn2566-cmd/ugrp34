@@ -1,0 +1,228 @@
+"""General-robustness benchmark: many conditions x many planners on the same seeded scenes (RESULTS.md §10).
+
+    # run (resumable: finished condition/planner pairs are skipped; --shard k/n splits the conditions)
+    python rl_planner/scripts/benchmark.py --out /data/runs/rl_planner/bench_general \\
+        --fsm-config /data/runs/rl_planner/fsm_tuning/best.yaml --planner fsm --planner fsm+safe \\
+        --policy main=<run>/export --planner main:rl --planner main:rl+safe
+    # table (success % per condition and tier; paired McNemar of --pair a,b)
+    python rl_planner/scripts/benchmark.py --table /data/runs/rl_planner/bench_general --pair gen:rl+safe,fsm+safe
+
+Conditions come from ``configs/general/suite.yaml`` (level + partial yamls + tier). Every planner of a
+condition runs on an env reseeded the same way, and the scene fingerprint must match across planners and
+policies (same scenes, camera noise and disturbances), so any two columns are a same-scene comparison.
+Per condition and planner: <out>/<condition>/<planner>.json (summary + meta) and .csv (episodes).
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+CONFIGS = os.path.join(os.path.dirname(HERE), "configs")
+SUITE = os.path.join(CONFIGS, "general", "suite.yaml")
+TIERS = (("nominal", "명목"), ("in_dr", "학습 DR 범위 안"), ("beyond", "학습 DR 범위 밖"),
+         ("held_out", "학습에 없던 교란"), ("compound", "복합"), ("safety", "안전 (성공 불가)"))
+
+
+def load_suite(path: str = SUITE) -> list:
+    import yaml
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)["conditions"]
+
+
+def _fname(planner: str) -> str:
+    return planner.replace(":", "__").replace("+", "_plus_")
+
+
+def run(a) -> int:
+    import torch
+
+    from rl_planner.core.config import config_for_policy, load_config
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    from rl_planner.eval_harness import per_env_rows, run_planner, save_json, scene_fingerprint, summarize, write_csv
+    from rl_planner.planners.fsm import FSMPlanner
+    from rl_planner.planners.policy import PolicyPlanner
+    from rl_planner.planners.safety import SafePlanner
+
+    policies = dict(p.split("=", 1) for p in a.policy)
+    planners = []
+    for spec in a.planner:                        # "fsm", "fsm+safe", "<policy>:rl", "<policy>:rl+safe"
+        pol, _, kind = spec.rpartition(":")
+        if pol and pol not in policies:
+            raise SystemExit(f"--planner {spec}: unknown policy {pol!r} (give --policy {pol}=<export dir>)")
+        planners.append((spec, pol or None, kind))
+    conds = load_suite(a.suite)
+    if a.only:
+        keep = set(a.only.split(","))
+        conds = [c for c in conds if c["name"] in keep]
+    k, n_sh = (int(v) for v in a.shard.split("/"))
+    conds = conds[k::n_sh]
+    device = a.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    trained = {}
+    for name, d in policies.items():
+        with open(os.path.join(d, "policy_meta.json"), encoding="utf-8") as f:
+            trained[name] = json.load(f)["config"]
+
+    for c in conds:
+        extra = [os.path.join(CONFIGS, p) for p in c.get("configs", [])]
+        cdir = os.path.join(a.out, c["name"])
+        todo = [p for p in planners if a.force or not os.path.exists(os.path.join(cdir, _fname(p[0]) + ".json"))]
+        if not todo:
+            continue
+        fp_ref = None
+        if os.path.isdir(cdir):                   # earlier planners of this condition fix the fingerprint
+            for fn in os.listdir(cdir):
+                if fn.endswith(".json"):
+                    with open(os.path.join(cdir, fn), encoding="utf-8") as f:
+                        fp_ref = json.load(f)["meta"]["scene_fingerprint"]
+                    break
+        groups = {}
+        for p in todo:
+            groups.setdefault(p[1], []).append(p)
+        for pol, items in groups.items():
+            fsm_extra = [a.fsm_config] if a.fsm_config else []
+            if pol is None:
+                cfg = load_config(fsm_extra + extra)
+            else:
+                cfg = config_for_policy(trained[pol], fsm_extra + extra)
+            cfg["seed"] = a.seed
+            cfg["sim"]["num_envs"] = a.num_scenes
+            env = TorchWindowEnv(cfg, num_envs=a.num_scenes, device=device, seed=a.seed)
+            for spec, _, kind in items:
+                env.core.fixed_level = int(c["level"])
+                env.core.reseed(a.seed)
+                env._reset_all()
+                fp = scene_fingerprint(env.core.scene)
+                fp_ref = fp_ref or fp
+                if fp != fp_ref:
+                    raise SystemExit(f"[bench] {c['name']}/{spec}: different scenes ({fp} != {fp_ref})")
+                base, _, guard = kind.partition("+")
+                if base == "fsm":
+                    planner = FSMPlanner(cfg, a.num_scenes, env.device)
+                elif base == "rl":
+                    planner = PolicyPlanner(policies[pol], device=env.device, cfg=cfg)
+                else:
+                    raise SystemExit(f"unknown planner kind {kind!r}")
+                if guard == "safe":
+                    planner = SafePlanner(planner, cfg, a.num_scenes, env.device, env.core.step_dt)
+                rec = run_planner(env, planner, record_k=0)
+                summ = summarize(rec)
+                meta = {"condition": c["name"], "level": int(c["level"]), "configs": c.get("configs", []),
+                        "tier": c.get("tier"), "planner": spec, "policy": policies.get(pol), "seed": a.seed,
+                        "num_scenes": a.num_scenes, "scene_fingerprint": fp}
+                os.makedirs(cdir, exist_ok=True)
+                write_csv(os.path.join(cdir, _fname(spec) + ".csv"), per_env_rows(spec, rec))
+                save_json(os.path.join(cdir, _fname(spec) + ".json"), {"meta": meta, "summary": summ})
+                print(f"[bench] {c['name']:22s} {spec:16s} success={summ['success_rate']:.3f} "
+                      f"crash={summ['crash_rate']:.3f} time={summ['mean_time_success_s']:.2f}", flush=True)
+            env.close()
+    return 0
+
+
+# ----------------------------------------------------------------------------- tables
+def _load(root: str, cond: str, planner: str):
+    p = os.path.join(root, cond, _fname(planner) + ".json")
+    if not os.path.exists(p):
+        return None, None
+    with open(p, encoding="utf-8") as f:
+        s = json.load(f)["summary"]
+    with open(os.path.join(root, cond, _fname(planner) + ".csv"), newline="") as f:
+        ok = {int(r["env"]): r["success"] == "True" for r in csv.DictReader(f)}
+    return s, ok
+
+
+def mcnemar_p(b: int, c: int) -> float:
+    n = b + c
+    if n == 0:
+        return 1.0
+    tail = sum(math.comb(n, i) for i in range(min(b, c) + 1)) / 2 ** n
+    return min(1.0, 2 * tail)
+
+
+def table(root: str, cols: list, labels: dict, pairs: list, suite: str = SUITE) -> str:
+    conds = load_suite(suite)
+    out = ["| 조건 | " + " | ".join(labels.get(c, c) for c in cols) + " |"
+           + "".join(f" {labels.get(x, x)} vs {labels.get(y, y)} |" for x, y in pairs),
+           "|---|" + "---|" * (len(cols) + len(pairs))]
+    agg = {}
+    for tier, tier_name in TIERS:
+        rows = [c for c in conds if c.get("tier") == tier]
+        if not rows:
+            continue
+        out.append(f"| **{tier_name}** |" + " |" * (len(cols) + len(pairs)))
+        for c in rows:
+            cells, oks = [], {}
+            for col in cols:
+                s, ok = _load(root, c["name"], col)
+                oks[col] = ok
+                if s is None:
+                    cells.append("–")
+                    continue
+                v = 100 * (s["crash_rate"] if tier == "safety" else s["success_rate"])
+                cells.append(f"{v:.1f}" + (" (충돌)" if tier == "safety" else ""))
+                if tier != "safety":
+                    agg.setdefault((tier, col), []).append(s["success_rate"])
+            pc = []
+            for x, y in pairs:
+                if oks.get(x) is None or oks.get(y) is None:
+                    pc.append("–")
+                    continue
+                b = sum(1 for e in oks[x] if oks[x][e] and not oks[y].get(e, False))
+                cc = sum(1 for e in oks[y] if oks[y][e] and not oks[x].get(e, False))
+                p = mcnemar_p(b, cc)
+                pc.append(f"{b} : {cc} ({'p<1e-4' if p < 1e-4 else f'p={p:.2g}'})")
+            out.append(f"| {c['label']} | " + " | ".join(cells) + " |" + "".join(f" {x} |" for x in pc))
+    out.append("")
+    out.append("| 묶음 평균 / 최저 성공률 | " + " | ".join(labels.get(c, c) for c in cols) + " |")
+    out.append("|---|" + "---|" * len(cols))
+    for tier, tier_name in TIERS:
+        if tier == "safety" or not any((tier, c) in agg for c in cols):
+            continue
+        cells = []
+        for col in cols:
+            v = agg.get((tier, col))
+            cells.append("–" if not v else f"{100 * sum(v) / len(v):.1f} / {100 * min(v):.1f}")
+        out.append(f"| {tier_name} | " + " | ".join(cells) + " |")
+    return "\n".join(out)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--out", help="result root (run mode)")
+    ap.add_argument("--suite", default=SUITE)
+    ap.add_argument("--policy", action="append", default=[], help="name=<export dir>")
+    ap.add_argument("--planner", action="append", default=[], help="fsm | fsm+safe | <policy>:rl | <policy>:rl+safe")
+    ap.add_argument("--fsm-config", default=None, help="tuned state-machine yaml (merged into every condition)")
+    ap.add_argument("--only", default=None, help="comma-separated condition names")
+    ap.add_argument("--shard", default="0/1", help="k/n: run every n-th condition starting at k")
+    ap.add_argument("--num-scenes", type=int, default=512)
+    ap.add_argument("--seed", type=int, default=12345)
+    ap.add_argument("--device", default=None)
+    ap.add_argument("--force", action="store_true", help="re-run finished condition/planner pairs")
+    ap.add_argument("--table", default=None, help="print the markdown table of a result root")
+    ap.add_argument("--cols", default=None, help="comma-separated planners (table columns)")
+    ap.add_argument("--labels", default=None, help="comma-separated planner=label")
+    ap.add_argument("--pair", action="append", default=[], help="a,b: same-scene comparison column")
+    a = ap.parse_args(argv)
+    if a.table:
+        cols = a.cols.split(",") if a.cols else sorted({fn[:-5].replace("__", ":").replace("_plus_", "+")
+                                                         for d in os.listdir(a.table) if os.path.isdir(os.path.join(a.table, d))
+                                                         for fn in os.listdir(os.path.join(a.table, d)) if fn.endswith(".json")})
+        labels = dict(x.split("=", 1) for x in a.labels.split(",")) if a.labels else {}
+        print(table(a.table, cols, labels, [tuple(p.split(",")) for p in a.pair], a.suite))
+        return 0
+    if not a.out or not a.planner:
+        raise SystemExit("--out and --planner are required (or --table <root>)")
+    return run(a)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+# 저수준 제어기 게인 ×0.5
+domain_randomization:
+  ctrl_kp_scale: [0.5, 0.5]
+  ctrl_kv_scale: [0.5, 0.5]

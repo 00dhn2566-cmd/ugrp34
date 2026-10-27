@@ -1,0 +1,3 @@
+# 카메라 프레임 30% 누락 (전송·처리 누락, 결정마다 독립)
+perception:
+  frame_drop_prob: 0.3

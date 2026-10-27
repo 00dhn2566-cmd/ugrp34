@@ -1,0 +1,3 @@
+# 카메라 5 Hz (결정 2번에 1장)
+perception:
+  frame_every: 2

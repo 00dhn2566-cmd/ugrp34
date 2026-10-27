@@ -1,0 +1,4 @@
+# 저수준 제어기가 더 무름: 위치·속도 게인 ×0.7 (팀 PID 등 다른 제어기)
+domain_randomization:
+  ctrl_kp_scale: [0.7, 0.7]
+  ctrl_kv_scale: [0.7, 0.7]

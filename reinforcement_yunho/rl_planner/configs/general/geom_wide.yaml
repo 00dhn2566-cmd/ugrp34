@@ -1,0 +1,6 @@
+# 창문 배치가 넓음: yaw ±40°, 좌우 ±1.0 m, 높이 0.7~1.9 m
+curriculum:
+  override:
+    yaw_deg: [-40.0, 40.0]
+    lateral: [-1.0, 1.0]
+    height: [0.7, 1.9]

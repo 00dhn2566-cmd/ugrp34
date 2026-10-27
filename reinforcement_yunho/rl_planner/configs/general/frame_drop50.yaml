@@ -1,0 +1,3 @@
+# 카메라 프레임 50% 누락
+perception:
+  frame_drop_prob: 0.5
