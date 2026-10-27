@@ -1,0 +1,33 @@
+# 둘러보기 정책을 기존 일자 코스(§10 평가 세트)에서 평가할 때 얹는 설정: course.yaml 이 바꾼 환경을 default.yaml 값으로 되돌린다.
+#   benchmark.py --suite configs/general/suite.yaml --fsm-config rl_planner/configs/scan/line.yaml ...
+# (일자 코스에서는 '가장 가까운 창문' 규칙이 코스 순서와 같다: 간격 2.6 m 이상, 다음다음 창문은 5.2 m 이상)
+sim:
+  episode_length_s: 45.0
+  episode_s_per_window: 0.0
+scene:
+  layout: line
+  max_windows: 5
+  first_gap: [2.4, 3.6]
+  spacing: [2.6, 3.6]
+  lateral: [-0.6, 0.6]
+  height: [0.8, 1.6]
+  yaw_deg: [0.0, 0.0]
+  turn_deg: [0.0, 0.0]
+  rise: [0.0, 0.0]
+  wall_half_extent: 1.0e6
+  bounds:
+    x_min: -2.0
+    y_abs: 4.0
+    z_min: 0.15
+    z_max: 3.5
+perception:
+  local_windows: 0
+curriculum:
+  levels:
+    - {n_windows: [1, 1], spacing: [3.2, 3.6], lateral: [-0.3, 0.3], corner_noise_px: [1.0, 2.0], miss_prob: [0.0, 0.0]}
+    - {n_windows: [1, 2], spacing: [3.0, 3.6], lateral: [-0.5, 0.5], corner_noise_px: [2.0, 4.0], miss_prob: [0.0, 0.05]}
+    - {n_windows: [2, 3], spacing: [2.8, 3.6], lateral: [-0.6, 0.6], corner_noise_px: [2.0, 6.0], miss_prob: [0.0, 0.05]}
+    - {n_windows: [3, 3], spacing: [2.6, 3.6], lateral: [-0.6, 0.6], corner_noise_px: [2.0, 9.0], miss_prob: [0.0, 0.1]}
+    - {n_windows: [3, 5], spacing: [2.6, 3.6], lateral: [-0.6, 0.6], corner_noise_px: [2.0, 9.0], miss_prob: [0.0, 0.1], yaw_deg: [-20.0, 20.0]}
+    - {n_windows: [3, 5], spacing: [2.6, 3.2], lateral: [-0.6, 0.6], corner_noise_px: [4.0, 12.0], miss_prob: [0.05, 0.2], yaw_deg: [-30.0, 30.0]}
+  extra_levels: []

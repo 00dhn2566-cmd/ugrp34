@@ -56,7 +56,7 @@ def run(a) -> int:
 
     policies = dict(p.split("=", 1) for p in a.policy)
     planners = []
-    for spec in a.planner:                        # "fsm", "fsm+safe", "<policy>:rl[+safe]", "<policy>:scan[+safe]"
+    for spec in a.planner:                        # "fsm[+safe]", "fsmscan[+safe]", "<policy>:rl[+safe]", "<policy>:scan[+safe]"
         pol, _, kind = spec.rpartition(":")
         if pol and pol not in policies:
             raise SystemExit(f"--planner {spec}: unknown policy {pol!r} (give --policy {pol}=<export dir>)")
@@ -111,6 +111,10 @@ def run(a) -> int:
                 base, _, guard = kind.partition("+")
                 if base == "fsm":
                     planner = FSMPlanner(cfg, a.num_scenes, env.device)
+                elif base == "fsmscan":               # state machine on the nearest-exit choice + scripted look-around (§12)
+                    from rl_planner.planners.scan import ScanSupervisor
+                    planner = ScanSupervisor(FSMPlanner(cfg, a.num_scenes, env.device, follow_selector=True), cfg,
+                                             a.num_scenes, env.device, env.core.step_dt)
                 elif base == "rl":
                     planner = PolicyPlanner(policies[pol], device=env.device, cfg=cfg)
                 elif base == "scan":                  # scripted look-around around a heading-fixed policy (§12)

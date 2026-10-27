@@ -35,6 +35,10 @@ def main(argv=None) -> int:
     ap.add_argument("--set", action="append", default=[], help="dotted override, e.g. safety.slow_after_s=2.0")
     ap.add_argument("--safe", action="store_true", help="run the planner behind the safety filter (planners/safety.py)")
     ap.add_argument("--title", default=None, help="label prefix in the frame header (default: planner name)")
+    ap.add_argument("--view2", choices=("auto", "side", "top"), default="auto",
+                    help="right-hand camera: fixed side view of the course, or top-down following the drone "
+                         "(auto: top for scene.layout scatter)")
+    ap.add_argument("--max-seconds", type=float, default=None, help="stop rendering after this much flight time")
     a = ap.parse_args(argv)
 
     from isaaclab.app import AppLauncher
@@ -100,8 +104,13 @@ def main(argv=None) -> int:
     mats = [material(f"/World/Looks/win{i}", c) for i, c in enumerate(COLORS)]
     wall_mat = material("/World/Looks/wall", (0.55, 0.55, 0.58), 0.35)
     floor_mat = material("/World/Looks/floor", (0.35, 0.33, 0.3))
-    box("/World/Viz/floor", origin + np.array([8.0, 0.0, -0.05]), np.eye(3), (30.0, 12.0, 0.1), floor_mat)
     sc = core.scene
+    n_win = int(sc.n_windows[0])
+    pts = torch.cat((sc.center[0, :n_win], core.state.pos[:1])).cpu().numpy()
+    lo, hi = pts[:, :2].min(0) - 4.0, pts[:, :2].max(0) + 4.0
+    box("/World/Viz/floor", origin + np.array([(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, -0.05]), np.eye(3),
+        (max(30.0, hi[0] - lo[0]), max(12.0, hi[1] - lo[1]), 0.1), floor_mat)
+    panel = float(cfg["scene"]["wall_half_extent"])    # finite wall panel around each window (look-around courses)
     bar = 0.06
     for w in range(int(sc.n_windows[0])):
         c = sc.center[0, w].cpu().numpy() + origin
@@ -113,8 +122,17 @@ def main(argv=None) -> int:
         box(f"/World/Viz/w{w}_bot", c - u * (hh + bar / 2), R, (2 * hw + 2 * bar, bar, bar), m)
         box(f"/World/Viz/w{w}_l", c - r * (hw + bar / 2), R, (bar, 2 * hh, bar), m)
         box(f"/World/Viz/w{w}_r", c + r * (hw + bar / 2), R, (bar, 2 * hh, bar), m)
+        th = 0.02
+        if panel < 100.0:                                # the referee's square panel of half-extent wall_half_extent
+            side = panel - hw - bar
+            for sgn, tag in ((-1, "wl"), (1, "wr")):
+                box(f"/World/Viz/w{w}_{tag}", c + r * sgn * (hw + bar + side / 2), R, (side, 2 * panel, th), wall_mat)
+            vs = panel - hh - bar
+            for sgn, tag in ((-1, "wb"), (1, "wt")):
+                box(f"/World/Viz/w{w}_{tag}", c + u * sgn * (hh + bar + vs / 2), R, (2 * (hw + bar), vs, th), wall_mat)
+            continue
         # wall = 4 panels around the opening, floor to z_top, +-wall_half sideways (visual only)
-        wall_half, z_top, th = 1.6, 2.8, 0.02
+        wall_half, z_top = 1.6, 2.8
         z_lo, z_hi = c[2] - hh - bar, c[2] + hh + bar
         side = wall_half - hw - bar
         base = np.array([c[0], c[1], 0.0])
@@ -157,14 +175,25 @@ def main(argv=None) -> int:
         xf.ClearXformOpOrder()
         xf.AddTransformOp().Set(M)
 
-    n_win = int(sc.n_windows[0])
     mid = sc.center[0, :n_win].mean(0).cpu().numpy() + origin
+    scatter = cfg["scene"].get("layout", "line") == "scatter"
+    top = a.view2 == "top" or (a.view2 == "auto" and scatter)
     frames = []
     for t in range(core.max_episode_length):
+        if a.max_seconds is not None and float(core.episode_time[0]) > a.max_seconds:
+            break
         p = core.state.pos[0].cpu().numpy() + origin
         marker_op.Set(Gf.Vec3d(*[float(v) for v in p]))
-        look_at(cams["chase"][0], p + np.array([-2.2, -0.9, 0.9]), p + np.array([1.5, 0.0, -0.1]))
-        look_at(cams["side"][0], mid + np.array([-6.0, -7.5, 4.0]), mid + np.array([1.0, 0.0, 0.5]))
+        if scatter:                                       # behind the drone along its heading (it turns)
+            yw = float(core.yaw[0])
+            f, l = np.array([np.cos(yw), np.sin(yw), 0.0]), np.array([-np.sin(yw), np.cos(yw), 0.0])
+            look_at(cams["chase"][0], p - 2.4 * f + 0.7 * l + np.array([0, 0, 1.0]), p + 1.5 * f + np.array([0, 0, -0.1]))
+        else:
+            look_at(cams["chase"][0], p + np.array([-2.2, -0.9, 0.9]), p + np.array([1.5, 0.0, -0.1]))
+        if top:                                           # top-down, following the drone
+            look_at(cams["side"][0], p + np.array([-0.01, -0.01, 9.0]), p + np.array([0.0, 0.0, 0.0]))
+        else:
+            look_at(cams["side"][0], mid + np.array([-6.0, -7.5, 4.0]), mid + np.array([1.0, 0.0, 0.5]))
         if t % a.every == 0:
             app.update()                      # sim.render() is a no-op here (is_rendering False); app.update renders without stepping physics
             imgs = []

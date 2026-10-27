@@ -27,6 +27,8 @@ perception:
   local_windows: 8
 observation:
   progress_cap: 1.0
+fsm:
+  z_clip: [0.5, 3.0]                 # 상태기계 기준선의 고도 제한 (창문이 2.6 m 까지 놓임)
 curriculum:
   levels:
     - {n_windows: [2, 3], turn_deg: [0.0, 20.0], rise: [-0.3, 0.3], yaw_deg: [-10.0, 10.0], corner_noise_px: [1.0, 3.0], miss_prob: [0.0, 0.0]}
