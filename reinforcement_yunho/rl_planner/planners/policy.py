@@ -80,8 +80,10 @@ class PolicyPlanner:
             self.check_compatible(cfg)
 
     def check_compatible(self, cfg: Mapping) -> None:
+        from ..core.config import deep_merge, default_section
         trained = self.meta["config"]
-        for name, a, b in (("action", trained["action"], cfg["action"]),
+        act = deep_merge(default_section("action"), trained["action"])   # keys added to default.yaml later keep their defaults
+        for name, a, b in (("action", act, cfg["action"]),
                            ("observation.policy", trained["observation"]["policy"], cfg["observation"]["policy"])):
             if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
                 raise ValueError(f"config.{name} differs from the one the policy was trained with — "

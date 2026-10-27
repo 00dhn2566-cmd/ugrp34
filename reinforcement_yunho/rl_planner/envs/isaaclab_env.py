@@ -85,7 +85,9 @@ def make_env_cfg(mission_cfg, num_envs: int | None = None, device: str = "cuda:0
     env_cfg.mission = mission_cfg.to_dict() if hasattr(mission_cfg, "to_dict") else dict(mission_cfg)
     s = env_cfg.mission["sim"]
     env_cfg.decimation = int(s["decimation"])
-    env_cfg.episode_length_s = float(s["episode_length_s"])
+    # the longest per-env limit (episode_s_per_window x max_windows on long courses); the core ends each env at its own
+    env_cfg.episode_length_s = float(s["episode_length_s"]) + float(s.get("episode_s_per_window") or 0.0) * int(
+        env_cfg.mission["scene"]["max_windows"])
     env_cfg.sim.dt = float(s["physics_dt"])
     env_cfg.sim.render_interval = env_cfg.decimation
     env_cfg.sim.device = device

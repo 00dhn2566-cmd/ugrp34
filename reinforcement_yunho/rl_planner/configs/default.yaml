@@ -17,6 +17,7 @@ sim:
   physics_dt: 0.01      # 물리·저수준 제어 주기 [s] (100 Hz)
   decimation: 10        # 정책 결정 1회당 물리 스텝 수 → 결정 주기 0.1 s (10 Hz)
   episode_length_s: 45.0
+  episode_s_per_window: 0.0          # 환경별 시간 제한 = episode_length_s + 이 값 × 창문 수 (긴 코스용, 0 = 고정 45 s)
   num_envs: 1024
   gravity: 9.81
 
@@ -56,12 +57,20 @@ controller:
 # 커리큘럼 레벨별로 범위를 넓힌다. 값이 [lo, hi] 면 균등 샘플.
 # ---------------------------------------------------------------------------
 scene:
+  layout: line                       # line: +x 로 늘어선 창문 (기존) | scatter: 통과할 때마다 좌우 turn_deg·위아래 rise 로 꺾이는 코스 (core/scene.py)
   max_windows: 5                     # 텐서 크기 (레벨별 실제 개수는 curriculum 에서)
   first_gap: [2.4, 3.6]              # 시작점 → 첫 창문 x 거리
   spacing: [2.6, 3.6]                # 창문 간 x 간격 (GATE_STANDOFF 2.5 m 이상)
   lateral: [-0.6, 0.6]               # 창문 중심 y
   height: [0.8, 1.6]                 # 창문 중심 z
-  yaw_deg: [0.0, 0.0]                # 창문 법선 yaw 기울기 (커리큘럼으로 확대)
+  yaw_deg: [0.0, 0.0]                # 창문 법선 yaw 기울기 (커리큘럼으로 확대). scatter: 다가오는 방향에 대한 법선 기울기
+  turn_deg: [0.0, 0.0]               # scatter: 지난 창문을 빠져나가는 방향 대비 다음 창문 방위 |각| [deg] (부호 임의)
+  rise: [0.0, 0.0]                   # scatter: 지난 창문 대비 다음 창문 높이 변화 [m] (height 범위로 자름)
+  nearest_margin: 1.25               # scatter: 다음 창문 = 방금 지난 창문(시작점)에서 가장 가까운 창문, 나머지는 모두 이 배수 넘게 멂
+  min_separation: 2.4                # scatter: 창문 중심 사이 최소 거리 [m] (벽판끼리 겹치지 않게)
+  path_clearance: 0.4                # scatter: 이웃 창문 사이 직선 경로(+ 지난 창문 뒤 1 m)가 다른 벽판에서 떨어지는 여유 [m]
+  place_tries: 32                    # scatter: 창문마다 후보 수 (조건을 만족하는 첫 후보; 없으면 코스가 거기서 끝남)
+  place_retries: 8                   # scatter: 요청한 개수보다 짧게 끝난 코스를 처음부터 다시 뽑는 횟수
   opening_w: [0.95, 1.10]            # 개구부 폭 (opening 1.0 + U(-0.05, 0.1))
   opening_h: [0.95, 1.10]
   wall_half_extent: 1.0e6            # 창문을 둘러싼 벽 반폭 [m]. 크게 = 무한 벽(돌아가기 불가)
@@ -71,6 +80,14 @@ scene:
     z_min: 0.15                      # 지면 충돌
     z_max: 3.5
   max_tilt_deg: 70.0                 # 전복 판정
+
+# ---------------------------------------------------------------------------
+# 목표 고르기 — 정책이 보는 '목표 창문'을 누가 정하나 (판정은 항상 scene 의 창문 순서)
+# ---------------------------------------------------------------------------
+mission:
+  selection: order                   # order: 코스 순서의 다음 창문 (색 = 순서, 기존) | nearest: 창문을 지날 때마다(시작 포함) 그 자리에서
+                                     # 가장 가까운, 아직 안 지난, 본 적 있는 창문 (core/selector.py). scene.layout scatter 가 이 규칙대로 순서를 만든다
+  nominal_size_m: 1.0                # nearest: 아직 삼각측량하지 못한 창문의 거리 = 초점거리 × 이 크기 / 가장 긴 변 [px] (단안 추정)
 
 # ---------------------------------------------------------------------------
 # 인지 대리 모델 — 검출기(길남 YOLO-pose) + 광선 삼각측량(recon_rays / 태민 노드)
@@ -96,6 +113,7 @@ perception:
   image_margin_px: 4.0               # 코너 4개가 모두 이 여백 안에 있어야 검출 (데이터셋 정책 A)
   max_range: 15.0
   max_incidence_deg: 70.0            # 창문 법선과 시선 사이 각
+  local_windows: 0                   # 0 = 모든 창문을 매 프레임 판정. K > 0: 카메라에 가장 가까운 K 개만 (가림 판정이 창문 수의 제곱 — 긴 코스용)
   min_parallax_deg: 2.0              # recon_rays MIN_PARALLAX_DEG 게이트
   ridge: 1.0e-6                      # 최소자승 정칙화
   ray_forget: 1.0                    # 삼각측량 망각 계수: 창문이 새로 검출될 때마다 옛 광선 가중치 × 이 값 (1 = recon_rays 와 같은 전체 최소자승)
@@ -120,6 +138,7 @@ action:
   type: waypoint_delta               # 현재 위치 + heading 프레임 변위
   step_max: [0.8, 0.6, 0.4]          # [-1,1] → 변위 [m] (x 전진, y 좌, z 위)
   yaw: false                         # true 면 4번째 행동 = yaw 변화율 (기본 yaw 고정)
+  yaw_rate_max_deg: 60.0             # 그때 행동 ±1 = 이 yaw 변화율 [deg/s]
 
 # ---------------------------------------------------------------------------
 # 관측 — 항목 순서가 곧 벡터 레이아웃. export 시 policy_meta.json 에 이름·구간 기록.
@@ -145,6 +164,7 @@ observation:
     gravity: 0.02
     ang_vel: 0.05
     altitude: 0.03
+  progress_cap: null                 # progress 의 '남은 창문 / 5' 상한 (null = 없음; 긴 코스는 1 — 학습 범위 밖 값을 막음)
 
 # ---------------------------------------------------------------------------
 # 보상 — 가중치만 여기서 바꾼다 (README §7.2). 항목 구현: core/rewards.py
@@ -252,6 +272,8 @@ safety:
   crumb_spacing_m: 0.1               # 경로 기록 간격 (최근 crumb_buffer 개, 64 × 0.1 m = 6.4 m)
   crumb_buffer: 64
   crumb_clear_m: 0.6                 # 통과한 창문 쪽으로는 이 거리 안까지 물러나지 않음 (기체 반경 0.3 m + 여유)
+  scan_hold: false                   # true: 정지 비행 중에도 계획기의 yaw 와 고도(정지 고도 ±scan_hold_dz)는 그대로 — 둘러보는 정책이 멈춰 서서도 계속 훑게 (false = yaw 0, 고도 고정)
+  scan_hold_dz: 1.0                  # [m]
 
 # ---------------------------------------------------------------------------
 # 학습 (rsl_rl PPO — Isaac Lab 기본 러너)

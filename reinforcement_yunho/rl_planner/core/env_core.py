@@ -34,6 +34,7 @@ from .observations import build_spec, compute_group, _gather
 from .perception import PerceptionSurrogate
 from .rewards import REGISTRY as REWARDS, active_terms
 from .scene import LevelTable, SceneTensors, sample_scene
+from .selector import TargetSelector
 
 
 class WindowMissionCore:
@@ -47,7 +48,10 @@ class WindowMissionCore:
         self.decimation = int(sim["decimation"])
         self.step_dt = self.dt * self.decimation
         self.episode_length_s = float(sim["episode_length_s"])
-        self.max_episode_length = int(math.ceil(self.episode_length_s / self.step_dt))
+        # per-env time limit = episode_length_s + episode_s_per_window x windows (long courses); rsl_rl sees the largest
+        self.per_window_s = float(sim.get("episode_s_per_window") or 0.0)
+        self.base_steps = int(math.ceil(self.episode_length_s / self.step_dt))
+        self.max_episode_length = self.base_steps + int(math.ceil(self.per_window_s * self.W / self.step_dt))
         self.g = float(sim["gravity"])
 
         self.gen = torch.Generator(device=self.device)        # per-step camera noise
@@ -62,12 +66,16 @@ class WindowMissionCore:
         self.level = torch.zeros(self.E, dtype=torch.long, device=self.device)
         self.perception = PerceptionSurrogate(cfg, self.E, self.W, self.device)
         self.mission = MissionTracker(cfg, self.E, self.W, self.device)
+        self.selector = TargetSelector(cfg, self.E, self.W, self.device)
+        self.ep_limit = torch.full((self.E,), self.base_steps, dtype=torch.long, device=self.device)
+        self.episode_len_s = torch.full((self.E,), self.episode_length_s, device=self.device)
         self.controller = make_controller(cfg, self.E, self.device)
         self.motor = MotorLag(self.E, self.device)
         self.state = RigidBodyState(self.E, self.device)
 
         a = cfg["action"]
         self.yaw_action = bool(a["yaw"])
+        self.yaw_rate = math.radians(float(a.get("yaw_rate_max_deg", 60.0)))   # [rad/s] at action +-1
         self.action_dim = 4 if self.yaw_action else 3
         self.step_max = torch.tensor(a["step_max"], dtype=torch.float32, device=self.device)
         self.actions = torch.zeros(self.E, self.action_dim, device=self.device)
@@ -216,6 +224,10 @@ class WindowMissionCore:
         self._log_episodes(env_ids)
         self._update_levels(env_ids)
         sample_scene(self.cfg, self.table, self.level, self.reset_gen, self.scene, env_ids)
+        if self.per_window_s > 0:
+            nw = self.scene.n_windows[env_ids]
+            self.ep_limit[env_ids] = self.base_steps + torch.ceil(nw.float() * (self.per_window_s / self.step_dt)).long()
+            self.episode_len_s[env_ids] = self.episode_length_s + self.per_window_s * nw.float()
 
         n = env_ids.numel()
         dr = self.cfg["domain_randomization"]
@@ -344,6 +356,8 @@ class WindowMissionCore:
         tgt = self.target_idx
         self.prev_dist[env_ids] = (_gather(self.scene.center, tgt) - s.pos).norm(dim=-1)[env_ids]
         self.prev_phi[env_ids] = -_gather(self.est_err, tgt).clamp_max(self.err_cap)[env_ids]
+        self.selector.reset(env_ids, s.pos[env_ids], self.yaw[env_ids], torch.zeros(env_ids.numel(), device=self.device))
+        self.selector.select(self.scene, self.mission, self.est, self.perception)
 
     def _estimates(self):
         """Triangulated estimates in the frame the planner works in. With VIO drift the rays were cast from
@@ -493,7 +507,7 @@ class WindowMissionCore:
         wp[:, 2] = wp[:, 2].clamp(*self.wp_z)
         self.wp = wp
         if self.yaw_action:
-            self.yaw_cmd = self.yaw_cmd + self.actions[:, 3] * (math.pi / 3) * self.step_dt
+            self.yaw_cmd = self.yaw_cmd + self.actions[:, 3] * self.yaw_rate * self.step_dt
         self.mission.begin_step()
         self._sub = 0
 
@@ -542,6 +556,12 @@ class WindowMissionCore:
         self.err_at_pass = torch.where(sp, self.est_err, self.err_at_pass)
         tgt = self.target_idx
         switched = sp.any(-1)
+        if bool(switched.any()):                 # the look-around restarts from the window just passed
+            w = sp.float().argmax(-1)
+            self.selector.on_pass(switched, s.pos, s.vel_w, self.yaw, self.episode_time,
+                                  _gather(self.est.center, w), _gather(self.est.valid, w))
+        self.selector.scan(self.yaw, s.pos[:, 2])
+        self.selector.select(self.scene, self.mission, self.est, self.perception)
         dist = (_gather(self.scene.center, tgt) - s.pos).norm(dim=-1)
         self.progress_delta = torch.where(switched, torch.zeros_like(dist), self.prev_dist - dist)
         self.prev_dist = dist
@@ -551,7 +571,7 @@ class WindowMissionCore:
 
     def compute_dones(self):
         terminated = self.mission.crashed | self.mission.success
-        time_out = self.episode_step >= self.max_episode_length
+        time_out = self.episode_step >= self.ep_limit
         return terminated, time_out & ~terminated
 
     def compute_rewards(self) -> torch.Tensor:

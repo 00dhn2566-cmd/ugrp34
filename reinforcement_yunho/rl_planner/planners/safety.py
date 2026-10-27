@@ -62,6 +62,8 @@ class SafetyFilter:
         self.retreat_max = float(s.get("retreat_max_m", 3.0))
         self.crumb_m = float(s.get("crumb_spacing_m", 0.1))
         self.crumb_clear = float(s.get("crumb_clear_m", 0.6))
+        self.scan_hold = bool(s.get("scan_hold", False))    # holds keep the planner's yaw and altitude (look-around)
+        self.scan_dz = float(s.get("scan_hold_dz", 1.0))
         ss = s.get("sigma_safe_m", 0.3)               # None: any valid target estimate counts as known
         self.sigma_safe = float("inf") if ss is None else float(ss)
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
@@ -131,12 +133,15 @@ class SafetyFilter:
             slowed = self.ever_seen & ~known & ~hold & (self.since_seen > self.slow_steps)
             wp = torch.where(slowed[:, None], pos + m3.heading_to_world(actions[:, :3] * step_max * scale[:, None], yaw), wp)
         wp = torch.where(hold[:, None], self.hold_pos, wp)
+        if self.scan_hold:                            # a hold may still climb / descend to look around
+            zc = torch.maximum(torch.minimum(wp_raw[:, 2], self.hold_pos[:, 2] + self.scan_dz), self.hold_pos[:, 2] - self.scan_dz)
+            wp = torch.cat((wp[:, :2], torch.where(hold, zc, wp[:, 2])[:, None]), -1)
         wp = torch.maximum(torch.minimum(wp, self.hi), self.lo)
         touched = hold | slowed | (wp != wp_raw).any(-1)   # untouched envs keep the planner's action bit-for-bit
         out = actions.clone()
         out[:, :3] = torch.where(touched[:, None], (m3.world_to_heading(wp - pos, yaw) / step_max).clamp(-1.0, 1.0),
                                  actions[:, :3])
-        if out.shape[1] > 3:
+        if out.shape[1] > 3 and not self.scan_hold:
             out[:, 3] = torch.where(hold, torch.zeros_like(out[:, 3]), out[:, 3])
         return out
 
@@ -183,8 +188,8 @@ class SafePlanner:
     @torch.no_grad()
     def act(self, core) -> torch.Tensor:
         a = self.base.act(core).clamp(-1.0, 1.0)
-        idx = core.target_idx[:, None]
-        target_valid = core.est.valid.gather(1, idx).squeeze(1)
+        idx = core.selector.sel[:, None]                 # the planner's target (mission.selection)
+        target_valid = core.est.valid.gather(1, idx).squeeze(1) & core.selector.has
         target_sigma = core.est.sigma.gather(1, idx).squeeze(1)
         return self.safety.filter(a, core.det.detected.any(-1), target_valid,
                                   core.state.pos, core.yaw, core.step_max, target_sigma, core.state.vel_w,

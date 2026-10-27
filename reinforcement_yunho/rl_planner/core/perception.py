@@ -76,6 +76,7 @@ class PerceptionSurrogate:
         self.cam_offset_b = torch.tensor(cam["offset_body"], dtype=torch.float32, device=device)
         self.R_BC = torch.tensor(m3.R_BODY_CV, dtype=torch.float32, device=device)
         self.cos_max_inc = math.cos(math.radians(float(p["max_incidence_deg"])))
+        self.local_k = int(p.get("local_windows") or 0)        # > 0: only the K windows nearest the camera per frame
         self.min_par = float(p["min_parallax_deg"])
         E, W = num_envs, max_windows
         z = lambda *s: torch.zeros(*s, device=device)  # noqa: E731
@@ -99,6 +100,8 @@ class PerceptionSurrogate:
         # latest detection (kept between frames, with age)
         self.last_bearing = z(E, W, 3)
         self.last_side = z(E, W)
+        self.last_side_max = z(E, W)            # longest projected side of the latest detection [px] (monocular range)
+        self.last_cam = z(E, W, 3)              # camera centre the latest detection was taken from (ray origin)
         self.last_conf = z(E, W)
         self.det_age = torch.full((E, W), 1.0e3, device=device)
         self.gap = torch.full((E, W), 1.0e3, device=device)   # decisions since detected (wall clock: see tick)
@@ -112,8 +115,8 @@ class PerceptionSurrogate:
     # ------------------------------------------------------------------ #
     def reset(self, env_ids: torch.Tensor, sigma_px=None, miss_prob=None) -> None:
         for t in (self.A, self.b, self.s, self.wsum, self.n_rays, self.n_eff, self.n_obs, self.d0, self.e1,
-                  self.e2, self.ext, self.ext_val, self.last_bearing, self.last_side, self.last_conf,
-                  self.last_corners_px):
+                  self.e2, self.ext, self.ext_val, self.last_bearing, self.last_side, self.last_side_max,
+                  self.last_cam, self.last_conf, self.last_corners_px):
             t[env_ids] = 0.0
         self.last_det[env_ids] = False
         self.det_age[env_ids] = 1.0e3
@@ -151,9 +154,31 @@ class PerceptionSurrogate:
 
         ``motion`` = (vel_w (E,3), omega_w (E,3), exposure_s (E,)): motion blur. Each corner streaks from where
         it was at the start of the exposure to where it is now; the detector localises a uniformly random
-        point of the streak (mean: mid-exposure) and its confidence falls as exp(-streak / blur_conf_px)."""
+        point of the streak (mean: mid-exposure) and its confidence falls as exp(-streak / blur_conf_px).
+
+        ``perception.local_windows`` K > 0 (long courses): only the K windows nearest the camera are rendered and
+        tested for occlusion (by each other) — the occlusion test is quadratic in the number of windows."""
+        W = self.W
+        if not 0 < self.local_k < W:
+            return self._capture(cam_c, R_WC, scene, take, gen, ray_offset, R_err, motion)
+        E, K = self.E, self.local_k
+        dist = (scene.center - cam_c[:, None, :]).norm(dim=-1).masked_fill(~scene.valid, float("inf"))
+        idx = dist.topk(K, dim=1, largest=False).indices                    # (E,K)
+
+        def g(t):
+            return t.gather(1, idx.view(E, K, *([1] * (t.dim() - 2))).expand(E, K, *t.shape[2:]))
+        sub = SceneTensors(n_windows=scene.n_windows, valid=g(scene.valid), center=g(scene.center),
+                           normal=g(scene.normal), right=g(scene.right), up=g(scene.up), size=g(scene.size),
+                           corners=g(scene.corners), color=g(scene.color), start=scene.start)
+        ray_c, ray_R, uv_k, det_k, conf_k, take = self._capture(cam_c, R_WC, sub, take, gen, ray_offset, R_err, motion)
+        uv = torch.zeros(E, W, C, 2, device=self.device).scatter_(1, idx[..., None, None].expand(E, K, C, 2), uv_k)
+        det = torch.zeros(E, W, dtype=torch.bool, device=self.device).scatter_(1, idx, det_k)
+        conf = torch.zeros(E, W, device=self.device).scatter_(1, idx, conf_k)
+        return ray_c, ray_R, uv, det, conf, take
+
+    def _capture(self, cam_c, R_WC, scene: SceneTensors, take, gen, ray_offset, R_err, motion) -> tuple:
         p = self.cfg
-        E, W = self.E, self.W
+        E, W = self.E, scene.center.shape[1]
         P = scene.corners                                     # (E,W,4,3)
         rel = P - cam_c[:, None, None, :]
         R_img = R_WC if R_err is None else R_WC @ R_err
@@ -239,6 +264,8 @@ class PerceptionSurrogate:
         detf = det.float()
         self.last_bearing = torch.where(det[..., None], bearing, self.last_bearing)
         self.last_side = torch.where(det, side_px, self.last_side)
+        self.last_side_max = torch.where(det, sides.max(dim=-1).values, self.last_side_max)
+        self.last_cam = torch.where(det[..., None], cam_c[:, None, :], self.last_cam)
         self.last_conf = torch.where(det, conf, self.last_conf)
         self.det_age = torch.where(det, torch.zeros_like(self.det_age), self.det_age + take[:, None].float())
         self.gap = torch.where(det, torch.zeros_like(self.gap), self.gap)

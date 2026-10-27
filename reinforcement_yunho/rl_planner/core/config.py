@@ -133,7 +133,7 @@ def level_params(cfg: Mapping, level: int) -> dict:
 
     Returns a flat dict of the per-level sampling ranges used by the scene sampler
     and the perception model (keys: n_windows, spacing, lateral, height, yaw_deg,
-    opening_w, opening_h, first_gap, corner_noise_px, miss_prob).
+    turn_deg, rise, opening_w, opening_h, first_gap, corner_noise_px, miss_prob).
     """
     scene, perc = cfg["scene"], cfg["perception"]
     base = {
@@ -143,6 +143,8 @@ def level_params(cfg: Mapping, level: int) -> dict:
         "lateral": scene["lateral"],
         "height": scene["height"],
         "yaw_deg": scene["yaw_deg"],
+        "turn_deg": scene.get("turn_deg", [0.0, 0.0]),
+        "rise": scene.get("rise", [0.0, 0.0]),
         "opening_w": scene["opening_w"],
         "opening_h": scene["opening_h"],
         "corner_noise_px": perc["corner_noise_px"],

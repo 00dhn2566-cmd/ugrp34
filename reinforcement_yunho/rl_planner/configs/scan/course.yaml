@@ -1,0 +1,39 @@
+# 둘러보기 코스 환경 (RESULTS.md §12) — 창문을 지날 때마다 다음 창문이 좌우 최대 90°, 위아래로 크게 꺾여 놓인다.
+# 판단 기준: 창문을 통과한 직후, 아직 안 지난 창문 중 방금 지난 창문에서 가장 가까운 창문으로 간다 (시작할 때는 시작점에서).
+# 정책은 그 규칙으로 고른 창문만 본다 (mission.selection: nearest, core/selector.py). 다른 창문을 먼저 지나면 실패(순서 위반).
+# 벽은 창문을 둘러싼 1.6 m 판 (돌아갈 수 있음), 경기장은 폭 24 m 복도. 레벨 L0~L5 = 꺾임·높이 변화·잡음이 커짐.
+# 학습되지 않은 정책(기존 정책·상태기계)도 이 파일로 같은 코스에서 평가한다. 창문 50 개 = configs/scan/long50.yaml 을 더 얹음.
+sim:
+  episode_length_s: 10.0
+  episode_s_per_window: 8.0          # 시간 제한 = 10 s + 8 s × 창문 수 (50 개 = 410 s)
+scene:
+  layout: scatter
+  max_windows: 10
+  first_gap: [2.5, 4.0]
+  spacing: [2.5, 4.5]
+  height: [0.8, 2.6]
+  turn_deg: [0.0, 90.0]
+  rise: [-1.2, 1.2]
+  yaw_deg: [-30.0, 30.0]
+  wall_half_extent: 0.8
+  bounds:
+    x_min: -2.0
+    y_abs: 12.0
+    z_min: 0.15
+    z_max: 3.5
+mission:
+  selection: nearest
+perception:
+  local_windows: 8
+observation:
+  progress_cap: 1.0
+curriculum:
+  levels:
+    - {n_windows: [2, 3], turn_deg: [0.0, 20.0], rise: [-0.3, 0.3], yaw_deg: [-10.0, 10.0], corner_noise_px: [1.0, 3.0], miss_prob: [0.0, 0.0]}
+    - {n_windows: [3, 4], turn_deg: [0.0, 40.0], rise: [-0.5, 0.5], yaw_deg: [-15.0, 15.0], corner_noise_px: [2.0, 5.0], miss_prob: [0.0, 0.05]}
+    - {n_windows: [3, 5], turn_deg: [0.0, 60.0], rise: [-0.7, 0.7], yaw_deg: [-20.0, 20.0], corner_noise_px: [2.0, 8.0], miss_prob: [0.0, 0.1]}
+    - {n_windows: [4, 6], turn_deg: [0.0, 75.0], rise: [-0.9, 0.9], yaw_deg: [-25.0, 25.0], corner_noise_px: [2.0, 9.0], miss_prob: [0.0, 0.1]}
+    - {n_windows: [4, 8], turn_deg: [0.0, 90.0], rise: [-1.2, 1.2], yaw_deg: [-30.0, 30.0], corner_noise_px: [2.0, 9.0], miss_prob: [0.0, 0.1]}
+    # L5 스트레스: 실측보다 거친 검출 (σ 최대 12 px, 누락 20%)
+    - {n_windows: [5, 10], turn_deg: [0.0, 90.0], rise: [-1.2, 1.2], yaw_deg: [-30.0, 30.0], corner_noise_px: [4.0, 12.0], miss_prob: [0.05, 0.2]}
+  extra_levels: []

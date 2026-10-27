@@ -94,20 +94,23 @@ def _estimate_block(core, idx, exists):
     return valid, v, rel * v, nrm * v, size * v, sig[:, None] * v, par[:, None] * v, nob[:, None]
 
 
+# The "target" of the policy terms is the planner's choice (core.selector, mission.selection): the next window in
+# course order (default) or the nearest-exit rule. With nothing chosen yet (nearest, nothing seen) the target terms
+# read "never seen". Rewards and critic terms always use the referee's target (core.target_idx).
 @register("target_estimate", 12)
 def target_estimate(core):
-    exists = torch.ones(core.E, dtype=torch.bool, device=core.device)
-    _, v, rel, nrm, size, sig, par, nob = _estimate_block(core, core.target_idx, exists)
+    _, v, rel, nrm, size, sig, par, nob = _estimate_block(core, core.selector.sel, core.selector.has)
     return torch.cat((v, rel, nrm, size, sig, par, nob), -1)
 
 
 @register("target_detection", 6)
 def target_detection(core):
     pr = core.perception
-    idx = core.target_idx
-    det = _gather(core.det.detected, idx).float()[:, None]
-    age = (_gather(pr.det_age, idx) / 20.0).clamp_max(1.0)[:, None]
-    seen = (_gather(pr.det_age, idx) < 1e3).float()[:, None]
+    idx, has = core.selector.sel, core.selector.has
+    hf = has.float()[:, None]
+    det = _gather(core.det.detected, idx).float()[:, None] * hf
+    age = torch.where(has[:, None], (_gather(pr.det_age, idx) / 20.0).clamp_max(1.0)[:, None], torch.ones_like(hf))
+    seen = (_gather(pr.det_age, idx) < 1e3).float()[:, None] * hf
     bearing = _heading(core, _gather(pr.last_bearing, idx)) * seen
     side = (_gather(pr.last_side, idx) / 200.0).clamp_max(2.0)[:, None] * seen
     return torch.cat((det, age, bearing, side), -1)
@@ -122,22 +125,35 @@ def detection_gap(core):
     frame-counted age in target_detection it keeps growing while the camera delivers no frames, so a
     memoryless policy can tell a long outage from a missed detection."""
     g = core.perception.gap * core.step_dt / GAP_SCALE
-    return torch.stack((g.amin(dim=1), _gather(g, core.target_idx)), -1).clamp_max(1.0)
+    tg = torch.where(core.selector.has, _gather(g, core.selector.sel), torch.ones_like(g[:, 0]))
+    return torch.stack((g.amin(dim=1), tg), -1).clamp_max(1.0)
 
 
 @register("next_estimate", 7)
 def next_estimate(core):
-    nxt = (core.target_idx + 1).clamp_max(core.W - 1)
-    exists = (core.target_idx + 1) < core.scene.n_windows
-    _, v, rel, nrm, *_ = _estimate_block(core, nxt, exists)
+    _, v, rel, nrm, *_ = _estimate_block(core, core.selector.nxt, core.selector.has_nxt)
     return torch.cat((v, rel, nrm), -1)
 
 
 @register("progress", 3)
 def progress(core):
+    """Fraction passed, windows left / 5 (capped at observation.progress_cap when set — long courses) and the
+    fraction of the env's time limit used."""
     n = core.scene.n_windows.float()
     passed = core.mission.target.float()
-    return torch.stack((passed / n, (n - passed) / 5.0, core.episode_time / core.episode_length_s), -1)
+    left = (n - passed) / 5.0
+    cap = core.cfg["observation"].get("progress_cap")
+    if cap is not None:
+        left = left.clamp_max(float(cap))
+    return torch.stack((passed / n, left, core.episode_time / core.episode_len_s), -1)
+
+
+@register("search_state", 10)
+def search_state(core):
+    """How far the drone has looked around since it passed the last window (core/selector.py): heading off the
+    direction it left that window in (sin, cos) and the extremes reached (unwrapped, / pi), altitude off the pass
+    altitude and its extremes (/ 2 m), seconds since the pass / 10, candidate windows known / 3, target chosen."""
+    return core.selector.search_features(core.state.pos[:, 2], core.episode_time)
 
 
 # ----------------------------------------------------------------------------- critic

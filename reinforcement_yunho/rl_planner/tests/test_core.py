@@ -683,3 +683,177 @@ def test_motion_blur_streaks_corners_along_the_image_motion():
     assert bool((c1[seen] < c0[seen]).all())
     off = TorchWindowEnv(cfg_cpu("sim.num_envs=8"), num_envs=8, device="cpu", seed=4).core
     assert off._motion() is None
+
+
+# ----------------------------------------------------------------------------- look-around courses (RESULTS §12)
+COURSE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "scan", "course.yaml")
+
+
+def test_scatter_course_orders_windows_by_the_nearest_exit_rule():
+    """scene.layout scatter: from the start and from every window the next one is the nearest window not passed
+    yet, every other one at least nearest_margin farther; centres keep min_separation and stay in the arena."""
+    from rl_planner.core.scene import LevelTable, SceneTensors, sample_scene
+    cfg = load_config([COURSE], ["device=cpu", "scene.max_windows=20", "curriculum.override={n_windows: [20, 20]}"])
+    E, W = 48, 20
+    sc = SceneTensors.empty(E, W, "cpu")
+    sample_scene(cfg, LevelTable(cfg, "cpu"), torch.full((E,), 4, dtype=torch.long), torch.Generator().manual_seed(5),
+                 sc, torch.arange(E))
+    assert bool((sc.n_windows == W).all())
+    for e in range(E):
+        c = sc.center[e]
+        refs = torch.cat((sc.start[e:e + 1], c[:-1]))
+        for j in range(W - 1):
+            d = (c[j:] - refs[j]).norm(dim=-1)
+            assert float(d[1:].min()) >= 1.25 * float(d[0]) - 1e-4
+        dd = (c[:, None] - c[None]).norm(dim=-1) + torch.eye(W) * 99
+        assert float(dd.min()) >= 2.4 - 1e-4
+    b = cfg["scene"]["bounds"]
+    assert float(sc.center[..., 0].min()) >= b["x_min"] and float(sc.center[..., 1].abs().max()) <= b["y_abs"]
+    # the course really turns: next windows far off the direction the drone leaves a window in
+    legs = sc.center[:, 1:] - sc.center[:, :-1]
+    ex = -sc.normal[:, :-1]
+    cosang = (ex[..., :2] * legs[..., :2]).sum(-1) / legs[..., :2].norm(dim=-1)
+    assert float((cosang < math.cos(math.radians(45))).float().mean()) > 0.3
+
+
+def test_line_layout_and_order_selection_are_untouched_by_the_new_keys():
+    """Default config: per-env time limit = the old fixed one, the selector mirrors the course order."""
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    cfg = cfg_cpu()
+    env = TorchWindowEnv(cfg, num_envs=8, device="cpu")
+    core = env.core
+    assert bool((core.ep_limit == core.max_episode_length).all())
+    for _ in range(5):
+        env.step(torch.zeros(8, env.num_actions))
+    assert torch.equal(core.selector.sel, core.target_idx) and bool(core.selector.has.all())
+
+
+def test_nearest_selection_uses_only_seen_windows_measured_from_the_last_pass():
+    from rl_planner.core.selector import TargetSelector
+    cfg = cfg_cpu("mission.selection=nearest")
+    lay = [[{"center": (3.0, 0.0, 1.0), "ow": 1.0, "oh": 1.0}, {"center": (6.0, 3.0, 1.0), "ow": 1.0, "oh": 1.0},
+            {"center": (7.0, -1.0, 1.0), "ow": 1.0, "oh": 1.0}]]
+    sc = scene_from_layout(lay, 3, (0.0, 0.0, 1.0), "cpu")
+    pr = PerceptionSurrogate(cfg, 1, 3, "cpu")
+    mission = MissionTracker(cfg, 1, 3, "cpu")
+    mission.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), sc)
+    sel = TargetSelector(cfg, 1, 3, "cpu")
+    sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.zeros(1))
+    est = pr.estimate()
+    sel.select(sc, mission, est, pr)
+    assert not bool(sel.has[0])                                   # nothing seen yet: no target
+    # windows 1 and 2 seen (monocular guesses from their true range); 0 not yet
+    for w in (1, 2):
+        cam = torch.tensor([0.0, 0.0, 1.0])
+        d = sc.center[0, w] - cam
+        pr.last_cam[0, w] = cam
+        pr.last_bearing[0, w] = d / d.norm()
+        pr.last_side_max[0, w] = 763.0 * 1.0 / float(d.norm())
+        pr.det_age[0, w] = 0.0
+    sel.select(sc, mission, est, pr)
+    assert bool(sel.has[0]) and int(sel.sel[0]) == 1 and int(sel.nxt[0]) == 2   # |w1| 6.7 m < |w2| 7.1 m
+    # after passing window 1 from (6, 3): window 2 is the nearest not passed
+    mission.passed[0, 1] = True
+    sel.on_pass(torch.tensor([True]), torch.tensor([[6.0, 3.0, 1.0]]), torch.tensor([[1.0, 0.0, 0.0]]), torch.zeros(1),
+                torch.ones(1), torch.zeros(1, 3), torch.tensor([False]))
+    sel.select(sc, mission, est, pr)
+    assert int(sel.sel[0]) == 2 and not bool(sel.has_nxt[0])
+
+
+def test_local_window_subset_detects_the_same_windows():
+    """perception.local_windows K: the K windows nearest the camera get the same detections as the full model."""
+    cfg_full = cfg_cpu("scene.wall_half_extent=0.8")
+    cfg_k = cfg_cpu("scene.wall_half_extent=0.8", "perception.local_windows=3")
+    lay = [[{"center": (2.5 + 2.5 * i, 0.4 * (i % 3) - 0.4, 1.0), "ow": 1.0, "oh": 1.0} for i in range(6)]]
+    sc = scene_from_layout(lay, 6, (0.0, 0.0, 1.0), "cpu")
+    outs = []
+    for cfg in (cfg_full, cfg_k):
+        pr = PerceptionSurrogate(cfg, 1, 6, "cpu")
+        pr.reset(torch.arange(1), sigma_px=torch.zeros(1), miss_prob=torch.zeros(1))
+        cam, R = pr.camera_pose(torch.tensor([[0.0, 0.0, 1.0]]), m3.quat_from_yaw(torch.zeros(1)))
+        outs.append(pr.capture(cam, R, sc, torch.ones(1, dtype=torch.bool), torch.Generator().manual_seed(0))[3])
+    full, sub = outs
+    near3 = torch.zeros(6, dtype=torch.bool)
+    near3[:3] = True
+    assert bool(full[0, :3].any())
+    assert torch.equal(sub[0, near3], full[0, near3]) and not bool(sub[0, ~near3].any())
+
+
+def test_expand_obs_adds_a_zero_yaw_action():
+    """scripts/expand_obs.py --yaw: the 4th output starts at zero, the first three are unchanged."""
+    from rl_planner.scripts.expand_obs import expand_checkpoint, grow_actions, layouts
+    old = cfg_cpu().to_dict()
+    new = cfg_cpu("action.yaw=true").to_dict()
+    g = torch.Generator().manual_seed(1)
+    D, H = layouts(old)[0][-1][2], 16
+    sd = {"obs_normalizer._mean": torch.randn(1, D, generator=g), "obs_normalizer._std": torch.rand(1, D, generator=g) + 0.5,
+          "obs_normalizer._var": torch.rand(1, D, generator=g) + 0.5, "distribution.std_param": torch.ones(3),
+          "mlp.0.weight": torch.randn(H, D, generator=g), "mlp.0.bias": torch.randn(H, generator=g),
+          "mlp.2.weight": torch.randn(3, H, generator=g), "mlp.2.bias": torch.randn(3, generator=g)}
+    Dc = layouts(old)[1][-1][2]
+    crit = {"obs_normalizer._mean": torch.zeros(1, Dc), "obs_normalizer._std": torch.ones(1, Dc),
+            "obs_normalizer._var": torch.ones(1, Dc), "mlp.0.weight": torch.randn(24, Dc, generator=g)}
+    ck = {"actor_state_dict": sd, "critic_state_dict": crit, "iter": 1, "infos": None}
+    out = grow_actions(expand_checkpoint(ck, old, new), 4, 0.5)
+    lo, ln = layouts(old)[0], layouts(new)[0]
+    x_old = torch.randn(5, D, generator=g)
+    x_new = torch.randn(5, ln[-1][2], generator=g)
+    src = {k: (s, e) for k, s, e in lo}
+    for k, s, e in ln:
+        a, b = src[k]
+        x_new[:, s:s + b - a] = x_old[:, a:b]
+
+    def f(sd, x):
+        h = torch.nn.functional.elu(((x - sd["obs_normalizer._mean"]) / (sd["obs_normalizer._std"] + 1e-2)) @ sd["mlp.0.weight"].T
+                                    + sd["mlp.0.bias"])
+        return h @ sd["mlp.2.weight"].T + sd["mlp.2.bias"]
+    y_old, y_new = f(sd, x_old), f(out["actor_state_dict"], x_new)
+    assert torch.allclose(y_old, y_new[:, :3], atol=1e-5) and float(y_new[:, 3].abs().max()) == 0.0
+    assert out["actor_state_dict"]["distribution.std_param"].tolist() == [1.0, 1.0, 1.0, 0.5]
+
+
+def test_yaw_action_turns_the_drone_and_the_look_around_bookkeeping_follows():
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    cfg = load_config([COURSE], ["device=cpu", "action.yaw=true", "action.yaw_rate_max_deg=90.0",
+                                 "domain_randomization.enabled=false"])
+    env = TorchWindowEnv(cfg, num_envs=4, device="cpu", seed=2)
+    core = env.core
+    core.fixed_level = 0
+    env._reset_all()
+    a = torch.zeros(4, 4)
+    a[:, 3] = 1.0                                                 # full yaw rate left for 1.5 s
+    for _ in range(15):
+        env.step(a)
+    turned = math.degrees(float(core.selector.psi[0]))
+    assert 100.0 < turned < 140.0                                 # 135 deg commanded, controller lag
+    assert abs(math.degrees(float(core.selector.psi_hi[0])) - turned) < 1e-3 and float(core.selector.psi_lo[0]) <= 0.0
+    assert bool((core.ep_limit == core.base_steps + torch.ceil(core.scene.n_windows * 80.0 - 1e-6).long()).all())
+
+
+def test_scan_supervisor_sweeps_finds_a_window_to_the_side_and_faces_it():
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    from rl_planner.planners.scan import ScanSupervisor
+
+    class Hover:
+        def reset(self, ids):
+            pass
+
+        def act(self, core):
+            return torch.zeros(core.E, 3)
+    cfg = load_config([COURSE], ["device=cpu", "domain_randomization.enabled=false"])
+    env = TorchWindowEnv(cfg, num_envs=1, device="cpu", seed=0)
+    core = env.core
+    lay = [[{"center": (0.5, 3.0, 1.0), "ow": 1.0, "oh": 1.0, "normal": (0.0, -1.0, 0.0)}]]   # 80 deg to the left
+    core.scene = scene_from_layout(lay, core.W, (0.0, 0.0, 1.0), "cpu")
+    core.perception.reset(torch.arange(1))
+    core.after_reset(torch.arange(1))
+    sup = ScanSupervisor(Hover(), cfg, 1, "cpu", core.step_dt)
+    sup.reset(torch.arange(1))
+    phases = []
+    for _ in range(80):
+        env.step(sup.act(core))
+        phases.append(int(sup.phase[0]))
+    assert bool(core.selector.has[0]) and int(core.selector.sel[0]) == 0
+    assert 3 in phases                                            # swept, chose it, turned to it
+    look = math.atan2(3.0 - float(core.state.pos[0, 1]), 0.5 - float(core.state.pos[0, 0]))
+    assert abs(math.degrees(math.atan2(math.sin(look - float(core.yaw[0])), math.cos(look - float(core.yaw[0]))))) < 20.0

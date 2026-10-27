@@ -1,0 +1,7 @@
+# 창문 50 개 코스 (course.yaml 위에 얹음). 시간 제한 10 + 8 × 50 = 410 s
+scene:
+  max_windows: 50
+  place_tries: 64
+curriculum:
+  override:
+    n_windows: [50, 50]

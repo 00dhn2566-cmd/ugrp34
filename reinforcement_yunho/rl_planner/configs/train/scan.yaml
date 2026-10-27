@@ -1,0 +1,14 @@
+# 둘러보기 학습 프리셋 (RESULTS.md §12) — 범용·속도 프리셋과 코스 환경 위에 겹쳐 쓴다:
+#   train.py --config configs/train/general.yaml --config configs/train/speed.yaml --config configs/scan/course.yaml \
+#            --config configs/train/scan.yaml --resume <웜스타트>
+#   웜스타트: scripts/expand_obs.py --run <speed_a run> --yaw --add search_state --out <pt> (yaw 출력 0 = 기존 정책과 같은 행동)
+# 정책이 yaw 를 직접 돌린다 (4번째 행동 = yaw 변화율, ±90°/s): 좌우는 몸을 돌려, 위아래는 고도를 바꿔 훑는다 (카메라는 몸체 고정).
+# search_state = 마지막 통과 뒤 어디까지 둘러봤는지 (방향·고도의 최대·최소, 지난 시간, 아는 후보 수).
+action:
+  yaw: true
+  yaw_rate_max_deg: 90.0
+observation:
+  policy: [lin_vel_heading, gravity_body, ang_vel_body, altitude, last_action, target_estimate, target_detection,
+           next_estimate, progress, detection_gap, search_state]
+domain_randomization:
+  level_scale: [0.0, 0.25, 0.5, 0.75, 1.0, 1.0]

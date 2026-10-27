@@ -69,7 +69,7 @@ def window_corners(center, right, up, size) -> torch.Tensor:
 class LevelTable:
     """Per-curriculum-level sampling ranges as tensors: param -> (L, 2)."""
 
-    KEYS = ("n_windows", "first_gap", "spacing", "lateral", "height", "yaw_deg",
+    KEYS = ("n_windows", "first_gap", "spacing", "lateral", "height", "yaw_deg", "turn_deg", "rise",
             "opening_w", "opening_h", "corner_noise_px", "miss_prob")
 
     def __init__(self, cfg: Mapping, device):
@@ -94,6 +94,88 @@ class LevelTable:
         return lohi[:, 0] + (u * span).floor().long().clamp_max(span - 1)
 
 
+def _seg_dist(p0: torch.Tensor, p1: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    """Distance from points ``q`` to segments ``p0 -> p1`` (all (..., 3), broadcast)."""
+    d = p1 - p0
+    t = (((q - p0) * d).sum(-1) / (d * d).sum(-1).clamp_min(1e-9)).clamp(0.0, 1.0)
+    return (p0 + t[..., None] * d - q).norm(dim=-1)
+
+
+def sample_scatter(cfg: Mapping, table: LevelTable, lv: torch.Tensor, gen: torch.Generator, start: torch.Tensor,
+                   n_win: torch.Tensor, W: int):
+    """Scatter course (scene.layout = scatter): every window is placed from the one before it (the start for the
+    first) at distance ``spacing`` (``first_gap`` for the first), bearing ±``turn_deg`` off the direction the drone
+    leaves that window in (sign random) and height change ``rise`` (clipped to ``height``); its normal faces back
+    along that bearing, tilted by ``yaw_deg``. So right after a pass the next window can be far to the side, above
+    or below the camera's view.
+
+    The order is the "nearest exit" rule: from the start and from every window, the next window is the nearest of
+    all windows not passed yet, every other one at least ``nearest_margin`` times farther. Window centres keep
+    ``min_separation``; the straight legs (and 1 m past each window) stay ``path_clearance`` outside every other wall
+    panel (a panel = disc of radius wall_half_extent * sqrt 2 around its centre). Each window takes the first of
+    ``place_tries`` candidates that satisfies everything, preferring legs that point down the arena (+x within 90 deg)
+    so long courses do not curl back into themselves; when none fits the course ends there.
+
+    Returns (center (n,W,3), pass heading (n,W) [rad], number of windows placed (n,))."""
+    sc = cfg["scene"]
+    device = start.device
+    n_e = start.shape[0]
+    K = max(1, int(sc.get("place_tries", 32)))
+    margin, sep = float(sc.get("nearest_margin", 1.25)), float(sc.get("min_separation", 2.4))
+    r_clear = float(sc["wall_half_extent"]) * 2 ** 0.5 + float(sc.get("path_clearance", 0.4))
+    b = sc["bounds"]
+    x_lo, y_hi = float(b["x_min"]) + 1.5, float(b["y_abs"]) - 1.5
+    # every draw up front with a fixed shape: the stream does not depend on which candidates succeed
+    dist = table.uniform("spacing", lv, gen, (W, K))
+    dist[:, 0] = table.uniform("first_gap", lv, gen, (K,))
+    sgn = torch.where(torch.rand(n_e, W, K, generator=gen, device=device) < 0.5, -1.0, 1.0)
+    turn = torch.deg2rad(table.uniform("turn_deg", lv, gen, (W, K))) * sgn
+    rise = table.uniform("rise", lv, gen, (W, K))
+    tilt = torch.deg2rad(table.uniform("yaw_deg", lv, gen, (W, K)))
+    z_lo, z_hi = table.t["height"][lv, 0][:, None], table.t["height"][lv, 1][:, None]
+
+    center = torch.zeros(n_e, W, 3, device=device)
+    heading = torch.zeros(n_e, W, device=device)
+    placed = torch.zeros(n_e, dtype=torch.long, device=device)
+    alive = n_win > 0
+    ref, head = start.clone(), torch.zeros(n_e, device=device)
+    ar = torch.arange(n_e, device=device)
+    for k in range(W):
+        alive = alive & (k < n_win)
+        if not bool(alive.any()):
+            break
+        phi = head[:, None] + turn[:, k]                                       # (n,K) bearing of the leg
+        cand = torch.stack((ref[:, None, 0] + dist[:, k] * torch.cos(phi), ref[:, None, 1] + dist[:, k] * torch.sin(phi),
+                            torch.maximum(torch.minimum(ref[:, None, 2] + rise[:, k], z_hi), z_lo)), -1)
+        ok = (cand[..., 0] >= x_lo) & (cand[..., 1].abs() <= y_hi)
+        over = ref + torch.stack((torch.cos(head), torch.sin(head), torch.zeros_like(head)), -1)   # 1 m past the window
+        if k > 0:
+            prev = center[:, :k]                                               # (n,k,3)
+            ok &= ((cand[:, :, None] - prev[:, None]).norm(dim=-1) >= sep).all(-1)
+            refs = torch.cat((start[:, None], prev[:, :-1]), 1)                # R_j: where window j is chosen from
+            d_next = (prev - refs).norm(dim=-1)                                # distance from R_j to window j
+            ok &= ((cand[:, :, None] - refs[:, None]).norm(dim=-1) >= margin * d_next[:, None]).all(-1)
+            # the new window's panel stays off every earlier leg (R_j -> window j)
+            ok &= (_seg_dist(refs[:, None], prev[:, None], cand[:, :, None]) >= r_clear).all(-1)
+        if k > 1:                                                              # the new leg stays off earlier panels
+            obst = center[:, :k - 1][:, None]                                  # (n,1,k-1,3), not the window just left
+            for a, c in ((ref[:, None, None], cand[:, :, None]), (ref[:, None, None], over[:, None, None]),
+                         (over[:, None, None], cand[:, :, None])):
+                ok &= (_seg_dist(a, c, obst) >= r_clear).all(-1)
+        fwd = torch.cos(phi) >= 0.0                                            # leg points down the arena
+        pick = (ok.float() * (1.0 + fwd.float())).argmax(-1)                   # first fitting one, forward first
+        go = alive & ok.any(-1)
+        alive = go
+        c = cand[ar, pick]
+        center[:, k] = torch.where(go[:, None], c, center[:, k])
+        hd = phi[ar, pick] + tilt[ar, k, pick]
+        heading[:, k] = torch.where(go, hd, heading[:, k])
+        placed = placed + go.long()
+        ref = torch.where(go[:, None], c, ref)
+        head = torch.where(go, hd, head)
+    return center, heading, placed
+
+
 def sample_scene(cfg: Mapping, table: LevelTable, level: torch.Tensor, gen: torch.Generator,
                  out: SceneTensors, env_ids: torch.Tensor) -> None:
     """Resample layouts for ``env_ids`` in place (levels given per env in ``level``)."""
@@ -105,22 +187,35 @@ def sample_scene(cfg: Mapping, table: LevelTable, level: torch.Tensor, gen: torc
     n_e = env_ids.numel()
 
     n_win = table.randint("n_windows", lv, gen).clamp(1, W)
-    slot = torch.arange(W, device=device).unsqueeze(0).expand(n_e, W)
-    valid = slot < n_win.unsqueeze(1)
 
     d = cfg["drone"]
     start = torch.tensor(d["start_pos"], device=device).expand(n_e, 3).clone()
     jitter = torch.tensor(d["start_pos_noise"], device=device)
     start += (torch.rand(n_e, 3, generator=gen, device=device) * 2 - 1) * jitter
 
-    gaps = table.uniform("spacing", lv, gen, (W,))
-    gaps[:, 0] = table.uniform("first_gap", lv, gen)
-    x = start[:, 0:1] + torch.cumsum(gaps, dim=1)
-    y = table.uniform("lateral", lv, gen, (W,))
-    z = table.uniform("height", lv, gen, (W,))
-    yaw = torch.deg2rad(table.uniform("yaw_deg", lv, gen, (W,)))
+    if cfg["scene"].get("layout", "line") == "scatter":
+        center, yaw, placed = sample_scatter(cfg, table, lv, gen, start, n_win, W)
+        for _ in range(int(cfg["scene"].get("place_retries", 8))):     # redraw courses that ended short
+            short = (placed < n_win).nonzero(as_tuple=False).squeeze(-1)
+            if short.numel() == 0:
+                break
+            c2, y2, p2 = sample_scatter(cfg, table, lv[short], gen, start[short], n_win[short], W)
+            better = short[p2 > placed[short]]
+            take = p2 > placed[short]
+            center[better], yaw[better], placed[better] = c2[take], y2[take], p2[take]
+        n_win = placed
+        x, y, z = center.unbind(-1)
+    else:
+        gaps = table.uniform("spacing", lv, gen, (W,))
+        gaps[:, 0] = table.uniform("first_gap", lv, gen)
+        x = start[:, 0:1] + torch.cumsum(gaps, dim=1)
+        y = table.uniform("lateral", lv, gen, (W,))
+        z = table.uniform("height", lv, gen, (W,))
+        yaw = torch.deg2rad(table.uniform("yaw_deg", lv, gen, (W,)))
     ow = table.uniform("opening_w", lv, gen, (W,))
     oh = table.uniform("opening_h", lv, gen, (W,))
+    slot = torch.arange(W, device=device).unsqueeze(0).expand(n_e, W)
+    valid = slot < n_win.unsqueeze(1)
 
     x = torch.where(valid, x, torch.full_like(x, PARK_X))
     center = torch.stack((x, y, z), -1)
