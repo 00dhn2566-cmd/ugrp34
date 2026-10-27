@@ -554,3 +554,19 @@ def test_safety_slowdown_ramps_the_step_and_leaves_seen_envs_untouched():
     assert all(b <= a + 1e-6 for a, b in zip(scales[10:], scales[11:]))   # then a monotone ramp ...
     assert min(scales) >= 0.25 - 1e-6 and scales[-1] < 0.6               # ... down to the floor before the hold
     assert bool(f.holding[0])
+
+
+def test_safety_hold_brake_latches_the_stopping_point():
+    """safety.hold_brake_acc: the hold latches the horizontal braking stop point pos + v|v|/(2a) (PX4 Hold) instead
+    of the position where the hold began (null), so a hold that starts at speed is not pulled back."""
+    from rl_planner.planners.safety import SafetyFilter
+    pos, vel = torch.tensor([[1.0, 0.0, 1.2]]), torch.tensor([[1.2, -0.5, 0.3]])
+    act, yaw, sm = torch.tensor([[0.8, 0.0, 0.0]]), torch.zeros(1), torch.tensor([0.8, 0.6, 0.4])
+    unknown = torch.zeros(1, dtype=torch.bool)
+    for extra, want in ((), pos[0]), (("safety.hold_brake_acc=2.0",), pos[0] + torch.tensor([1.2, -0.5, 0.0]) * 1.3 / 4.0):
+        f = SafetyFilter(cfg_cpu("safety.lost_hold_s=0.3", *extra), 1, "cpu", 0.1)
+        f.filter(act, torch.tensor([True]), unknown, pos, yaw, sm, vel=vel)       # first detection
+        for _ in range(4):
+            f.filter(act, torch.tensor([False]), unknown, pos, yaw, sm, vel=vel)
+        assert bool(f.holding[0])
+        assert torch.allclose(f.hold_pos[0], want, atol=1e-6)

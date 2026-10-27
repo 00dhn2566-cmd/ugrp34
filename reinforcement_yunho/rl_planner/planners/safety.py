@@ -14,6 +14,10 @@ mission is nominal:
            policies' longest such streak was 0.3 s before the first detection and
            2.1 s after it (L5, 512 scenes, sigma_safe 0.3 m). Defaults (3 s, 0.3 m)
            were picked on outage tests (RESULTS.md §5).
+           ``hold_brake_acc`` [m/s^2] latches the braking stop point instead of the current position:
+           pos + v|v|/(2a) along the horizontal velocity (PX4 Hold brakes and holds where it stops). A hold
+           that begins at ~1.1 m/s otherwise overshoots by its stopping distance and is pulled back, through
+           the window it just flew through when one was that close (RESULTS.md §10).
 * slow   — (``slow_after_s``) after that long without any detection while the target is unknown, the
            waypoint step shrinks linearly to ``slow_min_scale`` by the time the hold starts, so the hold
            does not begin at full speed next to a wall: the RL policies fly ~1.1 m/s and were 0.5 m from
@@ -44,6 +48,8 @@ class SafetyFilter:
         so = s.get("slow_after_s")                     # None: no slow-down before the hold
         self.slow_steps = None if so is None else max(0, int(round(float(so) / float(step_dt))))
         self.slow_min = float(s.get("slow_min_scale", 0.25))
+        hb = s.get("hold_brake_acc")                  # None: hold where the hold began
+        self.brake_acc = None if hb is None else float(hb)
         ss = s.get("sigma_safe_m", 0.3)               # None: any valid target estimate counts as known
         self.sigma_safe = float("inf") if ss is None else float(ss)
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
@@ -65,10 +71,11 @@ class SafetyFilter:
     @torch.no_grad()
     def filter(self, actions: torch.Tensor, seen: torch.Tensor, target_valid: torch.Tensor,
                pos: torch.Tensor, yaw: torch.Tensor, step_max: torch.Tensor,
-               target_sigma: torch.Tensor | None = None) -> torch.Tensor:
+               target_sigma: torch.Tensor | None = None, vel: torch.Tensor | None = None) -> torch.Tensor:
         """actions (E,A) in [-1,1]; seen (E,) any window detected since the last decision;
         target_valid (E,) the current target window has a valid estimate; target_sigma (E,) its
-        1-sigma position uncertainty [m] (a valid estimate looser than sigma_safe_m counts as unknown)."""
+        1-sigma position uncertainty [m] (a valid estimate looser than sigma_safe_m counts as unknown);
+        vel (E,3) world-frame velocity (needed with hold_brake_acc)."""
         self.since_seen = torch.where(seen, torch.zeros_like(self.since_seen), self.since_seen + 1)
         self.ever_seen |= seen
         if not self.enabled:
@@ -77,7 +84,11 @@ class SafetyFilter:
                             torch.full_like(self.since_seen, self.start_steps))
         known = target_valid if target_sigma is None else target_valid & (target_sigma <= self.sigma_safe)
         hold = (self.since_seen > limit) & ~known
-        self.hold_pos = torch.where((hold & ~self.holding)[:, None], pos, self.hold_pos)
+        latch = pos
+        if self.brake_acc is not None:                # braking stop point (horizontal), as PX4 Hold
+            vh = torch.cat((vel[:, :2], torch.zeros_like(vel[:, 2:])), -1)
+            latch = pos + vh * (vh.norm(dim=-1, keepdim=True) / (2.0 * self.brake_acc))
+        self.hold_pos = torch.where((hold & ~self.holding)[:, None], latch, self.hold_pos)
         self.holding = hold
         self.hold_steps += hold.long()
         wp_raw = pos + m3.heading_to_world(actions[:, :3] * step_max, yaw)
@@ -117,4 +128,4 @@ class SafePlanner:
         target_valid = core.est.valid.gather(1, idx).squeeze(1)
         target_sigma = core.est.sigma.gather(1, idx).squeeze(1)
         return self.safety.filter(a, core.det.detected.any(-1), target_valid,
-                                  core.state.pos, core.yaw, core.step_max, target_sigma)
+                                  core.state.pos, core.yaw, core.step_max, target_sigma, core.state.vel_w)
