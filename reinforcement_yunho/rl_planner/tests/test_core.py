@@ -857,3 +857,20 @@ def test_scan_supervisor_sweeps_finds_a_window_to_the_side_and_faces_it():
     assert 3 in phases                                            # swept, chose it, turned to it
     look = math.atan2(3.0 - float(core.state.pos[0, 1]), 0.5 - float(core.state.pos[0, 0]))
     assert abs(math.degrees(math.atan2(math.sin(look - float(core.yaw[0])), math.cos(look - float(core.yaw[0]))))) < 20.0
+
+
+def test_last_pass_features_locate_the_drone_off_the_window_just_passed():
+    """last_pass: through / left / up off the passed window in its frame, its pass direction in the heading frame,
+    and the chosen / runner-up candidate distances from it."""
+    from rl_planner.core.selector import TargetSelector
+    cfg = cfg_cpu("mission.selection=nearest")
+    sel = TargetSelector(cfg, 1, 3, "cpu")
+    sel.reset(torch.arange(1), torch.zeros(1, 3), torch.zeros(1), torch.zeros(1))
+    f0 = sel.pass_features(torch.tensor([[1.0, 0.0, 1.0]]), torch.zeros(1))
+    assert float(f0[0, 0]) == 0.0 and float(f0[0, 1:6].abs().sum()) == 0.0         # nothing passed yet
+    # window at (3, 2, 1.5) passed towards +y (normal -y), drone now 0.5 m through it, 0.2 m to the left (-x), 0.1 m up
+    sel.on_pass(torch.tensor([True]), torch.tensor([[3.0, 2.3, 1.5]]), torch.tensor([[0.0, 1.0, 0.0]]), torch.zeros(1),
+                torch.ones(1), torch.tensor([[3.0, 2.0, 1.5]]), torch.tensor([True]), torch.tensor([[0.0, -1.0, 0.0]]))
+    sel.d_sel, sel.d_second = torch.tensor([3.0]), torch.tensor([float("inf")])
+    f = sel.pass_features(torch.tensor([[2.8, 2.5, 1.6]]), torch.tensor([math.pi / 2]))
+    assert torch.allclose(f[0], torch.tensor([1.0, 0.25, 0.1, 0.05, 1.0, 0.0, 0.6, 0.0]), atol=1e-5)

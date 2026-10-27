@@ -178,7 +178,7 @@ class OnboardPlanner:
         self._pass_pending = None
         t = torch.tensor([self.t_now], device=self.device)
         self.selector.on_pass(torch.ones(1, dtype=torch.bool, device=self.device), self.state.pos, self.state.vel_w,
-                              self.yaw, t, _gather(self.est.center, k), _gather(self.est.valid, k))
+                              self.yaw, t, _gather(self.est.center, k), _gather(self.est.valid, k), _gather(self.est.normal, k))
 
     # ------------------------------------------------------------------ decision
     def _set_state(self, drone_state: Mapping) -> None:

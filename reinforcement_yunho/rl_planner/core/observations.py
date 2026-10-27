@@ -148,6 +148,15 @@ def progress(core):
     return torch.stack((passed / n, left, core.episode_time / core.episode_len_s), -1)
 
 
+@register("last_pass", 8)
+def last_pass(core):
+    """The window just passed, from its estimate at the pass (core/selector.py): estimate there at all, the drone's
+    position off it in its frame (through the plane, left, up), its pass direction in the heading frame, and the
+    distances of the chosen and the runner-up candidate from it — for turning away without clipping its panel and
+    for judging whether a nearer window could still be unseen."""
+    return core.selector.pass_features(core.state.pos, core.yaw)
+
+
 @register("search_state", 10)
 def search_state(core):
     """How far the drone has looked around since it passed the last window (core/selector.py): heading off the

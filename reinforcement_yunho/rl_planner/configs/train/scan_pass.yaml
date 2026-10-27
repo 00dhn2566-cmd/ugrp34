@@ -1,0 +1,7 @@
+# 둘러보기 + '방금 지난 창문' 관측 (RESULTS.md §12) — scan.yaml (+ scan_long.yaml) 위에 겹쳐 쓴다. 웜스타트:
+#   scripts/expand_obs.py --run <scan_c2 run> --add last_pass --out <pt>
+# 실패의 절반이 둘러보기·선택 쪽이었다 (덜 둘러보고 먼 창문으로 → 순서 위반, 가는 길에 진짜 다음 창문 판에 충돌) + 통과 직후 꺾다가
+# 방금 지난 창문 판을 스침. 정책은 지난 창문에 대한 자기 위치도, 후보들이 그 창문에서 얼마나 먼지도 몰랐다.
+observation:
+  policy: [lin_vel_heading, gravity_body, ang_vel_body, altitude, last_action, target_estimate, target_detection,
+           next_estimate, progress, detection_gap, search_state, last_pass]
