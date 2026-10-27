@@ -28,14 +28,6 @@ mission is nominal:
            waypoint step shrinks linearly to ``slow_min_scale`` by the time the hold starts, so the hold
            does not begin at full speed next to a wall: the RL policies fly ~1.1 m/s and were 0.5 m from
            the next wall when a 3 s outage hold began, closer than their stopping distance (RESULTS.md §10).
-* gate   — (``approach_gate_m``) stabilized approach, as an aircraft's stabilized-approach gate: closer than
-           that to the target window's estimated plane, the approach must be stable — the estimate converged
-           (``gate_sigma_m``, ``gate_min_frames``) and the drone inside a funnel around the estimated centre
-           (in-plane offset <= e0 + k * distance, ``gate_funnel``). Otherwise the forward step is capped at
-           ``gate_scale`` of its maximum while the lateral and vertical commands pass unchanged, so the planner
-           keeps steering while it closes in more slowly. ``gate_unknown`` also caps it while windows are in sight
-           but the target has no valid estimate yet. A fast policy otherwise reaches the window with half the
-           frames and twice the aim error of a slow one, and hits the frame (RESULTS.md §11).
 * fence  — clamp every waypoint into the arena box: ``fence_margin_m`` inside the x/y
            bounds; altitude [z_min + 0.25, z_max - 0.3], the same waypoint clamp the
            policy was trained with (so nominal flight is never touched).
@@ -51,7 +43,6 @@ from typing import Mapping
 import torch
 
 from ..core import math3d as m3
-from ..core.observations import _gather
 
 
 class SafetyFilter:
@@ -71,14 +62,6 @@ class SafetyFilter:
         self.retreat_max = float(s.get("retreat_max_m", 3.0))
         self.crumb_m = float(s.get("crumb_spacing_m", 0.1))
         self.crumb_clear = float(s.get("crumb_clear_m", 0.6))
-        ag = s.get("approach_gate_m")                 # None: no stabilized-approach gate
-        self.gate_m = None if ag is None else float(ag)
-        self.gate_sigma = float(s.get("gate_sigma_m", 0.1))
-        self.gate_frames = float(s.get("gate_min_frames", 8))
-        e0, k = s.get("gate_funnel", [0.05, 0.3])
-        self.gate_e0, self.gate_k = float(e0), float(k)
-        self.gate_scale = float(s.get("gate_scale", 0.5))
-        self.gate_unknown = bool(s.get("gate_unknown", False))
         ss = s.get("sigma_safe_m", 0.3)               # None: any valid target estimate counts as known
         self.sigma_safe = float("inf") if ss is None else float(ss)
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
@@ -91,7 +74,6 @@ class SafetyFilter:
         self.hold_pos = torch.zeros(E, 3, device=device)
         self.hold_steps = torch.zeros(E, dtype=torch.long, device=device)   # per episode, for logging
         self.hold_age = torch.zeros(E, dtype=torch.long, device=device)     # steps into the current hold
-        self.gated_steps = torch.zeros(E, dtype=torch.long, device=device)  # per episode, for logging
         if self.retreat_steps is not None:            # breadcrumb ring buffer (newest at head - 1)
             N = max(1, int(s.get("crumb_buffer", 64)))
             self.crumbs = torch.zeros(E, N, 3, device=device)
@@ -107,7 +89,6 @@ class SafetyFilter:
         self.holding[env_ids] = False
         self.hold_steps[env_ids] = 0
         self.hold_age[env_ids] = 0
-        self.gated_steps[env_ids] = 0
         if self.retreat_steps is not None:
             self.n_crumbs[env_ids] = 0
             self.last_target[env_ids] = -1
@@ -117,15 +98,12 @@ class SafetyFilter:
     def filter(self, actions: torch.Tensor, seen: torch.Tensor, target_valid: torch.Tensor,
                pos: torch.Tensor, yaw: torch.Tensor, step_max: torch.Tensor,
                target_sigma: torch.Tensor | None = None, vel: torch.Tensor | None = None,
-               target_idx: torch.Tensor | None = None, target_center: torch.Tensor | None = None,
-               target_normal: torch.Tensor | None = None, target_frames: torch.Tensor | None = None) -> torch.Tensor:
+               target_idx: torch.Tensor | None = None) -> torch.Tensor:
         """actions (E,A) in [-1,1]; seen (E,) any window detected since the last decision;
         target_valid (E,) the current target window has a valid estimate; target_sigma (E,) its
         1-sigma position uncertainty [m] (a valid estimate looser than sigma_safe_m counts as unknown);
         vel (E,3) world-frame velocity (for hold_brake_acc; without it the hold latches the current position);
-        target_idx (E,) index of the window to pass next (for retreat_after_s: the path is kept since the last pass);
-        target_center / target_normal (E,3) its estimated centre and approach-side normal, target_frames (E,) the
-        camera frames behind that estimate (for approach_gate_m; without them there is no gate)."""
+        target_idx (E,) index of the window to pass next (for retreat_after_s: the path is kept since the last pass)."""
         self.since_seen = torch.where(seen, torch.zeros_like(self.since_seen), self.since_seen + 1)
         self.ever_seen |= seen
         if not self.enabled:
@@ -144,8 +122,6 @@ class SafetyFilter:
         self.hold_age = torch.where(hold, self.hold_age + 1, torch.zeros_like(self.hold_age))
         if self.retreat_steps is not None and target_idx is not None:
             self._retrace(hold, pos, target_idx)
-        if self.gate_m is not None and target_center is not None:
-            actions = self._gate(actions, pos, target_valid, target_sigma, target_center, target_normal, target_frames)
         wp_raw = pos + m3.heading_to_world(actions[:, :3] * step_max, yaw)
         wp = wp_raw
         slowed = torch.zeros_like(hold)
@@ -164,20 +140,6 @@ class SafetyFilter:
             out[:, 3] = torch.where(hold, torch.zeros_like(out[:, 3]), out[:, 3])
         return out
 
-
-    def _gate(self, actions, pos, target_valid, target_sigma, center, normal, frames) -> torch.Tensor:
-        """Cap the forward step while the approach to the target is not stabilized inside approach_gate_m."""
-        rel = pos - center
-        d = (rel * normal).sum(-1)                            # > 0 on the approach side of the estimated plane
-        off = (rel - d[:, None] * normal).norm(dim=-1)        # in-plane offset from the estimated centre
-        sigma = torch.zeros_like(d) if target_sigma is None else target_sigma
-        steady = (sigma <= self.gate_sigma) & (frames >= self.gate_frames) & (off <= self.gate_e0 + self.gate_k * d)
-        gated = target_valid & (d > 0) & (d < self.gate_m) & ~steady
-        if self.gate_unknown:                                 # windows in sight, target not triangulated yet
-            gated |= ~target_valid & self.ever_seen & (self.since_seen <= 1)
-        self.gated_steps += gated.long()
-        fwd = torch.where(gated, actions[:, 0].clamp(max=self.gate_scale), actions[:, 0])
-        return torch.cat((fwd[:, None], actions[:, 1:]), -1)
 
     def _retrace(self, hold: torch.Tensor, pos: torch.Tensor, target_idx: torch.Tensor) -> None:
         """Record breadcrumbs while flying; during a hold older than retreat_after_s move the hold point back along them."""
@@ -224,9 +186,6 @@ class SafePlanner:
         idx = core.target_idx[:, None]
         target_valid = core.est.valid.gather(1, idx).squeeze(1)
         target_sigma = core.est.sigma.gather(1, idx).squeeze(1)
-        gate = (None, None, None) if self.safety.gate_m is None else \
-            (_gather(core.est.center, core.target_idx), _gather(core.est.normal, core.target_idx),
-             _gather(core.est.n_obs, core.target_idx))
         return self.safety.filter(a, core.det.detected.any(-1), target_valid,
                                   core.state.pos, core.yaw, core.step_max, target_sigma, core.state.vel_w,
-                                  core.target_idx, *gate)
+                                  core.target_idx)
