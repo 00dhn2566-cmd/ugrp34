@@ -570,3 +570,78 @@ def test_safety_hold_brake_latches_the_stopping_point():
             f.filter(act, torch.tensor([False]), unknown, pos, yaw, sm, vel=vel)
         assert bool(f.holding[0])
         assert torch.allclose(f.hold_pos[0], want, atol=1e-6)
+
+
+def test_rescale_action_keeps_the_commanded_displacement():
+    """scripts/rescale_action.py: with a larger action.step_max the rescaled actor commands the same waypoint
+    displacement (mean action x step_max) and the same exploration noise in metres, given the previous action in
+    the new units; Adam moments of the rescaled parameters follow (grad x 1/s)."""
+    from rl_planner.scripts.expand_obs import layouts
+    from rl_planner.scripts.rescale_action import rescale_checkpoint
+    old = cfg_cpu().to_dict()
+    step_old = torch.tensor([float(v) for v in old["action"]["step_max"]])
+    step_new = torch.tensor([1.25, 0.9, 0.5])
+    g = torch.Generator().manual_seed(1)
+    a_lay, c_lay = layouts(old)
+    D, H, A = a_lay[-1][2], 16, 3
+    actor = {"obs_normalizer._mean": torch.randn(1, D, generator=g), "obs_normalizer._std": torch.rand(1, D, generator=g) + 0.3,
+             "obs_normalizer._var": torch.ones(1, D), "obs_normalizer.count": torch.tensor(10),
+             "distribution.std_param": torch.rand(A, generator=g) + 0.2,
+             "mlp.0.weight": torch.randn(H, D, generator=g), "mlp.0.bias": torch.randn(H, generator=g),
+             "mlp.2.weight": torch.randn(A, H, generator=g), "mlp.2.bias": torch.randn(A, generator=g)}
+    Dc = c_lay[-1][2]
+    critic = {"obs_normalizer._mean": torch.randn(1, Dc, generator=g), "obs_normalizer._std": torch.rand(1, Dc, generator=g) + 0.3,
+              "obs_normalizer._var": torch.ones(1, Dc), "mlp.0.weight": torch.randn(H, Dc, generator=g)}
+    names = ["distribution.std_param", "mlp.0.weight", "mlp.0.bias", "mlp.2.weight", "mlp.2.bias"]
+    opt = {"state": {i: {"exp_avg": torch.randn(actor[n].shape, generator=g), "exp_avg_sq": torch.rand(actor[n].shape, generator=g)}
+                     for i, n in enumerate(names)}, "param_groups": [{"params": list(range(len(names)))}]}
+    ck = {"actor_state_dict": actor, "critic_state_dict": critic, "optimizer_state_dict": opt, "iter": 3}
+    out = rescale_checkpoint(ck, old, step_new.tolist())
+
+    def act(sd, x):
+        z = (x - sd["obs_normalizer._mean"]) / (sd["obs_normalizer._std"] + 1e-2)
+        return torch.nn.functional.elu(z @ sd["mlp.0.weight"].T + sd["mlp.0.bias"]) @ sd["mlp.2.weight"].T + sd["mlp.2.bias"]
+
+    la = next((lo, hi) for n, lo, hi in a_lay if n == "last_action")
+    x_old = torch.randn(5, D, generator=g)
+    x_old[:, la[0]:la[1]] = torch.rand(5, A, generator=g) * 2 - 1           # previous action, old units
+    x_new = x_old.clone()
+    x_new[:, la[0]:la[1]] *= step_old / step_new                            # the same displacement in new units
+    assert torch.allclose(act(ck["actor_state_dict"], x_old) * step_old, act(out["actor_state_dict"], x_new) * step_new, atol=1e-5)
+    assert torch.allclose(actor["distribution.std_param"] * step_old, out["actor_state_dict"]["distribution.std_param"] * step_new)
+    s = step_old / step_new
+    st = out["optimizer_state_dict"]["state"]
+    assert torch.allclose(st[3]["exp_avg"], opt["state"][3]["exp_avg"] / s[:, None])
+    assert torch.allclose(st[4]["exp_avg_sq"], opt["state"][4]["exp_avg_sq"] / s ** 2)
+    assert torch.equal(st[1]["exp_avg"], opt["state"][1]["exp_avg"])      # hidden layers untouched
+
+
+def test_motion_blur_streaks_corners_along_the_image_motion():
+    """perception.exposure_s: a yawing camera smears the corners horizontally by about fx * yaw_rate * exposure;
+    the detector picks a random point of the streak (between the corner now and at the start of the exposure)
+    and is less confident. With the knob off there is no motion term (and no extra draw)."""
+    from rl_planner.envs.torch_env import TorchWindowEnv
+    cfg = cfg_cpu("sim.num_envs=8", "perception.noise_scale=0.0", "perception.exposure_s=0.01")
+    env = TorchWindowEnv(cfg, num_envs=8, device="cpu", seed=4)
+    core = env.core
+    core.fixed_level = 0
+    env._reset_all()
+    core.state.omega_b[:] = torch.tensor([0.0, 0.0, 2.0])             # yaw rate 2 rad/s, hovering
+    core.state.vel_w[:] = 0.0
+    cam_c, R_WC = core.perception.camera_pose(core.state.pos, core.state.quat)
+    take = torch.ones(8, dtype=torch.bool)
+    out = {}
+    for name, motion in (("sharp", None), ("blur", core._motion())):
+        _, _, uv, det, conf, _ = core.perception.capture(cam_c, R_WC, core.scene, take, torch.Generator().manual_seed(0),
+                                                         motion=motion)
+        out[name] = (uv[:, 0], det[:, 0], conf[:, 0])
+    (uv0, det0, c0), (uv1, det1, c1) = out["sharp"], out["blur"]
+    seen = det0 & det1
+    assert bool(seen.any())
+    d = (uv1 - uv0)[seen]                                            # (n,4,2) shift along the streak
+    full = 763.0 * 2.0 * 0.01                                        # fx * yaw rate * exposure ~ 15 px
+    assert float(d[..., 0].abs().max()) <= 1.3 * full and float(d[..., 0].abs().mean()) > 0.15 * full
+    assert float(d[..., 1].abs().mean()) < 0.3 * float(d[..., 0].abs().mean())   # mostly horizontal
+    assert bool((c1[seen] < c0[seen]).all())
+    off = TorchWindowEnv(cfg_cpu("sim.num_envs=8"), num_envs=8, device="cpu", seed=4).core
+    assert off._motion() is None

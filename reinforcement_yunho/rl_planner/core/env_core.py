@@ -126,11 +126,14 @@ class WindowMissionCore:
         self.cam_err_rad = torch.zeros(self.E, device=self.device)
         self.R_err = None                                  # (E,3,3) camera mounting error, when enabled
         self.ctrl_dr = (rng("ctrl_kp_scale", (1.0, 1.0)), rng("ctrl_kv_scale", (1.0, 1.0)), rng("ctrl_ki", (0.0, 0.0)))
+        self.exp_fixed, self.exp_dr = float(pc.get("exposure_s") or 0.0), rng("exposure_s", (0.0, 0.0))
+        self.exposure = torch.full((self.E,), self.exp_fixed, device=self.device)   # camera exposure [s] (motion blur)
         self._gust_on = self.gust_dr[1] > 0
         self._drop_on = self.drop_fixed > 0 or self.drop_dr[1] > 0
         self._drift_on = self.drift_fixed > 0 or self.drift_dr[1] > 0
         self._cam_on = self.cam_fixed > 0 or self.cam_dr[1] > 0
         self._ctrl_on = self.ctrl_dr != ((1.0, 1.0), (1.0, 1.0), (0.0, 0.0))
+        self._blur_on = self.exp_fixed > 0 or self.exp_dr[1] > 0
         ls = dr.get("level_scale") if self.dr_enabled else None
         self.level_scale = None if ls is None else torch.tensor([float(v) for v in ls], device=self.device)
         self.curriculum_enabled = bool(cfg["curriculum"]["enabled"])
@@ -294,12 +297,21 @@ class WindowMissionCore:
                 self.R_err = torch.eye(3, device=self.device).repeat(self.E, 1, 1)
             self.R_err[env_ids] = m3.rot_axis_angle(axis, rad)
             self.cam_err_rad[env_ids] = rad
+        if self.exp_dr[1] > 0:                    # camera exposure (motion blur)
+            self.exposure[env_ids] = self.exp_fixed + scale(self._u(self.exp_dr, n))
         if self._ctrl_on:                         # low-level controller mismatch (gains, velocity integral)
             (kp_r, kv_r, ki_r) = self.ctrl_dr
             kp, kv, ki = self._u(kp_r, n), self._u(kv_r, n), self._u(ki_r, n)
             if sc is not None:
                 kp, kv, ki = 1.0 + (kp - 1.0) * sc, 1.0 + (kv - 1.0) * sc, ki * sc
             self.controller.set_variation(env_ids, kp, kv, ki)
+
+    def _motion(self):
+        """(vel_w, omega_w, exposure) for motion blur, or None when the camera exposure knob is off."""
+        if not self._blur_on:
+            return None
+        s = self.state
+        return s.vel_w, m3.quat_rotate(s.quat, s.omega_b), self.exposure
 
     def after_reset(self, env_ids: torch.Tensor) -> None:
         if env_ids.numel() == 0:
@@ -323,7 +335,8 @@ class WindowMissionCore:
         take[env_ids] = True
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
         frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.reset_gen,
-                                        ray_offset=self.drift if self._drift_on else None, R_err=self.R_err)
+                                        ray_offset=self.drift if self._drift_on else None, R_err=self.R_err,
+                                        motion=self._motion())
         det = self.perception.add_detections(*self._deliver(frame, env_ids))
         self.det = det if self.det is None else self._merge_det(det, env_ids)
         self.est = self._estimates()
@@ -518,7 +531,8 @@ class WindowMissionCore:
             self.drift = self.drift + step * (self.drift_sigma * math.sqrt(self.step_dt))[:, None]
         cam_c, R_WC = self.perception.camera_pose(s.pos, s.quat)
         frame = self.perception.capture(cam_c, R_WC, self.scene, take, self.gen,
-                                        ray_offset=self.drift if self._drift_on else None, R_err=self.R_err)
+                                        ray_offset=self.drift if self._drift_on else None, R_err=self.R_err,
+                                        motion=self._motion())
         self.perception.tick()
         self.det = self.perception.add_detections(*self._deliver(frame))
         self.est = self._estimates()

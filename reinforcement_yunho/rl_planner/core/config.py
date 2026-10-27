@@ -82,7 +82,7 @@ TRAIN_ONLY_KEYS = (("curriculum", "fixed_level"), ("curriculum", "override"),
                    *(("perception", k) for k in ("noise_scale", "calib_fx_scale", "pose_noise_m", "pose_noise_deg",
                                                  "blackout_s", "latency_steps", "latency_jitter_steps",
                                                  "frame_drop_prob", "pose_drift_m", "cam_rot_err_deg",
-                                                 "outlier_prob")))
+                                                 "outlier_prob", "exposure_s")))
 # runtime-only sections (not part of the MDP): always today's default.yaml, never the training snapshot
 RUNTIME_SECTIONS = ("safety",)
 

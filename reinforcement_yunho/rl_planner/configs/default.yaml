@@ -99,6 +99,8 @@ perception:
   min_parallax_deg: 2.0              # recon_rays MIN_PARALLAX_DEG 게이트
   ridge: 1.0e-6                      # 최소자승 정칙화
   ray_forget: 1.0                    # 삼각측량 망각 계수: 창문이 새로 검출될 때마다 옛 광선 가중치 × 이 값 (1 = recon_rays 와 같은 전체 최소자승)
+  exposure_s: 0.0                    # [s] 카메라 노출 — 모션 블러: 코너가 노출 동안 움직인 줄무늬 위 임의 점으로 검출되고 신뢰도 × exp(-줄무늬/blur_conf_px) (0 = 끔)
+  blur_conf_px: 40.0                 # [px] 블러 신뢰도 감쇠 길이
   # --- 스트레스 테스트용 손잡이 (기본값 = 효과 없음, 학습에는 쓰지 않음) ---
   noise_scale: 1.0                   # 레벨별 코너 잡음 σ 에 곱하는 배율
   calib_fx_scale: 1.0                # 실제 카메라 초점거리 / 보정값 (삼각측량은 보정값 사용 → 보정 오차)
@@ -205,10 +207,11 @@ domain_randomization:
   latency_jitter_steps: [0, 0]       # 에피소드마다 지연 변동 폭 [결정 스텝] 정수 균등
   pose_drift_m: [0.0, 0.0]           # 에피소드마다 VIO 드리프트 σ [m/√s]
   cam_rot_err_deg: [0.0, 0.0]        # 에피소드마다 카메라 장착 오차 크기 [deg] (축은 임의)
+  exposure_s: [0.0, 0.0]             # 에피소드마다 카메라 노출 [s] (모션 블러, perception.exposure_s 에 더함)
   ctrl_kp_scale: [1.0, 1.0]          # 저수준 제어기 위치 게인 배율 (팀 PID 등 다른 제어기 흉내)
   ctrl_kv_scale: [1.0, 1.0]          # 속도 게인 배율
   ctrl_ki: [0.0, 0.0]                # 속도 적분 게인 [1/s^2] (PX4 식 속도 PID 의 I; 0 = 적분항 없음)
-  level_scale: null                  # 레벨별 DR 세기 배율 [L0, L1, ...] (null = 1): 바람·돌풍·끊김 확률·지연·누락·드리프트·장착 오차·제어기 변화에 곱함
+  level_scale: null                  # 레벨별 DR 세기 배율 [L0, L1, ...] (null = 1): 바람·돌풍·끊김 확률·지연·누락·드리프트·장착 오차·노출·제어기 변화에 곱함
 
 # ---------------------------------------------------------------------------
 # 상태기계 기준선 (backup/prototype_demo/traj_manager.py 이식) — 같은 인지 추정치를 쓴다

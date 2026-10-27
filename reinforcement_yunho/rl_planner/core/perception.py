@@ -140,14 +140,18 @@ class PerceptionSurrogate:
     @torch.no_grad()
     def capture(self, cam_c: torch.Tensor, R_WC: torch.Tensor, scene: SceneTensors,
                 take: torch.Tensor, gen: torch.Generator, ray_offset: torch.Tensor | None = None,
-                R_err: torch.Tensor | None = None) -> tuple:
+                R_err: torch.Tensor | None = None, motion: tuple | None = None) -> tuple:
         """Synthetic detector output for one frame, not yet fed to the triangulator: the arguments
         of :meth:`add_detections` (ray camera centre, ray R_WC, corner pixels, det, conf, take), so
         the frame can also be delivered later (detection latency, core/env_core.py).
 
         ``R_err`` (E,3,3): the real camera is mounted rotated by it (camera frame) — the image is
         rendered from ``R_WC @ R_err`` while rays are cast with the nominal ``R_WC`` (extrinsic
-        calibration error). ``ray_offset`` (E,3): VIO position drift added to the ray origin."""
+        calibration error). ``ray_offset`` (E,3): VIO position drift added to the ray origin.
+
+        ``motion`` = (vel_w (E,3), omega_w (E,3), exposure_s (E,)): motion blur. Each corner streaks from where
+        it was at the start of the exposure to where it is now; the detector localises a uniformly random
+        point of the streak (mean: mid-exposure) and its confidence falls as exp(-streak / blur_conf_px)."""
         p = self.cfg
         E, W = self.E, self.W
         P = scene.corners                                     # (E,W,4,3)
@@ -177,6 +181,16 @@ class PerceptionSurrogate:
         side_px = sides.min(dim=-1).values
         conf = torch.sigmoid((side_px - float(p["conf_side_px50"])) / float(p["conf_side_px_scale"]))
         conf = conf * cos_inc.clamp_min(0.0).sqrt()
+        streak = None
+        if motion is not None:                                 # pose at the start of the exposure
+            vel, omega, t_exp = motion
+            w = omega.norm(dim=-1)
+            R0 = m3.rot_axis_angle(m3.normalize(omega), -w * t_exp) @ R_img
+            pc0 = torch.einsum("eji,ewkj->ewki", R0, P - (cam_c - vel * t_exp[:, None])[:, None, None, :])
+            z0 = pc0[..., 2].clamp_min(1e-3)
+            uv0 = torch.stack((self.fx * cal * pc0[..., 0] / z0 + self.cx, self.fy * cal * pc0[..., 1] / z0 + self.cy), -1)
+            streak = torch.stack((u, v), -1) - uv0                 # (E,W,4,2) image motion during the exposure
+            conf = conf * torch.exp(-streak.norm(dim=-1).mean(-1) / float(p.get("blur_conf_px", 40.0)))
 
         miss = torch.rand(E, W, generator=gen, device=self.device) < self.miss_prob[:, None]
         det = (take[:, None] & scene.valid & front & inside & facing & in_range & vis
@@ -189,6 +203,8 @@ class PerceptionSurrogate:
             out = torch.rand(E, W, C, 1, generator=gen, device=self.device) < float(p["outlier_prob"])
             noise = noise + out * torch.randn(E, W, C, 2, generator=gen, device=self.device) * sig * 6.0
         noisy_uv = uv + noise
+        if streak is not None:                                 # a random point of the streak (drawn last)
+            noisy_uv = noisy_uv - streak * torch.rand(E, W, C, 1, generator=gen, device=self.device)
         # rays are cast from the ESTIMATED camera pose (VIO error knobs; no draws when 0)
         ray_c, ray_R = (cam_c, R_WC) if ray_offset is None else (cam_c + ray_offset, R_WC)
         pn, pd = float(p.get("pose_noise_m", 0.0)), float(p.get("pose_noise_deg", 0.0))
