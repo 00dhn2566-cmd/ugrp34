@@ -11,6 +11,8 @@ Conditions come from ``configs/general/suite.yaml`` (level + partial yamls + tie
 condition runs on an env reseeded the same way, and the scene fingerprint must match across planners and
 policies (same scenes, camera noise and disturbances), so any two columns are a same-scene comparison.
 Per condition and planner: <out>/<condition>/<planner>.json (summary + meta) and .csv (episodes).
+Runs on the CPU by default (4 threads; ~5 s per planner and condition — the per-step work is small, a
+busy GPU is slower). CPU and CUDA draw different random scenes, so keep one device per result root.
 """
 from __future__ import annotations
 
@@ -65,7 +67,9 @@ def run(a) -> int:
         conds = [c for c in conds if c["name"] in keep]
     k, n_sh = (int(v) for v in a.shard.split("/"))
     conds = conds[k::n_sh]
-    device = a.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = a.device                     # CPU by default: 512 small envs run faster there than on a busy GPU
+    if device == "cpu":
+        torch.set_num_threads(a.threads)  # fixed, so float reductions (and outcomes) are reproducible
     trained = {}
     for name, d in policies.items():
         with open(os.path.join(d, "policy_meta.json"), encoding="utf-8") as f:
@@ -117,7 +121,8 @@ def run(a) -> int:
                 summ = summarize(rec)
                 meta = {"condition": c["name"], "level": int(c["level"]), "configs": c.get("configs", []),
                         "tier": c.get("tier"), "planner": spec, "policy": policies.get(pol), "seed": a.seed,
-                        "num_scenes": a.num_scenes, "scene_fingerprint": fp}
+                        "num_scenes": a.num_scenes, "scene_fingerprint": fp, "device": device,
+                        "threads": a.threads if device == "cpu" else None}
                 os.makedirs(cdir, exist_ok=True)
                 write_csv(os.path.join(cdir, _fname(spec) + ".csv"), per_env_rows(spec, rec))
                 save_json(os.path.join(cdir, _fname(spec) + ".json"), {"meta": meta, "summary": summ})
@@ -194,6 +199,76 @@ def table(root: str, cols: list, labels: dict, pairs: list, suite: str = SUITE) 
     return "\n".join(out)
 
 
+KR_FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+# failure-rate bins and the sequential blue ramp (steps 100 / 250 / 400 / 550 / 700) — light = few failures
+FAIL_BINS = (0.0, 1.0, 3.0, 10.0, 30.0, 100.0)
+FAIL_COLORS = ("#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b")
+FAIL_TEXT = ("#0b0b0b", "#0b0b0b", "#ffffff", "#ffffff", "#ffffff")
+
+
+def figure(root: str, cols: list, labels: dict, path: str, suite: str = SUITE) -> None:
+    """Heatmap: rows = conditions (grouped by tier, safety rows left out), columns = planners; cell colour =
+    failure rate bin, cell text = success %."""
+    import numpy as np
+
+    sys.path.insert(0, HERE)
+    from report import plt  # noqa: E402  (Agg backend)
+    from matplotlib import font_manager
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.patches import Patch
+    if os.path.exists(KR_FONT):           # Korean labels (Noto Sans CJK carries Hangul in every regional face)
+        font_manager.fontManager.addfont(KR_FONT)
+        plt.rcParams["font.family"] = font_manager.FontProperties(fname=KR_FONT).get_name()
+
+    conds = [c for c in load_suite(suite) if c.get("tier") != "safety"]
+    order = [t for t, _ in TIERS]
+    conds.sort(key=lambda c: order.index(c.get("tier")))
+    val = np.full((len(conds), len(cols)), np.nan)
+    for i, c in enumerate(conds):
+        for j, col in enumerate(cols):
+            s, _ = _load(root, c["name"], col)
+            if s is not None:
+                val[i, j] = 100 * s["success_rate"]
+    fail = 100 - val
+    cmap, norm = ListedColormap(FAIL_COLORS), BoundaryNorm(FAIL_BINS, len(FAIL_COLORS))
+    fig, ax = plt.subplots(figsize=(1.05 * len(cols) + 3.6, 0.27 * len(conds) + 1.6))
+    ax.imshow(np.nan_to_num(fail, nan=0.0), cmap=cmap, norm=norm, aspect="auto")
+    for i in range(len(conds)):
+        for j in range(len(cols)):
+            if np.isnan(val[i, j]):
+                ax.text(j, i, "–", ha="center", va="center", fontsize=7, color="#898781")
+                continue
+            k = int(np.clip(np.searchsorted(FAIL_BINS, fail[i, j], side="right") - 1, 0, len(FAIL_TEXT) - 1))
+            ax.text(j, i, f"{val[i, j]:.1f}", ha="center", va="center", fontsize=7, color=FAIL_TEXT[k])
+    ax.set_xticks(range(len(cols)), [labels.get(c, c) for c in cols], fontsize=7.5, color="#52514e")
+    ax.xaxis.tick_top()
+    ax.set_yticks(range(len(conds)), [c["label"] for c in conds], fontsize=7.5, color="#52514e")
+    ax.tick_params(length=0)
+    # white gaps between cells and between tiers
+    ax.set_xticks(np.arange(-0.5, len(cols), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(conds), 1), minor=True)
+    ax.grid(which="minor", color="#fcfcfb", lw=1.5)
+    for i in range(1, len(conds)):
+        if conds[i]["tier"] != conds[i - 1]["tier"]:
+            ax.axhline(i - 0.5, color="#fcfcfb", lw=5)
+    tier_name = dict(TIERS)
+    for t in order:
+        idx = [i for i, c in enumerate(conds) if c["tier"] == t]
+        if idx:
+            ax.text(len(cols) - 0.4, (idx[0] + idx[-1]) / 2, tier_name[t], rotation=-90, ha="left", va="center",
+                    fontsize=7.5, color="#52514e")
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    fig.legend([Patch(color=c) for c in FAIL_COLORS],
+               [f"{a:g}–{b:g}%" for a, b in zip(FAIL_BINS[:-1], FAIL_BINS[1:])], title="실패율 (숫자 = 성공률 %)",
+               loc="lower center", ncol=len(FAIL_COLORS), frameon=False, fontsize=7.5, title_fontsize=8,
+               labelcolor="#52514e", bbox_to_anchor=(0.5, 0.0))
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fig.savefig(path, dpi=130, facecolor="#fcfcfb")
+    plt.close(fig)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", help="result root (run mode)")
@@ -205,12 +280,15 @@ def main(argv=None) -> int:
     ap.add_argument("--shard", default="0/1", help="k/n: run every n-th condition starting at k")
     ap.add_argument("--num-scenes", type=int, default=512)
     ap.add_argument("--seed", type=int, default=12345)
-    ap.add_argument("--device", default=None)
+    ap.add_argument("--device", default="cpu", help="cpu (default) or cuda:0 — scenes differ between devices "
+                    "(different RNG), so every planner of one result root must use the same device")
+    ap.add_argument("--threads", type=int, default=4, help="torch CPU threads per process")
     ap.add_argument("--force", action="store_true", help="re-run finished condition/planner pairs")
     ap.add_argument("--table", default=None, help="print the markdown table of a result root")
     ap.add_argument("--cols", default=None, help="comma-separated planners (table columns)")
     ap.add_argument("--labels", default=None, help="comma-separated planner=label")
     ap.add_argument("--pair", action="append", default=[], help="a,b: same-scene comparison column")
+    ap.add_argument("--figure", default=None, help="with --table: also write a failure-rate heatmap PNG here")
     a = ap.parse_args(argv)
     if a.table:
         cols = a.cols.split(",") if a.cols else sorted({fn[:-5].replace("__", ":").replace("_plus_", "+")
@@ -218,6 +296,8 @@ def main(argv=None) -> int:
                                                          for fn in os.listdir(os.path.join(a.table, d)) if fn.endswith(".json")})
         labels = dict(x.split("=", 1) for x in a.labels.split(",")) if a.labels else {}
         print(table(a.table, cols, labels, [tuple(p.split(",")) for p in a.pair], a.suite))
+        if a.figure:
+            figure(a.table, cols, labels, a.figure, a.suite)
         return 0
     if not a.out or not a.planner:
         raise SystemExit("--out and --planner are required (or --table <root>)")

@@ -254,6 +254,7 @@ train:
     critic_hidden_dims: [512, 256, 128]
     activation: elu
     init_noise_std: 0.8
+    std_max: null                    # 탐색 잡음 상한 (null = 없음). 행동이 [-1,1] 로 잘리므로 학습 후반 엔트로피 보너스가 잡음을 키운다 (본 학습 0.27→1.6, 미세조정 3.4) — RESULTS §10
     actor_type: mlp                  # mlp | gru | lstm — 순환 정책은 관측 이력을 기억 (export: policy_meta.json 'recurrent')
     rnn_hidden_dim: 128
     rnn_num_layers: 1

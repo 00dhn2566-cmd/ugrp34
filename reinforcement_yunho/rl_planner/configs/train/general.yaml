@@ -30,3 +30,6 @@ curriculum:
     - {n_windows: [3, 5], first_gap: [2.4, 4.0], spacing: [2.4, 3.6], lateral: [-1.0, 1.0], height: [0.7, 1.9],
        yaw_deg: [-40.0, 40.0], opening_w: [0.85, 1.10], opening_h: [0.85, 1.10], corner_noise_px: [4.0, 12.0],
        miss_prob: [0.05, 0.2]}
+train:
+  policy:
+    std_max: 1.0                     # 탐색 잡음 상한 = 행동 범위 반폭 (그 이상은 잘려서 같은 행동; 웜스타트 정책의 3.4 를 1.0 으로)

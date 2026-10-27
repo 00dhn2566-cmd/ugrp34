@@ -22,6 +22,9 @@
 ```
 rl_planner/
   configs/default.yaml      ← 모든 숫자의 단일 진실원 (기체·제어·씬·인지·보상·커리큘럼·DR·학습)
+  configs/stress/           ← 평가 스트레스 조건 (부분 yaml)
+  configs/general/          ← 범용 강건성 평가 세트: 조건 yaml + suite.yaml (레벨·묶음·이름, RESULTS.md §10)
+  configs/train/            ← 학습 프리셋 (general.yaml: 넓은 DR + 넓은 배치 L6 + 검출 공백 관측)
   core/                     ← 백엔드 무관 MDP (torch, Isaac 없이 테스트 가능)
     scene.py                  창문 배치 샘플러 (커리큘럼 레벨별 범위)
     perception.py             인지 대리 모델: 4-corner 검출기 + conf 가중 광선 삼각측량 (recon_rays 와 동일 수식)
@@ -41,6 +44,7 @@ rl_planner/
     safety.py                 실행 시 안전 필터: 인지 상실 시 제자리 정지 비행 + 경계(가상 울타리) — 온보드 기본 적용
   scripts/train.py          rsl_rl PPO 학습 (비대칭 actor-critic, 커리큘럼, DR)
   scripts/evaluate.py       고정 시드 장면에서 RL vs 상태기계 (성공률·충돌률·시간·여유), 계획기 이름 뒤 +safe = 안전 필터
+  scripts/benchmark.py      범용 평가 세트 (조건 수십 개 × 정책 여러 개, 같은 장면) 실행·표 (--table, 짝 비교 --pair)
   scripts/(분석)            tune_fsm · results_table · report · compare_runs(학습 곡선·정체 비교) · analyze_traj ·
                             perception_gaps · play_isaac — 쓰임은 RESULTS.md §9
   eval_harness.py           평가 공통 루틴
@@ -148,15 +152,24 @@ L4 창문 3~5개 + 창문 yaw ±20° → L5 스트레스(σ 4~12 px, 누락 5~20
 `curriculum.fixed_level: <n>` 이면 커리큘럼 없이 한 레벨로만 학습.
 
 **도메인 랜덤화**: 질량 ×[0.56,1] (짐 0~1 kg), 관성 ×[0.55,1] (제어기는 공칭 관성만 앎), 추력 ×[0.9,1.1], 항력,
-모터 시정수 20~50 ms, 수평 바람 0~0.3 m/s², 관측 잡음, 검출 잡음·누락. 선택: 카메라 끊김
-(`domain_randomization.blackout_prob`, 에피소드마다 0.5~4 s 구간 프레임 없음 — 기본 끔, 평가에서는 항상 끔),
-검출 지연 (`domain_randomization.latency_steps: [lo, hi]`, 에피소드마다 결정 스텝 단위 정수 — 기본 끔, 평가에서는 항상 끔).
+모터 시정수 20~50 ms, 수평 바람 0~0.3 m/s², 관측 잡음, 검출 잡음·누락. 선택 (기본 끔): 카메라 끊김
+(`blackout_prob`, 에피소드마다 0.5~4 s 구간 프레임 없음), 검출 지연 (`latency_steps: [lo, hi]`, 결정 스텝 정수),
+그리고 범용 강건성 항목 — 돌풍 (`gust_accel`, 수평 OU 과정 σ, `gust_tau_s`), 지연 변동 (`latency_jitter_steps`),
+프레임 누락 (`frame_drop_prob`), VIO 드리프트 (`pose_drift_m`), 카메라 장착 오차 (`cam_rot_err_deg`), 저수준 제어기 차이
+(`ctrl_kp_scale`, `ctrl_kv_scale`, 속도 적분 `ctrl_ki`). `level_scale: [L0, L1, ...]` 이면 바람·돌풍·끊김·지연·누락·드리프트·
+장착 오차·제어기 차이의 세기를 커리큘럼 레벨마다 곱한다 (쉬운 레벨은 약하게). **평가에서는 `domain_randomization` 절 전체가
+default.yaml 값으로 돌아간다** (`core/config.py` — 넓은 DR 로 학습한 정책도 다른 정책과 같은 분포에서 비교; 스트레스 yaml 은 그 위에 적용).
+매 결정 뽑는 교란(돌풍·누락·지연 변동·드리프트)은 전용 난수열(`dist_gen`)에서 고정 크기로 뽑으므로 계획기가 달라도 같은 교란을 받고,
+모두 끄면 기존과 비트 단위로 같다.
 
 **인지 대리 모델**: 코너 4개가 모두 화면 안 + 정면 방향(입사각 < 70°) + 다른 벽에 가리지 않음 + 짧은 변 ≥ 12 px 일 때
 검출, conf 는 겉보기 크기·입사각의 함수. 코너 픽셀 잡음(실측 검출기 8.87 px 근거) → 시선 → `A += w(I−ddᵀ), b += w(I−ddᵀ)c`
 최소자승 (태민 노드 / recon_rays 와 같은 수식), 시차 2° 게이트. σ 는 잔차 RMS 와 정보행렬 최소 고유값으로 계산 (GT 미사용).
 검출 지연 `perception.latency_steps` (결정 스텝, 1 = 0.1 s): 찍은 프레임이 그만큼 늦게 삼각측량·관측에 들어간다
 (시선은 찍은 순간의 자세로 계산 — VIO 타임스탬프가 맞는 실제 시스템과 같음). 0 이면 버퍼 없이 기존과 비트 단위로 같다.
+평가 전용 인지 손잡이 (평가 때 항상 기본값으로 돌아가고 스트레스 yaml 이 설정): 지연 변동 `latency_jitter_steps` (매 결정 지연 =
+latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임 누락 `frame_drop_prob`, VIO 드리프트 `pose_drift_m` (광선 원점
+랜덤워크 [m/√s]), 카메라 장착 오차 `cam_rot_err_deg` (실제 카메라가 임의 축으로 돌아가 있고 삼각측량은 공칭 장착 사용).
 
 ## 6. 확장 (scalability) — 어디를 고치면 되나
 
@@ -176,6 +189,13 @@ L4 창문 3~5개 + 창문 yaw ±20° → L5 스트레스(σ 4~12 px, 누락 5~20
 | 새 스트레스 조건 | `configs/stress/<이름>.yaml` (부분 설정) — 평가 매트릭스가 자동으로 포함 |
 | 검출 지연 | `perception.latency_steps` (평가 스트레스) / `domain_randomization.latency_steps: [lo, hi]` (학습 DR) |
 | 시드·설정 비교 | `scripts/compare_runs.py --run <run>=<이름> ...` — 학습 곡선 작은 그림 + L5 도달·정체 지표 (RESULTS.md §7) |
+| 범용 평가 조건 추가 | `configs/general/<이름>.yaml` (부분 설정) + `configs/general/suite.yaml` 에 한 줄 (레벨·묶음·이름) → `scripts/benchmark.py` (이어 돌리기 지원: 끝난 조건×계획기는 건너뜀) |
+| 창문 배치 스트레스 | `curriculum.override: {opening_w: [..], yaw_deg: [..], ...}` — 모든 레벨 위에 덮어씀 (평가 전용) |
+| 더 어려운 학습 레벨 | `curriculum.extra_levels: [{...}]` — 기본 레벨 뒤에 붙음, 평가 레벨 L3~L5 는 그대로 |
+| 새 교란 DR | `core/env_core.py` `_robust_draws` (에피소드마다, `reset_gen`) / `pre_decision`·`post_decision` (매 결정, `dist_gen`, 고정 크기) + default.yaml 키 (기본 끔) |
+| 제어기 차이 (게인·적분항) | `domain_randomization.ctrl_kp_scale / ctrl_kv_scale / ctrl_ki` — `Controller.set_variation` 을 구현한 제어기면 됨 |
+| 순환(기억) 정책 | `train.policy.actor_type: gru` (또는 lstm), `rnn_hidden_dim` — export 는 `(obs, state) → (action, state)`, `PolicyPlanner` 가 환경별 상태 관리 (policy_meta.json `recurrent`) |
+| 비평가 특권 정보 추가 | `observation.critic` 에 `dr_params` 등 (`privileged=True` 항목) — 정책 export 에는 안 들어감 |
 
 ## 7. 가정과 한계 (정직하게)
 
