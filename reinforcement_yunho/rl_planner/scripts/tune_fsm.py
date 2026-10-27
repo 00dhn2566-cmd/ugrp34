@@ -35,7 +35,13 @@ def main(argv=None) -> int:
     ap.add_argument("--num-scenes", type=int, default=512)
     ap.add_argument("--seed", type=int, default=4242)
     ap.add_argument("--out", default="/data/runs/rl_planner/fsm_tuning")
+    ap.add_argument("--set", action="append", default=[], help="dotted config override (e.g. perception.ray_forget=0.8)")
+    ap.add_argument("--grid", action="append", default=[], help="replace one grid axis: key=v1,v2,...")
+    ap.add_argument("--device", default=None, help="cpu or cuda:0 (default: config)")
     a = ap.parse_args(argv)
+    for g in a.grid:
+        k, v = g.split("=", 1)
+        GRID[k] = [type(GRID[k][0])(x) for x in v.split(",")] if k in GRID else [float(x) for x in v.split(",")]
 
     import yaml
 
@@ -51,9 +57,9 @@ def main(argv=None) -> int:
         params = dict(zip(keys, vals))
         res = {}
         for L in a.levels:
-            cfg = load_config(overrides=[f"seed={a.seed}", f"sim.num_envs={a.num_scenes}"])
+            cfg = load_config(overrides=[f"seed={a.seed}", f"sim.num_envs={a.num_scenes}", *a.set])
             cfg["fsm"].update(params)
-            env = TorchWindowEnv(cfg, num_envs=a.num_scenes, seed=a.seed)
+            env = TorchWindowEnv(cfg, num_envs=a.num_scenes, seed=a.seed, device=a.device)
             env.core.fixed_level = L
             env.core.reseed(a.seed)          # same scene set as evaluate.py --seed for this level
             env._reset_all()

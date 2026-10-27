@@ -108,7 +108,8 @@ tensorboard --logdir /data/runs/rl_planner
 다음 웨이포인트와 성진 스키마 `waypoints_config` (`{waypoints:[현재, 다음], limits, dt}`) 를 돌려준다.
 정책 출력은 **안전 필터**(`planners/safety.py`)를 거친다: 창문이 하나도 검출되지 않고 목표 창문을 모르는(추정이 없거나
 σ > 0.3 m) 상태가 시작 후 0.5 s / 첫 검출 이후 3 s 를 넘으면 그 자리에 정지 비행하고(`hold: true`), 다시 보이면 정책에
-돌려준다. 웨이포인트는 경기장 상자 안으로 제한한다. 배포 후보는 카메라 끊김 DR 로 미세조정한 정책 + 이 필터 (RESULTS.md §5).
+돌려준다. 웨이포인트는 경기장 상자 안으로 제한한다. 선택: `safety.slow_after_s` 이면 깜깜이(검출 없음 + 목표 모름)가 그 시간을 넘을 때부터
+정지 비행 시점까지 보폭을 선형으로 줄인다 (정지가 벽 앞 전속력에서 시작되지 않게, RESULTS.md §10). 배포 후보는 RESULTS.md §10 끝.
 실제 방 크기는 `OnboardPlanner(..., safety={"bounds": {"x_min": .., "y_abs": .., "z_min": .., "z_max": ..}})` (VIO 좌표).
 
 ## 5. MDP 정의 (설정: `configs/default.yaml`)
@@ -168,8 +169,12 @@ default.yaml 값으로 돌아간다** (`core/config.py` — 넓은 DR 로 학습
 검출 지연 `perception.latency_steps` (결정 스텝, 1 = 0.1 s): 찍은 프레임이 그만큼 늦게 삼각측량·관측에 들어간다
 (시선은 찍은 순간의 자세로 계산 — VIO 타임스탬프가 맞는 실제 시스템과 같음). 0 이면 버퍼 없이 기존과 비트 단위로 같다.
 평가 전용 인지 손잡이 (평가 때 항상 기본값으로 돌아가고 스트레스 yaml 이 설정): 지연 변동 `latency_jitter_steps` (매 결정 지연 =
-latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임 누락 `frame_drop_prob`, VIO 드리프트 `pose_drift_m` (광선 원점
-랜덤워크 [m/√s]), 카메라 장착 오차 `cam_rot_err_deg` (실제 카메라가 임의 축으로 돌아가 있고 삼각측량은 공칭 장착 사용).
+latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임 누락 `frame_drop_prob`, VIO 드리프트 `pose_drift_m` (랜덤워크 [m/√s];
+광선 원점과 자기 위치가 함께 어긋나므로 광선을 찍은 뒤 쌓인 드리프트만 오차가 됨), 카메라 장착 오차 `cam_rot_err_deg` (실제 카메라가
+임의 축으로 돌아가 있고 삼각측량은 공칭 장착 사용).
+**삼각측량 망각 계수** `perception.ray_forget` (기본 1 = recon_rays 와 같은 전체 최소자승): 창문이 새로 검출될 때마다 그 창문의 옛 광선
+가중치에 곱한다 (지수 망각 재귀 최소자승). 먼 거리에서 찍은 광선의 각도 오차(장착·보정 오차)가 위치 편향으로 커지는 것을 줄인다.
+범용 프리셋은 0.8 (RESULTS.md §10). 온보드도 정책의 학습 설정을 그대로 쓰므로 학습과 실행이 같은 추정기를 쓴다.
 
 ## 6. 확장 (scalability) — 어디를 고치면 되나
 
@@ -196,6 +201,9 @@ latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임
 | 제어기 차이 (게인·적분항) | `domain_randomization.ctrl_kp_scale / ctrl_kv_scale / ctrl_ki` — `Controller.set_variation` 을 구현한 제어기면 됨 |
 | 순환(기억) 정책 | `train.policy.actor_type: gru` (또는 lstm), `rnn_hidden_dim` — export 는 `(obs, state) → (action, state)`, `PolicyPlanner` 가 환경별 상태 관리 (policy_meta.json `recurrent`) |
 | 비평가 특권 정보 추가 | `observation.critic` 에 `dr_params` 등 (`privileged=True` 항목) — 정책 export 에는 안 들어감 |
+| 학습 중간 체크포인트 평가 | `scripts/export.py --run <run> --ckpt model_N.pt --out <dir>` → evaluate/benchmark/onboard 에 그대로 |
+| 탐색 잡음 상한 | `train.policy.std_max` (행동이 [-1,1] 로 잘려 엔트로피 보너스가 잡음을 키우는 것을 막음) |
+| 상태기계 재튜닝 | `scripts/tune_fsm.py --set <설정> --grid key=v1,v2 --device cpu` (검증 시드) |
 
 ## 7. 가정과 한계 (정직하게)
 

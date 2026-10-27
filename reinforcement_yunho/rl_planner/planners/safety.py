@@ -14,6 +14,10 @@ mission is nominal:
            policies' longest such streak was 0.3 s before the first detection and
            2.1 s after it (L5, 512 scenes, sigma_safe 0.3 m). Defaults (3 s, 0.3 m)
            were picked on outage tests (RESULTS.md §5).
+* slow   — (``slow_after_s``) after that long without any detection while the target is unknown, the
+           waypoint step shrinks linearly to ``slow_min_scale`` by the time the hold starts, so the hold
+           does not begin at full speed next to a wall: the RL policies fly ~1.1 m/s and were 0.5 m from
+           the next wall when a 3 s outage hold began, closer than their stopping distance (RESULTS.md §10).
 * fence  — clamp every waypoint into the arena box: ``fence_margin_m`` inside the x/y
            bounds; altitude [z_min + 0.25, z_max - 0.3], the same waypoint clamp the
            policy was trained with (so nominal flight is never touched).
@@ -37,6 +41,9 @@ class SafetyFilter:
         self.enabled = bool(s.get("enabled", True))
         self.lost_steps = max(1, int(round(float(s.get("lost_hold_s", 3.0)) / float(step_dt))))
         self.start_steps = max(1, int(round(float(s.get("start_grace_s", 0.5)) / float(step_dt))))
+        so = s.get("slow_after_s")                     # None: no slow-down before the hold
+        self.slow_steps = None if so is None else max(0, int(round(float(so) / float(step_dt))))
+        self.slow_min = float(s.get("slow_min_scale", 0.25))
         ss = s.get("sigma_safe_m", 0.3)               # None: any valid target estimate counts as known
         self.sigma_safe = float("inf") if ss is None else float(ss)
         b, m = s.get("bounds") or cfg["scene"]["bounds"], float(s.get("fence_margin_m", 0.5))
@@ -74,9 +81,16 @@ class SafetyFilter:
         self.holding = hold
         self.hold_steps += hold.long()
         wp_raw = pos + m3.heading_to_world(actions[:, :3] * step_max, yaw)
-        wp = torch.where(hold[:, None], self.hold_pos, wp_raw)
+        wp = wp_raw
+        slowed = torch.zeros_like(hold)
+        if self.slow_steps is not None:               # blind and unknown target: ramp the step down to the hold
+            span = max(1, self.lost_steps - self.slow_steps)
+            scale = ((self.lost_steps - self.since_seen).float() / span).clamp(self.slow_min, 1.0)
+            slowed = self.ever_seen & ~known & ~hold & (self.since_seen > self.slow_steps)
+            wp = torch.where(slowed[:, None], pos + m3.heading_to_world(actions[:, :3] * step_max * scale[:, None], yaw), wp)
+        wp = torch.where(hold[:, None], self.hold_pos, wp)
         wp = torch.maximum(torch.minimum(wp, self.hi), self.lo)
-        touched = hold | (wp != wp_raw).any(-1)          # untouched envs keep the planner's action bit-for-bit
+        touched = hold | slowed | (wp != wp_raw).any(-1)   # untouched envs keep the planner's action bit-for-bit
         out = actions.clone()
         out[:, :3] = torch.where(touched[:, None], (m3.world_to_heading(wp - pos, yaw) / step_max).clamp(-1.0, 1.0),
                                  actions[:, :3])
