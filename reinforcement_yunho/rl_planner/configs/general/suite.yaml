@@ -5,6 +5,7 @@
 conditions:
   - {name: nominal_L4, level: 4, tier: nominal, label: "명목 L4"}
   - {name: nominal_L5, level: 5, tier: nominal, label: "명목 L5"}
+  - {name: ops_limits_L5, level: 5, configs: [general/ops_limits.yaml], tier: nominal, label: "명목 L5 · 팀 운용 한계 (1.6 m/s, 1.6 m/s²)"}
   - {name: gust, level: 4, configs: [general/gust.yaml], tier: in_dr, label: "돌풍 σ 0.3 m/s²"}
   - {name: wind_strong, level: 4, configs: [stress/wind_strong.yaml], tier: in_dr, label: "강풍 0.6~1.0 m/s²"}
   - {name: frame_drop30, level: 4, configs: [general/frame_drop30.yaml], tier: in_dr, label: "프레임 30% 누락"}

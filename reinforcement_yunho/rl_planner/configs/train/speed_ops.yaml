@@ -1,0 +1,8 @@
+# 속도 미세조정 — 팀 운용 한계 안에서 (overall_gilnam/planning/planner_limits.yaml: 물리 한계의 80% — 1.6 m/s, 1.6 m/s^2).
+# speed.yaml 위에 겹쳐 쓴다:  --config general.yaml --config speed.yaml --config speed_ops.yaml
+# 웜스타트: scripts/rescale_action.py --step-max 1.0 0.75 0.4 (1.0 m × kp_pos 1.6 = 1.6 m/s)
+controller:
+  v_max: [1.6, 1.6, 0.8]
+  a_max: 1.6
+action:
+  step_max: [1.0, 0.75, 0.4]

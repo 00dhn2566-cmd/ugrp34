@@ -1,0 +1,5 @@
+# 팀 운용 한계: overall_gilnam/planning/planner_limits.yaml limits (물리 한계의 80% 예산 규칙, 2026-08-11) —
+# 실제 파이프라인은 waypoints_config 에 v_max 1.6 m/s, a_max 1.6 m/s^2 를 넘긴다. 저수준 제어기 포화를 같게 맞춘다.
+controller:
+  v_max: [1.6, 1.6, 0.8]
+  a_max: 1.6
