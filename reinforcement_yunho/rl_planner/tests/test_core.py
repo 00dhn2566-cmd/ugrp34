@@ -531,3 +531,26 @@ def test_constant_vio_offset_leaves_relative_estimates_unchanged():
     v = ests[0].valid & ests[1].valid
     assert bool(v.any()) and torch.equal(ests[0].valid, ests[1].valid)
     assert torch.allclose(ests[0].center[v], ests[1].center[v], atol=1e-4)
+
+
+def test_safety_slowdown_ramps_the_step_and_leaves_seen_envs_untouched():
+    """safety.slow_after_s: blind (no detection) with an unknown target -> the waypoint step shrinks linearly
+    from slow_after_s to the hold (lost_hold_s); envs that see a window keep the planner's action bit-for-bit."""
+    from rl_planner.planners.safety import SafetyFilter
+    cfg = cfg_cpu("safety.slow_after_s=1.0", "safety.lost_hold_s=3.0", "safety.slow_min_scale=0.25")
+    f = SafetyFilter(cfg, 2, "cpu", 0.1)
+    act = torch.tensor([[0.8, 0.3, -0.2], [0.8, 0.3, -0.2]])
+    pos = torch.tensor([[1.0, 0.0, 1.2], [1.0, 0.0, 1.2]])
+    yaw, sm = torch.zeros(2), torch.tensor([0.8, 0.6, 0.4])
+    unknown = torch.zeros(2, dtype=torch.bool)
+    f.filter(act, torch.tensor([True, True]), unknown, pos, yaw, sm)      # first detection
+    scales = []
+    for k in range(1, 33):                                                # hold starts after 3 s (> 30 steps)
+        out = f.filter(act, torch.tensor([False, True]), unknown, pos, yaw, sm)
+        assert torch.equal(out[1], act[1])                                # env 1 keeps seeing: untouched
+        if not bool(f.holding[0]):
+            scales.append(float(out[0, 0] / act[0, 0]))
+    assert scales[:10] == [1.0] * 10                                      # first 1 s blind: no change
+    assert all(b <= a + 1e-6 for a, b in zip(scales[10:], scales[11:]))   # then a monotone ramp ...
+    assert min(scales) >= 0.25 - 1e-6 and scales[-1] < 0.6               # ... down to the floor before the hold
+    assert bool(f.holding[0])

@@ -231,8 +231,9 @@ def figure(root: str, cols: list, labels: dict, path: str, suite: str = SUITE) -
                 val[i, j] = 100 * s["success_rate"]
     fail = 100 - val
     cmap, norm = ListedColormap(FAIL_COLORS), BoundaryNorm(FAIL_BINS, len(FAIL_COLORS))
+    cmap.set_bad("#fcfcfb")                  # not evaluated: surface colour
     fig, ax = plt.subplots(figsize=(1.05 * len(cols) + 3.6, 0.27 * len(conds) + 1.6))
-    ax.imshow(np.nan_to_num(fail, nan=0.0), cmap=cmap, norm=norm, aspect="auto")
+    ax.imshow(np.ma.masked_invalid(fail), cmap=cmap, norm=norm, aspect="auto")
     for i in range(len(conds)):
         for j in range(len(cols)):
             if np.isnan(val[i, j]):
@@ -243,7 +244,7 @@ def figure(root: str, cols: list, labels: dict, path: str, suite: str = SUITE) -
     ax.set_xticks(range(len(cols)), [labels.get(c, c) for c in cols], fontsize=7.5, color="#52514e")
     ax.xaxis.tick_top()
     ax.set_yticks(range(len(conds)), [c["label"] for c in conds], fontsize=7.5, color="#52514e")
-    ax.tick_params(length=0)
+    ax.tick_params(which="both", length=0)
     # white gaps between cells and between tiers
     ax.set_xticks(np.arange(-0.5, len(cols), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, len(conds), 1), minor=True)
