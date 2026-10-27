@@ -1,0 +1,3 @@
+# 모션 블러: 카메라 노출 10 ms (속도 정책의 학습 DR 최대)
+perception:
+  exposure_s: 0.01

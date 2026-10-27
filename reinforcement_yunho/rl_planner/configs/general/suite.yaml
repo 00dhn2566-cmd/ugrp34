@@ -39,6 +39,8 @@ conditions:
   - {name: far, level: 4, configs: [general/far.yaml], tier: held_out, label: "먼 창문 (첫 4~6 m, 간격 3.6~5 m)"}
   - {name: start_offset, level: 4, configs: [general/start_offset.yaml], tier: held_out, label: "시작 위치 크게 어긋남"}
   - {name: many_windows, level: 4, configs: [general/many_windows.yaml], tier: held_out, label: "창문 6~8개 (학습 최대 5)"}
+  - {name: blur10, level: 4, configs: [general/blur10.yaml], tier: held_out, label: "모션 블러 (노출 10 ms)"}
+  - {name: blur20, level: 4, configs: [general/blur20.yaml], tier: held_out, label: "모션 블러 (노출 20 ms)"}
   - {name: combo_mid, level: 4, configs: [general/combo_mid.yaml], tier: compound, label: "복합 (중간, L4)"}
   - {name: combo_hard, level: 5, configs: [general/combo_hard.yaml], tier: compound, label: "복합 (거침, L5)"}
   - {name: blind, level: 4, configs: [stress/blind.yaml], tier: safety, label: "검출 전무 (충돌 여부만)"}

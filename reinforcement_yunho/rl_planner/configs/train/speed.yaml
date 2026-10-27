@@ -1,0 +1,10 @@
+# 속도 미세조정 프리셋 (RESULTS.md §11) — 범용 프리셋 위에 겹쳐 쓴다:
+#   train.py --config rl_planner/configs/train/general.yaml --config rl_planner/configs/train/speed.yaml --resume <웜스타트>
+#   웜스타트: scripts/rescale_action.py --run <범용 정책 run> --step-max 1.25 0.9 0.5 --out <pt>
+# 웨이포인트 보폭 상한을 기체 속도 한계(planner_limits v_max 2.0 m/s)까지 넓힌다: 전진 1.25 m × kp_pos 1.6 = 2.0 m/s
+# (기존 0.8 m 에서는 1.28 m/s 가 상한이었고 정책은 평균 1.17 m/s 로 거기 붙어 날았다). 빨리 날수록 영상이 번지므로
+# 모션 블러(카메라 노출) DR 을 함께 켠다 — 없으면 시뮬에서는 속도가 공짜다.
+action:
+  step_max: [1.25, 0.9, 0.5]
+domain_randomization:
+  exposure_s: [0.0, 0.01]            # 카메라 노출 0~10 ms (레벨별 level_scale 로 키움)
