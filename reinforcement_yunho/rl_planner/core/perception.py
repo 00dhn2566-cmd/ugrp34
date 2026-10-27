@@ -84,6 +84,11 @@ class PerceptionSurrogate:
         self.s = z(E, W, C)
         self.wsum = z(E, W, C)
         self.n_rays = z(E, W, C)
+        # forgetting factor per new detection of a window (1 = plain least squares over every ray so far, as
+        # recon_rays). < 1 down-weights old rays: biases that grow with range (camera mounting / calibration
+        # error, VIO drift) shrink as the drone closes in, at the price of fewer effective rays.
+        self.forget = float(p.get("ray_forget", 1.0))
+        self.n_eff = z(E, W, C)                               # effective ray count under forgetting
         self.n_obs = z(E, W)
         # parallax bookkeeping: first ray + 2D basis, and 4 extreme rays per corner
         self.d0 = z(E, W, C, 3)
@@ -106,7 +111,7 @@ class PerceptionSurrogate:
 
     # ------------------------------------------------------------------ #
     def reset(self, env_ids: torch.Tensor, sigma_px=None, miss_prob=None) -> None:
-        for t in (self.A, self.b, self.s, self.wsum, self.n_rays, self.n_obs, self.d0, self.e1,
+        for t in (self.A, self.b, self.s, self.wsum, self.n_rays, self.n_eff, self.n_obs, self.d0, self.e1,
                   self.e2, self.ext, self.ext_val, self.last_bearing, self.last_side, self.last_conf,
                   self.last_corners_px):
             t[env_ids] = 0.0
@@ -259,6 +264,13 @@ class PerceptionSurrogate:
         M = eye - d_w[..., :, None] * d_w[..., None, :]        # (E,W,4,3,3)
         c = cam_c[:, None, None, :].expand_as(d_w)
         Mc = (M @ c[..., None]).squeeze(-1)
+        if self.forget < 1.0:                                  # decay what a window had before this detection
+            f = torch.where(det, self.forget, 1.0)[..., None].expand(-1, -1, C)
+            self.A *= f[..., None, None]
+            self.b *= f[..., None]
+            self.s *= f
+            self.wsum *= f
+            self.n_eff = self.n_eff * f + det[..., None].float()
         self.A += w[..., None, None] * M
         self.b += w[..., None] * Mc
         self.s += w * (c * Mc).sum(-1)
@@ -315,7 +327,7 @@ class PerceptionSurrogate:
         # sigma: unit-weight-equivalent information matrix -> worst-axis std.
         # Each ray contributes 2 perpendicular residual axes; 3 parameters are fitted,
         # so mean r^2 = sigma^2 (2n - 3) / n  ->  sigma = resid * sqrt(n / (2n - 3)).
-        n = self.n_rays.clamp_min(1.0)
+        n = (self.n_eff if self.forget < 1.0 else self.n_rays).clamp_min(1.0)
         A_unit = A * (n / ws)[..., None, None]
         lam_min = m3.eigmin_sym3(A_unit).clamp_min(1e-9)
         dof = (2 * n - 3).clamp_min(1.0)

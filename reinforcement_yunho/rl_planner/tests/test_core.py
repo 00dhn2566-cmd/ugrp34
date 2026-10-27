@@ -512,3 +512,22 @@ def test_recurrent_policy_export_matches_training_model_and_resets_per_env(tmp_p
     assert all(torch.allclose(r, o, atol=1e-6) for r, o in zip(ref, out))
     pp.reset(torch.tensor([1]))
     assert torch.allclose(pp.act_obs(xs[0])[1], PolicyPlanner(str(tmp_path)).act_obs(xs[0])[1], atol=1e-6)
+
+
+def test_constant_vio_offset_leaves_relative_estimates_unchanged():
+    """VIO drift moves the ray origins AND the planner's own position: an offset that stays constant while
+    the rays are taken changes nothing the planner sees; only drift accumulated since then matters."""
+    ests = []
+    for drift in (None, torch.tensor([0.3, -0.2, 0.1])):
+        env = _env(*(("perception.pose_drift_m=1.0e-12",) if drift is not None else ()), n=8, level=3)
+        env.core.perception.reset(torch.arange(8))           # drop the reset frame (taken before the offset)
+        if drift is not None:
+            env.core.drift[:] = drift
+        for k in range(20):
+            a = torch.zeros(8, env.num_actions)
+            a[:, 0], a[:, 1] = 0.3, 0.6 if (k // 4) % 2 else -0.6       # lateral zig-zag for parallax
+            env.step(a)
+        ests.append(env.core.est)
+    v = ests[0].valid & ests[1].valid
+    assert bool(v.any()) and torch.equal(ests[0].valid, ests[1].valid)
+    assert torch.allclose(ests[0].center[v], ests[1].center[v], atol=1e-4)

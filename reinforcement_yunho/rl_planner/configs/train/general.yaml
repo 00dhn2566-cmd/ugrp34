@@ -1,9 +1,11 @@
 # 범용 강건성 학습 프리셋 (RESULTS.md §10) — train.py --config rl_planner/configs/train/general.yaml
 # 넓은 도메인 랜덤화(바람·돌풍·카메라 끊김·검출 지연·지연 변동·프레임 누락·카메라 장착 오차·제어기 게인/적분항·모터)
-# + 넓은 창문 배치 레벨 L6 + 검출 공백 관측 + 비평가에 DR 조건(특권). DR 세기는 커리큘럼 레벨로 키운다(level_scale).
+# + 넓은 창문 배치 레벨 L6 + 검출 공백 관측 + 비평가에 DR 조건(특권) + 삼각측량 망각 계수 0.8. DR 세기는 커리큘럼 레벨로 키운다(level_scale).
 # 평가에서는 domain_randomization 절이 default.yaml 로 돌아가므로 다른 정책과 같은 분포에서 비교된다.
 # 일부러 넣지 않은 교란 (일반화 확인용, configs/general/suite.yaml tier held_out): VIO 드리프트·자세 잡음, 관측 잡음,
 # 코너 아웃라이어·잡음 배율, 초점 보정, 과중량, 느린 모터(>60 ms), 5 Hz 카메라, 먼 창문, 시작 위치.
+perception:
+  ray_forget: 0.8                    # 삼각측량 망각 계수 (§10): 먼 광선의 장착·보정 오차 편향을 줄임 — 온보드도 policy_meta 설정을 그대로 씀
 observation:
   policy: [lin_vel_heading, gravity_body, ang_vel_body, altitude, last_action, target_estimate, target_detection,
            next_estimate, progress, detection_gap]

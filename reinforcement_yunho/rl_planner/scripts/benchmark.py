@@ -94,9 +94,9 @@ def run(a) -> int:
         for pol, items in groups.items():
             fsm_extra = [a.fsm_config] if a.fsm_config else []
             if pol is None:
-                cfg = load_config(fsm_extra + extra)
+                cfg = load_config(fsm_extra + extra, a.set)
             else:
-                cfg = config_for_policy(trained[pol], fsm_extra + extra)
+                cfg = config_for_policy(trained[pol], fsm_extra + extra, a.set)
             cfg["seed"] = a.seed
             cfg["sim"]["num_envs"] = a.num_scenes
             env = TorchWindowEnv(cfg, num_envs=a.num_scenes, device=device, seed=a.seed)
@@ -119,7 +119,7 @@ def run(a) -> int:
                     planner = SafePlanner(planner, cfg, a.num_scenes, env.device, env.core.step_dt)
                 rec = run_planner(env, planner, record_k=0)
                 summ = summarize(rec)
-                meta = {"condition": c["name"], "level": int(c["level"]), "configs": c.get("configs", []),
+                meta = {"condition": c["name"], "level": int(c["level"]), "configs": c.get("configs", []), "set": a.set,
                         "tier": c.get("tier"), "planner": spec, "policy": policies.get(pol), "seed": a.seed,
                         "num_scenes": a.num_scenes, "scene_fingerprint": fp, "device": device,
                         "threads": a.threads if device == "cpu" else None}
@@ -277,6 +277,7 @@ def main(argv=None) -> int:
     ap.add_argument("--planner", action="append", default=[], help="fsm | fsm+safe | <policy>:rl | <policy>:rl+safe")
     ap.add_argument("--fsm-config", default=None, help="tuned state-machine yaml (merged into every condition)")
     ap.add_argument("--only", default=None, help="comma-separated condition names")
+    ap.add_argument("--set", action="append", default=[], help="dotted override applied to every condition (sweeps)")
     ap.add_argument("--shard", default="0/1", help="k/n: run every n-th condition starting at k")
     ap.add_argument("--num-scenes", type=int, default=512)
     ap.add_argument("--seed", type=int, default=12345)

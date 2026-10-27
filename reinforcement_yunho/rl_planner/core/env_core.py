@@ -326,11 +326,23 @@ class WindowMissionCore:
                                         ray_offset=self.drift if self._drift_on else None, R_err=self.R_err)
         det = self.perception.add_detections(*self._deliver(frame, env_ids))
         self.det = det if self.det is None else self._merge_det(det, env_ids)
-        self.est = self.perception.estimate()
+        self.est = self._estimates()
         self.est_err = PerceptionSurrogate.center_error(self.est, self.scene, self.err_cap)
         tgt = self.target_idx
         self.prev_dist[env_ids] = (_gather(self.scene.center, tgt) - s.pos).norm(dim=-1)[env_ids]
         self.prev_phi[env_ids] = -_gather(self.est_err, tgt).clamp_max(self.err_cap)[env_ids]
+
+    def _estimates(self):
+        """Triangulated estimates in the frame the planner works in. With VIO drift the rays were cast from
+        drifted positions (VIO frame) and the planner's own position drifts the same way, so relative to the
+        TRUE own position the estimates sit shifted by -drift(now): only drift accumulated since the rays were
+        taken matters, as on the real drone."""
+        est = self.perception.estimate()
+        if not self._drift_on:
+            return est
+        import dataclasses
+        d = self.drift[:, None, :] * est.valid[..., None].float()
+        return dataclasses.replace(est, center=est.center - d, corners=est.corners - d[:, :, None, :])
 
     def _deliver(self, frame: tuple, reset_ids: Optional[torch.Tensor] = None) -> tuple:
         """Detection latency: keep ``frame`` (PerceptionSurrogate.add_detections arguments) as the newest
@@ -509,7 +521,7 @@ class WindowMissionCore:
                                         ray_offset=self.drift if self._drift_on else None, R_err=self.R_err)
         self.perception.tick()
         self.det = self.perception.add_detections(*self._deliver(frame))
-        self.est = self.perception.estimate()
+        self.est = self._estimates()
         self.est_err = PerceptionSurrogate.center_error(self.est, self.scene, self.err_cap)
 
         sp = self.mission.step_pass
