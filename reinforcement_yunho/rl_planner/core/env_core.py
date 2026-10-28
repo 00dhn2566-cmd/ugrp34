@@ -77,6 +77,7 @@ class WindowMissionCore:
         self.slung = SlungLoad(cfg, self.E, self.device) if (cfg.get("slung") or {}).get("enabled") else None
         self.layer = None                       # convex layer applied to every action (slung.convex_layer.in_env)
         self._wind_now = None
+        self._layer_hits, self._layer_n = 0.0, 0  # share of actions the layer changed, logged per reset
 
         a = cfg["action"]
         self.yaw_action = bool(a["yaw"])
@@ -511,6 +512,9 @@ class WindowMissionCore:
             log["Metrics/pass_clearance_m"] = float(m.clearance[done][passed].mean())
         for code, name in enumerate(CRASH_NAMES[1:], start=1):
             log[f"Crash/{name}"] = float((m.crash_reason[done] == code).float().mean())
+        if self.layer is not None and self._layer_n:
+            log["Metrics/layer_changed"] = float(self._layer_hits) / self._layer_n
+            self._layer_hits, self._layer_n = 0.0, 0
         self.log = log
 
     # ------------------------------------------------------------------ step
@@ -519,6 +523,8 @@ class WindowMissionCore:
         self.actions = actions.clamp(-1.0, 1.0)
         if self.layer is not None:               # the convex layer in the loop: the env flies the projected action
             self.actions = self.layer.filter(self.actions, self)
+            self._layer_hits = self._layer_hits + self.layer.changed.float().mean()
+            self._layer_n += 1
         if self._gust_on:                        # Ornstein-Uhlenbeck gusts, stationary std = gust_sigma
             a = math.exp(-self.step_dt / self.gust_tau)
             w = torch.randn(self.E, 2, generator=self.dist_gen, device=self.device)
