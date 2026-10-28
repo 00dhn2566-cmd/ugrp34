@@ -797,6 +797,16 @@ def test_scan_gate_chooses_only_after_looking_left_right_up_and_down():
         sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.full((1,), 10.0))
         assert not step(0.0, 1.0, 12.9)
         assert step(0.0, 1.0, 13.0)                                 # timeout: chosen without the full look-around
+        sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.full((1,), 20.0))
+        for k, yaw in enumerate((90.0, 180.0, 270.0)):              # turning the same way: 270 deg is not yet the right side
+            assert not step(yaw, 1.0, 20.2 + 0.2 * k)
+        assert not step(270.0, 1.25, 20.8) and not step(270.0, 0.75, 21.0)   # up and down done
+        assert step(0.0, 0.75, 21.2)                                # one full turn covers left and right
+        sel.gate_dz, sel.gate_zmin = 0.2, 0.9                       # near the floor: no need to scan below scan_z_min
+        sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.full((1,), 30.0))
+        assert not step(45.0, 1.2, 30.2) and not step(-45.0, 1.2, 30.4)
+        assert not step(-45.0, 0.95, 30.6)
+        assert step(-45.0, 0.9, 30.8)                               # down 0.1 m to scan_z_min is enough
 
 
 def test_local_window_subset_detects_the_same_windows():

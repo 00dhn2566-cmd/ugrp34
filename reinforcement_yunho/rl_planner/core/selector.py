@@ -12,8 +12,10 @@
 
 Scan gate (nearest mode, ``mission.scan_yaw_deg`` / ``scan_dz_m`` > 0): after the start and every pass, no window is
 chosen until the look-around has covered left and right (heading +-scan_yaw_deg off the direction the drone left the
-window in) and up and down (+-scan_dz_m off the pass altitude) — or ``scan_timeout_s`` has run out. Only then is the
-nearest window seen so far the target, so a nearer window outside the first view is not skipped. Off by default.
+window in, or one full turn) and up and down (+-scan_dz_m off the pass altitude, but not below ``scan_z_min`` or above
+``scan_z_max``: no need to scan where no window can be, close to the floor or the ceiling) — or ``scan_timeout_s`` has
+run out. Only then is the nearest window seen so far the target, so a nearer window outside the first view is not
+skipped. Off by default.
 
 Both use only what the real stack has (own pose, the windows passed, detections and estimates), so the same class
 runs in simulation and on board. The look-around bookkeeping (``scan``) feeds the ``search_state`` observation:
@@ -45,6 +47,9 @@ class TargetSelector:
         self.gate_yaw = math.radians(float(m.get("scan_yaw_deg", 0.0)))
         self.gate_dz = float(m.get("scan_dz_m", 0.0))
         self.gate_t = float(m.get("scan_timeout_s", 0.0))
+        zlo, zhi = m.get("scan_z_min"), m.get("scan_z_max")
+        self.gate_zmin = -INF if zlo is None else float(zlo)
+        self.gate_zmax = INF if zhi is None else float(zhi)
         self.gated = self.mode == "nearest" and (self.gate_yaw > 0.0 or self.gate_dz > 0.0)
         E, W = int(num_envs), int(max_windows)
         self.E, self.W, self.device = E, W, device
@@ -119,8 +124,11 @@ class TargetSelector:
         self.dz_hi = torch.maximum(self.dz_hi, dz)
         self.dz_lo = torch.minimum(self.dz_lo, dz)
         if self.gated:
-            done = ((self.psi_hi >= self.gate_yaw) & (self.psi_lo <= -self.gate_yaw)
-                    & (self.dz_hi >= self.gate_dz) & (self.dz_lo <= -self.gate_dz))
+            turned = (((self.psi_hi >= self.gate_yaw) & (self.psi_lo <= -self.gate_yaw))
+                      | (self.psi_hi - self.psi_lo >= 2.0 * math.pi))
+            up = (self.gate_zmax - self.ref_z).clamp(0.0, self.gate_dz)
+            down = (self.ref_z - self.gate_zmin).clamp(0.0, self.gate_dz)
+            done = turned & (self.dz_hi >= up) & (self.dz_lo <= -down)
             if self.gate_t > 0.0 and t is not None:
                 done = done | (t - self.ref_t >= self.gate_t)
             self.gate_open = self.gate_open | done
