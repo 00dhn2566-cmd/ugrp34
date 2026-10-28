@@ -106,14 +106,23 @@ class MissionTracker:
             leaves = (uc.abs() + rho > hw) | (vc.abs() + rho > hh)
             wall_touch = near & leaves & (uc.abs() <= self.wall_half + self.r) & (vc.abs() <= self.wall_half + self.r)
         else:
-            # any part of the airframe meeting the wall plane outside the opening, on the panel
+            # any part of the airframe meeting a wall plane outside the opening, on the panel; only the three
+            # panels nearest the drone are checked (distance to the finite panel, not to its infinite plane:
+            # on a 50-window course far panels' planes pass close by all the time)
             Rb = m3.quat_to_rotmat(quat)
-            meets, ctr, half = self.airframe.cut(pos, Rb, c, n, scene.right, scene.up)
-            lim = torch.stack((hw, hh), -1)[:, :, None]
+            rel = pos[:, None, :] - c
+            off = torch.stack(((rel * scene.right).sum(-1), (rel * scene.up).sum(-1)), -1)
+            gap2 = d ** 2 + ((off.abs() - self.wall_half).clamp_min(0.0) ** 2).sum(-1)
+            _, k = torch.where(scene.valid, gap2, torch.full_like(d, math.inf)).topk(min(3, self.W), -1,
+                                                                                      largest=False)
+            dk = d.gather(1, k).abs()
+            pick = lambda t: t.gather(1, k[..., None].expand(-1, -1, t.shape[-1]))  # noqa: E731
+            meets, ctr, half = self.airframe.cut(pos, Rb, pick(c), pick(n), pick(scene.right), pick(scene.up))
+            lim = torch.stack((hw.gather(1, k), hh.gather(1, k)), -1)[:, :, None]
             leaves = ((ctr - half < -lim) | (ctr + half > lim)).any(-1)
             on_panel = ((ctr + half >= -self.wall_half) & (ctr - half <= self.wall_half)).all(-1)
-            near = (d.abs() < self.airframe.reach) & scene.valid
-            wall_touch = near & (meets & leaves & on_panel).any(-1)
+            touch = (dk < self.airframe.reach) & (meets & leaves & on_panel).any(-1)
+            wall_touch = torch.zeros_like(scene.valid).scatter(1, k, touch)
 
         self._flag_crash(live & (wall_touch.any(-1) | (crossed & ~inside & on_wall).any(-1)), CRASH_WALL)
         self._flag_crash(live & (crossed_back & inside).any(-1), CRASH_BACK)
@@ -128,9 +137,11 @@ class MissionTracker:
             if self.airframe is None:
                 slack = torch.minimum(hw - u.abs(), hh - v.abs()) - self.r
             else:                                   # room left around the airframe's shadow at the crossing point
-                lo, hi = self.airframe.shadow(X, Rb, c, scene.right, scene.up)
-                lim = torch.stack((hw, hh), -1)
-                slack = torch.minimum(lim - hi, lim + lo).amin(-1)
+                g = good.float().argmax(-1, keepdim=True)          # the target window: at most one pass per env
+                pick = lambda t: t.gather(1, g[..., None].expand(-1, -1, t.shape[-1]))  # noqa: E731
+                lo, hi = self.airframe.shadow(pick(X), Rb, pick(c), pick(scene.right), pick(scene.up))
+                lim = torch.stack((hw.gather(1, g), hh.gather(1, g)), -1)
+                slack = torch.zeros_like(d).scatter(1, g, torch.minimum(lim - hi, lim + lo).amin(-1))
             self.clearance = torch.where(good, slack, self.clearance)
             self.pass_time = torch.where(good, t_now[:, None].expand_as(self.pass_time), self.pass_time)
             self.passed |= good

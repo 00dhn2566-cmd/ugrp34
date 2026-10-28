@@ -97,7 +97,26 @@ per-frame `time` is authoritative.
 `trajectory_frame_to_T(frame)` then returns a 4×4 whose rotation is `I` and whose
 translation equals `position`.
 
-## Rotor index → geometry + spin (REQUIRED 윤호 decision)
+## Rotor index → geometry + spin (decided 2026-10-28)
+
+**Decision:** index `i` of `motor_cmd_w` is 성진's `Prop(i+1)` — the row order of 성진's
+measured mixer table (08-18; `control_seoungjin/gazebo/worlds/gen_worlds.py`
+`mixer_geometry`), so 성진 keeps emitting in the order he already uses. The single
+source is `rl_planner/configs/default.yaml` → `drone.airframe` (`rotor_angles_deg`,
+`rotor_spin`), which the Isaac airframe (`rl_planner/core/airframe.py`) reads.
+Body frame x forward (camera), y left, z up; rotor radius 0.225 m (450 mm wheelbase).
+
+| index | 성진 | position | azimuth | spin (seen from above) |
+|---|---|---|---|---|
+| 0 | Prop1 | back-right (−x, −y) | −135° | CCW |
+| 1 | Prop2 | back-left (−x, +y) | 135° | CW |
+| 2 | Prop3 | front-right (+x, −y) | −45° | CW |
+| 3 | Prop4 | front-left (+x, +y) | 45° | CCW |
+
+Diagonal rotors spin the same way (1·4 CCW, 2·3 CW): a standard quad-X. Motors 2 and 3
+are the reversed ones, which is why 성진's logs show negative `w` for them.
+
+What the decision had to state (kept for reference):
 
 `motor_cmd_w = [w1, w2, w3, w4]` is **intentionally agnostic** to which physical
 rotor each entry drives and which way it spins — the schema only fixes "four
@@ -162,5 +181,5 @@ python3 interface/schemas.py validate input.json --kind waypoints
   side `validate()`s on ingest and applies `motor_cmd_w` as rotor setpoints
   (physics is the simulator's job), using `trajectory_frame_to_T()` for poses.
 - **Open items for 윤호**: (1) finalise the Isaac Sim JSON schema (both isaacsim
-  schemas are **provisional** until then); (2) publish the rotor index→geometry +
-  CW/CCW spin mapping above.
+  schemas are **provisional** until then); (2) ~~publish the rotor index→geometry +
+  CW/CCW spin mapping above~~ — done 2026-10-28 (table above).
