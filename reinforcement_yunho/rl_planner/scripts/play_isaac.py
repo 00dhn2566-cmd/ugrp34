@@ -6,7 +6,8 @@
 Windows are spawned as visual USD prims (coloured frame bars + translucent grey wall)
 from the episode's sampled scene; physics/referee are exactly the training env's. The drone is
 drawn as the real airframe (core/airframe.py: FX450, red front arms, the camera at the front)
-whatever the referee's shape (drone.shape: sphere | airframe).
+whatever the referee's shape (drone.shape: sphere | airframe), and with configs/slung/base.yaml the load
+on its cable (a box the size of the referee's ball; the header shows the swing).
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ def main(argv=None) -> int:
     ap.add_argument("--config", action="append", default=[], help="extra yaml merged over the config (e.g. tuned fsm)")
     ap.add_argument("--set", action="append", default=[], help="dotted override, e.g. safety.slow_after_s=2.0")
     ap.add_argument("--safe", action="store_true", help="run the planner behind the safety filter (planners/safety.py)")
+    ap.add_argument("--layer", action="store_true", help="and behind the slung-load convex layer (planners/convex_layer.py)")
     ap.add_argument("--title", default=None, help="label prefix in the frame header (default: planner name)")
     ap.add_argument("--view2", choices=("auto", "side", "top"), default="auto",
                     help="right-hand camera: fixed side view of the course, or top-down following the drone "
@@ -79,6 +81,10 @@ def main(argv=None) -> int:
     fsm = planner
     if a.safe:
         planner = SafePlanner(planner, cfg, 1, env.device, core.step_dt)
+    safe_planner = planner
+    if a.layer:
+        from rl_planner.planners.convex_layer import SlungLayerPlanner
+        planner = SlungLayerPlanner(planner, cfg, 1, env.device, core.step_dt)
     planner.reset(torch.arange(1, device=env.device))
 
     stage = omni.usd.get_context().get_stage()
@@ -172,6 +178,26 @@ def main(argv=None) -> int:
         else:
             cylinder(path, c, R, part["radius"], part["length"], mat)
 
+    def frame_z(v):
+        """Rotation whose z axis is v (unit)."""
+        x = np.cross([0.0, 1.0, 0.0] if abs(v[1]) < 0.9 else [1.0, 0.0, 0.0], v)
+        x /= np.linalg.norm(x)
+        return np.stack((x, np.cross(v, x), v), 1)
+
+    slung = core.slung                                    # the load on its cable (core/slung.py), when there is one
+    if slung is not None:
+        side = 2 * slung.radius / np.sqrt(3.0)            # the box whose half-diagonal is the referee's ball
+        load_x = UsdGeom.Xform.Define(stage, "/World/Viz/load")
+        load_op = load_x.AddTransformOp()
+        box("/World/Viz/load/box", np.zeros(3), np.eye(3), (side, side, side),
+            material("/World/Looks/load", (0.78, 0.58, 0.32)))
+        cable = UsdGeom.Cylinder.Define(stage, "/World/Viz/cable")
+        cable.CreateRadiusAttr(0.004)
+        cable.CreateHeightAttr(1.0)
+        cable.CreateAxisAttr("Z")
+        UsdShade.MaterialBindingAPI(cable.GetPrim()).Bind(material("/World/Looks/cable", (0.05, 0.05, 0.05)))
+        cable_op = UsdGeom.Xformable(cable).AddTransformOp()
+
     cams = {}
     for name in ("chase", "side"):
         cam = UsdGeom.Camera.Define(stage, f"/World/Viz/cam_{name}")
@@ -210,6 +236,20 @@ def main(argv=None) -> int:
         M.SetRotateOnly(Gf.Matrix3d(*[float(v) for v in Rb.T.reshape(-1)]))
         M.SetTranslateOnly(Gf.Vec3d(*[float(v) for v in p]))
         drone_op.Set(M)
+        if slung is not None:
+            hk = slung.hook(core.state.pos[:1], core.state.quat[:1])[0][0].cpu().numpy() + origin
+            lp = slung.pos[0].cpu().numpy() + origin
+            seg = lp - hk
+            ln = max(float(np.linalg.norm(seg)), 1e-6)
+            Rc = frame_z(seg / ln)
+            Mc = Gf.Matrix4d(1.0)
+            Mc.SetRotateOnly(Gf.Matrix3d(*[float(v) for v in Rc.T.reshape(-1)]))
+            Mc.SetTranslateOnly(Gf.Vec3d(*[float(v) for v in (hk + lp) / 2]))
+            cable_op.Set(Gf.Matrix4d().SetScale(Gf.Vec3d(1.0, 1.0, ln)) * Mc)
+            Ml = Gf.Matrix4d(1.0)
+            Ml.SetRotateOnly(Gf.Matrix3d(*[float(v) for v in Rc.T.reshape(-1)]))
+            Ml.SetTranslateOnly(Gf.Vec3d(*[float(v) for v in lp]))
+            load_op.Set(Ml)
         if scatter:                                       # behind the drone along its heading (it turns)
             yw = float(core.yaw[0])
             f, l = np.array([np.cos(yw), np.sin(yw), 0.0]), np.array([-np.sin(yw), np.cos(yw), 0.0])
@@ -238,9 +278,13 @@ def main(argv=None) -> int:
                 except Exception:  # noqa: BLE001
                     font = None
                 label = f"{a.title or a.planner.upper()}  t={core.episode_time[0]:.1f}s  passed {int(core.mission.target[0])}/{n_win}"
+                if slung is not None:
+                    hk0 = slung.hook(core.state.pos[:1], core.state.quat[:1])[0][0]
+                    r = slung.pos[0] - hk0
+                    label += f"  swing {float(torch.rad2deg(torch.atan2(r[:2].norm(), -r[2]))):.0f} deg"
                 if a.planner == "fsm":
                     label += f"  state={STATE_NAMES[int(fsm.state[0])]}"
-                if a.safe and bool(planner.safety.holding[0]):
+                if a.safe and bool(safe_planner.safety.holding[0]):
                     label += "  [safety hold]"
                 dr.rectangle((0, 0, 2 * a.width, 30), fill=(20, 20, 20))
                 dr.text((8, 5), label, fill=(255, 255, 255), font=font)

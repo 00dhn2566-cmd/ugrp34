@@ -35,6 +35,7 @@ def main(argv=None) -> int:
     ap.add_argument("--level", type=int, default=4)
     ap.add_argument("--seed", type=int, default=3)
     ap.add_argument("--safe", action="store_true")
+    ap.add_argument("--layer", action="store_true", help="behind the slung-load convex layer (planners/convex_layer.py)")
     ap.add_argument("--png", default=None)
     ap.add_argument("--gif", default=None)
     ap.add_argument("--gif-seconds", type=float, default=60.0)
@@ -78,6 +79,9 @@ def main(argv=None) -> int:
             planner = ScanSupervisor(planner, cfg, 1, "cpu", core.step_dt)
     if a.safe:
         planner = SafePlanner(planner, cfg, 1, "cpu", core.step_dt)
+    if a.layer:
+        from rl_planner.planners.convex_layer import SlungLayerPlanner
+        planner = SlungLayerPlanner(planner, cfg, 1, "cpu", core.step_dt)
     planner.reset(torch.arange(1))
 
     sc = core.scene
@@ -91,8 +95,9 @@ def main(argv=None) -> int:
     log = []                                          # t, x, y, z, yaw, has target, target (referee)
     for _ in range(core.max_episode_length):
         p = core.state.pos[0]
+        lp = core.slung.pos[0] if core.slung is not None else p
         log.append((float(core.episode_time[0]), float(p[0]), float(p[1]), float(p[2]), float(core.yaw[0]),
-                    bool(core.selector.has[0]), int(core.mission.target[0])))
+                    bool(core.selector.has[0]), int(core.mission.target[0]), float(lp[0]), float(lp[1])))
         _, _, d, _ = env.step(planner.act(core))
         if bool(d[0]):
             break
@@ -175,6 +180,11 @@ def main(argv=None) -> int:
             wedge = np.array([[x, y]] + [[x + 4.5 * math.cos(yw + s), y + 4.5 * math.sin(yw + s)]
                                          for s in np.linspace(-hfov, hfov, 12)])
             ax.fill(wedge[:, 0], wedge[:, 1], color="#f5b041", alpha=0.25, lw=0)
+            if core.slung is not None:                   # the load on its cable, from above
+                lx, ly = log[i][7], log[i][8]
+                ax.plot([x, lx], [y, ly], "-", color="#2c3e50", lw=1.0, zorder=4)
+                ax.add_patch(Circle((lx, ly), core.slung.radius, facecolor="#c8a064", edgecolor="#7d5a2c", lw=0.8,
+                                    zorder=4))
             draw_drone(ax, x, y, yw)
             ax.set_xlim(x - 7, x + 7)
             ax.set_ylim(y - 5.25, y + 5.25)
