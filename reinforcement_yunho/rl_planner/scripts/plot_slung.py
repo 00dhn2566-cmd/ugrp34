@@ -3,6 +3,8 @@ one row per planner on the same scene — e.g. the network alone and behind the 
 
     python rl_planner/scripts/plot_slung.py --policy <run>/export --level 4 --seed 3 --png slung_side.png \
         [--planner rl+safe --planner rl+safe+layer]
+    python rl_planner/scripts/plot_slung.py --policy g=<export> --policy s=<export> \
+        --planner g:rl+safe --planner g:rl+safe+layer --planner s:rl+safe+layer --png cmp.png   # several policies
 
 The rig is configs/slung/base.yaml (more yamls with --config). Horizontal axis: x along the course; vertical:
 height, true to scale. Each window is its wall (grey, floor to ceiling) with the opening left open, drawn at its
@@ -27,8 +29,9 @@ SLUNG = os.path.join(os.path.dirname(HERE), "configs", "slung", "base.yaml")
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--policy", required=True, help="export dir")
-    ap.add_argument("--planner", action="append", default=[], help="rl | rl+safe | rl+safe+layer (repeatable)")
+    ap.add_argument("--policy", action="append", required=True, help="export dir, or name=export dir (repeatable)")
+    ap.add_argument("--planner", action="append", default=[],
+                    help="[name:]rl | rl+safe | rl+safe+layer (repeatable; no name: the first policy)")
     ap.add_argument("--config", action="append", default=[], help="yaml merged after configs/slung/base.yaml")
     ap.add_argument("--set", action="append", default=[])
     ap.add_argument("--level", type=int, default=4)
@@ -37,7 +40,9 @@ def main(argv=None) -> int:
     ap.add_argument("--png", required=True)
     ap.add_argument("--title", default=None)
     a = ap.parse_args(argv)
-    specs = a.planner or ["rl+safe", "rl+safe+layer"]
+    pols = dict(p.split("=", 1) if "=" in p else ("", p) for p in a.policy)
+    first = next(iter(pols))
+    specs = [s_.split(":", 1) if ":" in s_ else (first, s_) for s_ in (a.planner or ["rl+safe", "rl+safe+layer"])]
 
     import matplotlib
     matplotlib.use("Agg")
@@ -55,13 +60,17 @@ def main(argv=None) -> int:
     from rl_planner.planners.policy import PolicyPlanner
     from rl_planner.planners.safety import SafePlanner
     torch.set_num_threads(4)
-    with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
-        cfg = config_for_policy(json.load(f)["config"], [SLUNG] + a.config, ["device=cpu"] + a.set)
+    cfgs = {}
+    for name, path in pols.items():
+        with open(os.path.join(path, "policy_meta.json"), encoding="utf-8") as f:
+            cfgs[name] = config_for_policy(json.load(f)["config"], [SLUNG] + a.config, ["device=cpu"] + a.set)
+    cfg = cfgs[first]
     af = Airframe(cfg, "cpu")
     tip = float(af.rotors[:, 0].abs().max()) + af.rho                # prop tip along the body x axis (side view)
 
     runs = []
-    for spec in specs:
+    for name, spec in specs:
+        cfg = cfgs[name]
         env = TorchWindowEnv(cfg, num_envs=1, device="cpu", seed=a.seed)
         core = env.core
         core.fixed_level = a.level
@@ -70,7 +79,7 @@ def main(argv=None) -> int:
         base, _, guard = spec.partition("+")
         if base != "rl":
             raise SystemExit(f"unknown planner {spec!r}")
-        planner = PolicyPlanner(a.policy, device="cpu", cfg=cfg)
+        planner = PolicyPlanner(pols[name], device="cpu", cfg=cfg)
         guards = guard.split("+") if guard else []
         if "safe" in guards:
             planner = SafePlanner(planner, cfg, 1, "cpu", core.step_dt)
@@ -91,12 +100,13 @@ def main(argv=None) -> int:
             if bool(d[0]):
                 break
         rec = core.episode_record
-        crash = bool(rec["crashed"][0])
-        outcome = "course done" if bool(rec["success"][0]) else (
-            f"crash: {CRASH_NAMES[int(rec['crash_reason'][0])]}" if crash else "timeout")
-        summary = f"{spec}: {int(rec['windows_passed'][0])}/{n} windows, {float(rec['time_s'][0]):.1f} s, {outcome}"
+        reason = CRASH_NAMES[int(rec["crash_reason"][0])] if bool(rec["crashed"][0]) else None
+        outcome = "course done" if bool(rec["success"][0]) else (f"crash: {reason}" if reason else "timeout")
+        summary = (f"{name + ' ' if name else ''}{spec}: {int(rec['windows_passed'][0])}/{n} windows, "
+                   f"{float(rec['time_s'][0]):.1f} s, {outcome}")
         print(f"[plot] {summary}")
-        runs.append((summary, np.array(log), win, bool(rec["success"][0]), crash, core.slung.radius))
+        runs.append((summary, np.array(log), win, bool(rec["success"][0]), reason in ("load", "cable"),
+                     core.slung.radius))
         env.close()
 
     z_top = float(cfg["scene"]["bounds"]["z_max"])
@@ -105,7 +115,7 @@ def main(argv=None) -> int:
     k = min(0.62, 14.0 / (x_hi - x_lo))            # inches per metre, both axes (true to scale)
     fig, axes = plt.subplots(len(runs), 1, figsize=(1.2 + (x_hi - x_lo) * k, 0.5 + (z_top * k + 0.5) * len(runs)),
                              sharex=True, squeeze=False)
-    for ax, (summary, L, (C, S), ok, crash, r_load) in zip(axes[:, 0], runs):
+    for ax, (summary, L, (C, S), ok, at_load, r_load) in zip(axes[:, 0], runs):
         for c, sz in zip(C, S):                     # wall with the opening
             lo, hi = c[2] - sz[1] / 2, c[2] + sz[1] / 2
             ax.plot([c[0], c[0]], [0.0, lo], "-", color="#9aa3a9", lw=5, solid_capstyle="butt")
@@ -121,8 +131,7 @@ def main(argv=None) -> int:
             ax.add_patch(Circle((lx, lz), r_load, facecolor="#c8a064", edgecolor="#7d5a2c", lw=0.6, alpha=0.85,
                                 zorder=4))
         end = "#1e8449" if ok else "#c0392b"
-        ax.plot(L[-1, 7] if crash and "load" in summary else L[-1, 1],
-                L[-1, 8] if crash and "load" in summary else L[-1, 2], "X", color=end, ms=9, zorder=6)
+        ax.plot(L[-1, 7] if at_load else L[-1, 1], L[-1, 8] if at_load else L[-1, 2], "X", color=end, ms=9, zorder=6)
         ax.set_title(summary, fontsize=9, loc="left")
         ax.set_aspect("equal")
         ax.set_ylim(0.0, z_top)
