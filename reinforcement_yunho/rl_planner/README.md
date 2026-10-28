@@ -146,6 +146,37 @@ $PY rl_planner/scripts/plot_course.py --policy <export> --config rl_planner/conf
 $PY rl_planner/scripts/scan_stats.py --policy <export> --config rl_planner/configs/scan/long50.yaml
 ```
 
+**실제 기체 (FX450)** (RESULTS.md §13): 판정의 기본은 지름 0.60 m 구(`drone.collision_radius`)다. `configs/drone/fx450.yaml`
+(`drone.shape: airframe`)을 넣으면 실제 기체 모양으로 판정한다 (`core/airframe.py`): 휠베이스 450 mm X 에 10 인치 프롭 원판 4 개,
+몸체 0.20×0.20×0.06 m, 짐 1 kg 상자 0.14 m (무게중심 3.2 cm 아래). 프롭 원판은 창문면이 자르는 현(chord)으로, 상자는 투영으로
+판정하고, 통과 여유는 기체를 창문면에 비춘 그림자로 잰다. 치수 출처는 DJI F450 공식 스펙(휠베이스 450 mm, 10×3.8 인치 프롭, 프레임
+282 g, 이륙 0.8~1.6 kg)과 성진 Gazebo SDF·CAD(질량·관성·무게중심·상자). 렌더(`play_isaac.py`, `plot_course.py`)는 판정 모양과
+상관없이 늘 이 기체를 자세까지 그린다 (앞 암 빨강, 카메라는 앞). `configs/drone/fx450_e310.yaml` 은 추력/무게를 DJI E310
+최대 추력(800 g/로터 @3S) 수준 1.41 로 낮춘다 (기본 2.0). 대조 중 나온 것: 짐 포함 2.27 kg 은 F450 최대 이륙 중량의 1.42 배,
+성진 모터 모델은 짐 1 kg 에서 최대 추력이 호버 추력과 같다 (`qc_motor.hpp` 토크 상한 0.2 N·m 에서 평형 634 rad/s), Gazebo 월드
+생성기(`gen_worlds.py`)는 모터 위치를 √2 로 두 번 나눠 x=y=0.1125 m (휠베이스 318 mm, 이웃 프롭이 겹침) — 문서·C++ 는 0.159 m.
+
+**줄에 매단 짐 + convex layer** (RESULTS.md §14): `configs/slung/base.yaml` 은 짐 1 kg 을 기체 아래 갈고리(무게중심 5 cm 아래)에
+0.4 m 줄로 매단다 (`core/slung.py`: 당기기만 하는 스프링·감쇠 줄, 느슨해질 수 있음; 짐은 코어가 적분해 torch·Isaac 이 같은 진자를
+난다). 짐(구 0.12 m)과 줄도 모든 개구부를 지나야 하고, 완주는 짐이 마지막 창문을 지나야 인정된다. 신경망은 그대로 두고 뒤에
+convex layer (`planners/convex_layer.py`)를 붙인다: 웨이포인트 제어기 폐루프 + 선형화한 진자로 1 s 앞을 예측해, 흔들림 25° 안,
+목표 창문과 방금 지난 창문(짐이 아직 안 지났으면)의 개구부 안, 행동 상자 안을 지키는 행동 중 신경망 행동에 가장 가까운 것을 QP 로
+고른다. QP 는 모든 환경을 한 번에 푸는 GPU 배치 ADMM (`core/qp.py`, osqp 와 대조). 드론에 있는 정보만 쓴다 (자기 자세, 줄
+센서 = 갈고리 기준 짐 위치·속도, 창문 추정).
+
+```bash
+# 평가: 신경망만 / + convex layer (재학습 없이)
+$PY rl_planner/scripts/benchmark.py --out <root> --config rl_planner/configs/slung/base.yaml \
+    --policy g=<export> --planner g:rl+safe --planner g:rl+safe+layer
+# 학습: 줄 센서 관측을 가중치 0 으로 붙이고, layer 를 환경 안에 둔 채 이어 학습 (slung.convex_layer.in_env)
+$PY rl_planner/scripts/expand_obs.py --run <gen_mlp run> --ckpt model_3997.pt --add slung --out ws.pt
+$PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 800 --resume ws.pt \
+    --config rl_planner/configs/train/general.yaml --config rl_planner/configs/slung/base.yaml \
+    --config rl_planner/configs/slung/train.yaml --set "observation.policy=[...,slung]"   # expand_obs 가 출력하는 목록
+# 렌더: 기체 + 줄 + 짐 (머리줄에 흔들림 각)
+$PY rl_planner/scripts/play_isaac.py --policy <export> --config rl_planner/configs/slung/base.yaml --level 4 --safe --layer
+```
+
 ## 5. MDP 정의 (설정: `configs/default.yaml`)
 
 **결정 주기** 10 Hz (물리·제어 100 Hz × decimation 10). **에피소드** 최대 45 s.
