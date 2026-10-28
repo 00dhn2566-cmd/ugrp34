@@ -60,6 +60,9 @@ class SlungConvexLayer:
         self.iters = int(cl.get("iters", 40))
         self.rho = float(cl.get("rho", 1.0))
         self.w_future = float(cl.get("future_weight", 1.0))
+        # pull toward the middle of the opening near a window [per m^2] (0: off): the drone-plus-load stack centred
+        # leaves the same room above the drone and below the load, robust to a biased window estimate
+        self.w_center = float(cl.get("center_weight", 0.0))
         self.N = max(1, int(round(float(cl.get("horizon_s", 1.0)) / step_dt)))
         blk = max(1, int(cl.get("block", 3)))
         self.nb = math.ceil((self.N - 1) / blk) if self.N > 1 else 0
@@ -136,6 +139,9 @@ class SlungConvexLayer:
         x_ref = torch.cat((a3, d_ref.clamp(-1, 1).repeat(1, self.nb)), -1)
         nom = free + (J @ x_ref[:, None, :, None])[..., 0]               # (E,N,10)
         rows, lo, hi = [], [], []
+        cP = torch.zeros(E, n, n, device=dev) if self.w_center > 0 else None
+        cq = torch.zeros(E, n, device=dev) if self.w_center > 0 else None
+        v_mid = 0.5 * (self.drop + self.r_load - self.drone_half[1])   # drone height that centres the stack
 
         def add(row, val, lo_b, hi_b):                                    # lo_b <= val + row x <= hi_b
             rows.append(row)
@@ -164,6 +170,11 @@ class SlungConvexLayer:
                     val = (fp * axis[:, None]).sum(-1)
                     lim = (ghalf[:, half_i:half_i + 1] - h_obj - self.margin).clamp_min(0.0).expand_as(val)
                     add(row, val, torch.where(act, -lim, -INF), torch.where(act, lim, INF))
+                    if cP is not None and idx == self.IQ:
+                        ra = row * act[..., None]
+                        tgt = v_mid if half_i == 1 else 0.0
+                        cP = cP + self.w_center * torch.einsum("ekn,ekm->enm", ra, ra)
+                        cq = cq + self.w_center * torch.einsum("ekn,ek->en", ra, (val - tgt) * act)
         A = torch.cat([r.reshape(E, -1, n) for r in rows], 1)
         l = torch.cat([v.reshape(E, -1) for v in lo], 1)
         u = torch.cat([v.reshape(E, -1) for v in hi], 1)
@@ -175,6 +186,8 @@ class SlungConvexLayer:
         w[3:] = self.w_future
         P = torch.diag_embed(w.expand(E, n))
         q = -w * x_ref
+        if cP is not None:
+            P, q = P + cP, q + cq
         warm = self.warm if self.warm is not None and self.warm[1].shape == l.shape else None
         x, z, y, _, _ = solve_qp(P, q, A, l, u, iters=self.iters, rho=self.rho, warm=warm)
         self.warm = (x.detach(), z.detach(), y.detach())
