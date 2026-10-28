@@ -53,7 +53,7 @@ class SlungConvexLayer:
         self.L = float(s["cable_length"]) + m_L * g / float(s["cable_stiffness"])     # pendulum length (stretched)
         self.drop = self.L - float(s["attach"][2])       # load below the centre of mass: hook offset + cable
         self.r_load = float(s["load_radius"])
-        self.drone_half = [float(v) for v in cl.get("drone_half_m", [0.30, 0.08])]   # (across, up/down) in a window
+        self.drone_half = [float(v) for v in cl.get("drone_half_m", [0.32, 0.10])]   # (across, up/down) in a window
         self.margin = float(cl.get("margin_m", 0.05))
         self.band = float(cl.get("gate_band_m", 0.35))
         self.max_swing = math.sin(math.radians(float(cl.get("max_swing_deg", 25.0))))
