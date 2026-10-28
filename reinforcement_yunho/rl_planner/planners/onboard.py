@@ -25,7 +25,8 @@ Minimal use (one window mission, 10 Hz):
     for each camera frame:   planner.add_frame(p_WI, q_WI_xyzw, vision_msg)      # §5 dict
     every 0.1 s:             out = planner.step(drone_state)                     # §6.1 dict
                              send out["waypoints_config"] to the trajectory/PID stack
-    after crossing a window: planner.mark_passed()   (or let it detect the crossing itself)
+    after crossing a window: planner.mark_passed()   (or let it detect the crossing itself: auto_pass=True, the
+                             default, counts a pass when the drone crosses the estimated plane of the window it flies to)
 
 Look-around policies (RESULTS.md §12; policy_meta action.yaw, mission.selection nearest) also steer the heading:
 ``out["yaw"]`` is the heading set-point [rad, world] (the waypoints_config schema has no yaw — the controller needs
@@ -46,6 +47,7 @@ from ..core.config import Cfg, default_section
 from ..core.dynamics import RigidBodyState
 from ..core.observations import build_spec, compute_group, _gather
 from ..core.perception import PerceptionSurrogate
+from ..core.scene import window_frame
 from ..core.selector import TargetSelector
 from .policy import PolicyPlanner
 from .safety import SafetyFilter
@@ -71,9 +73,11 @@ class _Scene:
 
 
 class OnboardPlanner:
+    PASS_TOL = 0.2                       # [m] slack on the estimated opening for the planner's own pass check
     def __init__(self, export_dir: str, n_windows: int, device: str = "cpu", limits: Optional[dict] = None,
-                 safety: Optional[Mapping] = None):
+                 safety: Optional[Mapping] = None, auto_pass: bool = True):
         self.device = torch.device(device)
+        self.auto_pass = bool(auto_pass)
         self.policy = PolicyPlanner(export_dir, device=device)
         self.cfg = Cfg(self.policy.meta["config"])
         self.cfg["perception"]["frame_every"] = 1
@@ -116,6 +120,7 @@ class OnboardPlanner:
         self.yaw = torch.zeros(1, device=self.device)
         self.body_x_w = torch.tensor([[1.0, 0.0, 0.0]], device=self.device)
         self._prev_d: Optional[float] = None
+        self._prev_pos: Optional[torch.Tensor] = None
         self._prev_k = -1
         self._pass_pending: Optional[torch.Tensor] = None
 
@@ -193,18 +198,26 @@ class OnboardPlanner:
         self.body_x_w = m3.quat_to_rotmat(s.quat)[..., :, 0]
 
     def _auto_pass(self) -> None:
-        """Advance the target when the drone crosses the ESTIMATED window plane inside the opening."""
+        """Advance the target when the drone crosses the ESTIMATED window plane inside the opening (estimated size
+        + PASS_TOL; a crossing beside the window — around its panel — is not a pass)."""
         k = self.selector.sel
         if int(k[0]) != self._prev_k:            # another window chosen: its plane has no history yet
             self._prev_k, self._prev_d = int(k[0]), None
         if not bool(_gather(self.est.valid, k)[0]) or not bool(self.selector.has[0]):
             return
         c, n = _gather(self.est.center, k), _gather(self.est.normal, k)
-        d = float(((self.state.pos - c) * n).sum())
+        pos = self.state.pos
+        d = float(((pos - c) * n).sum())
         if self._prev_d is not None and self._prev_d > 0 >= d:
-            self.mark_passed()
-            return
+            f = self._prev_d / max(self._prev_d - d, 1e-9)
+            x = self._prev_pos + f * (pos - self._prev_pos) - c          # crossing point, in the plane
+            right, up = window_frame(n)
+            half = _gather(self.est.size, k)[0] / 2 + self.PASS_TOL
+            if abs(float((x * right).sum())) <= float(half[0]) and abs(float((x * up).sum())) <= float(half[1]):
+                self.mark_passed()
+                return
         self._prev_d = d
+        self._prev_pos = pos.clone()
 
     @torch.no_grad()
     def step(self, drone_state: Mapping, t_s: Optional[float] = None) -> dict:
@@ -219,7 +232,8 @@ class OnboardPlanner:
         if self._pass_pending is not None:       # mark_passed() since the last step
             self._restart_look_around()
         self.selector.select(self.scene, self.mission, self.est, self.perception)   # passes reported since the last step
-        self._auto_pass()
+        if self.auto_pass:
+            self._auto_pass()
         if self._pass_pending is not None:       # crossing detected just now from this state
             self._restart_look_around()
             self.selector.select(self.scene, self.mission, self.est, self.perception)

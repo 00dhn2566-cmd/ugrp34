@@ -34,7 +34,10 @@ def test_onboard_matches_training_obs_and_actions():
     env.core.fixed_level = 3
     env._reset_all()
     core = env.core
-    ob = OnboardPlanner(EXPORT, n_windows=int(core.scene.n_windows[0]), device="cpu")
+    nearest = cfg.get("mission", {}).get("selection", "order") == "nearest"
+    # nearest: the referee reports the passes (the planner's own crossing check uses the estimated plane, which a slow
+    # drone can cross a few decisions before the true one — that would restart the look-around earlier than the env)
+    ob = OnboardPlanner(EXPORT, n_windows=int(core.scene.n_windows[0]), device="cpu", auto_pass=not nearest)
 
     def vision_msg():
         pr = core.perception
@@ -55,7 +58,6 @@ def test_onboard_matches_training_obs_and_actions():
     max_diff = 0.0
     holds = 0
     term_diff = {}
-    nearest = cfg.get("mission", {}).get("selection", "order") == "nearest"
     yaw_diff = 0.0
     for t in range(150):
         ds = drone_state()
@@ -83,3 +85,32 @@ def test_onboard_matches_training_obs_and_actions():
     assert max_diff < 1e-3, f"onboard actions differ from training-env actions by {max_diff}"
     assert holds == 0, f"safety hold triggered {holds} times on a nominal mission"
     assert yaw_diff < 1e-3, f"onboard heading set-point differs from the env's by {yaw_diff} rad"
+
+
+@pytest.mark.skipif(not EXPORT, reason="set RL_PLANNER_EXPORT to an export dir")
+def test_onboard_counts_its_own_pass_only_through_the_opening():
+    """auto_pass: crossing the estimated plane of the chosen window counts as a pass only inside the estimated
+    opening (+ PASS_TOL) — flying past the side of the window (around its panel) is not a pass."""
+    from rl_planner.core.perception import Estimates
+    from rl_planner.planners.onboard import OnboardPlanner
+
+    def run(y):
+        ob = OnboardPlanner(EXPORT, n_windows=2, device="cpu")
+        W = ob.W
+        z = lambda *s: torch.zeros(1, W, *s)  # noqa: E731
+        center, normal, size = z(3), z(3), torch.ones(1, W, 2)
+        center[0, 0] = torch.tensor([3.0, 0.0, 1.0])
+        normal[0, 0] = torch.tensor([-1.0, 0.0, 0.0])                 # approach side: x < 3
+        valid = torch.zeros(1, W, dtype=torch.bool)
+        valid[0, 0] = True
+        ob.est = Estimates(valid=valid, corners=z(4, 3), center=center, normal=normal, size=size,
+                           parallax_deg=z(), resid_rms=z(), sigma=z(), n_obs=z())
+        ob.selector.sel[:] = 0
+        ob.selector.has[:] = True
+        for x in (2.6, 2.9, 3.2):
+            ob.state.pos = torch.tensor([[x, y, 1.0]])
+            ob._auto_pass()
+        return int(ob.mission.target[0])
+
+    assert run(0.3) == 1                                              # through the opening
+    assert run(1.2) == 0                                              # beside it, across the plane
