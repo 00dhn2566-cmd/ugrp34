@@ -1,0 +1,7 @@
+# 스캔 게이트 + 게이트 관측 (RESULTS.md §12) — scan_gate.yaml 위에 겹쳐 쓴다. 웜스타트:
+#   scripts/expand_obs.py --run <scan_e run> --ckpt model_6000.pt --add scan_gate --out <pt>
+# scan_gate (5) = 지금 창문을 고를 수 있는지, 그리고 아직 남은 둘러보기 — 왼쪽·오른쪽 방향 (/π, 한 바퀴면 둘 다 0), 올라갈·내려갈 높이.
+# 게이트 조건(±70°, ±0.5 m, 고도 1.0~2.4 m 안)을 search_state 의 극값에서 추론하지 않고 바로 보게 한다.
+observation:
+  policy: [lin_vel_heading, gravity_body, ang_vel_body, altitude, last_action, target_estimate, target_detection,
+           next_estimate, progress, detection_gap, search_state, last_pass, scan_gate]

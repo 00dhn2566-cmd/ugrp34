@@ -181,6 +181,24 @@ class TargetSelector:
         return torch.cat((hf[:, None], geo * hf[:, None], torch.stack((torch.cos(dpsi), torch.sin(dpsi)), -1) * hf[:, None],
                           dist), -1)
 
+    def gate_features(self) -> torch.Tensor:
+        """(E,5): the scan gate — open (a window may be chosen), and the look-around still missing before it opens:
+        heading to the left / to the right (/ pi; one full turn does both), climb / descent [m]. Without a gate:
+        open, nothing missing."""
+        out = torch.zeros(self.E, 5, device=self.device)
+        out[:, 0] = self.gate_open.float()
+        if not self.gated:
+            return out
+        full = self.psi_hi - self.psi_lo >= 2.0 * math.pi
+        up = (self.gate_zmax - self.ref_z).clamp(0.0, self.gate_dz)
+        down = (self.ref_z - self.gate_zmin).clamp(0.0, self.gate_dz)
+        miss = torch.stack(((self.gate_yaw - self.psi_hi).clamp_min(0.0) / math.pi,
+                            (self.psi_lo + self.gate_yaw).clamp_min(0.0) / math.pi,
+                            (up - self.dz_hi).clamp_min(0.0), (down + self.dz_lo).clamp_min(0.0)), -1)
+        miss[:, :2] = miss[:, :2] * (~full).float()[:, None]
+        out[:, 1:] = miss * (~self.gate_open).float()[:, None]
+        return out
+
     def search_features(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """(E,10): sin/cos heading off the reference direction, explored heading extremes / pi, altitude off the
         reference and its explored extremes / 2 m, seconds since the reference / 10, candidates known / 3, any."""

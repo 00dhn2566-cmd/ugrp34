@@ -165,6 +165,13 @@ def search_state(core):
     return core.selector.search_features(core.state.pos[:, 2], core.episode_time)
 
 
+@register("scan_gate", 5)
+def scan_gate(core):
+    """The scan gate (mission.scan_*, core/selector.py): may a window be chosen yet, and how much look-around is
+    still missing — heading to the left / right (/ pi), climb / descent [m]."""
+    return core.selector.gate_features()
+
+
 # ----------------------------------------------------------------------------- critic
 @register("target_gt", 8, privileged=True)
 def target_gt(core):

@@ -806,7 +806,10 @@ def test_scan_gate_chooses_only_after_looking_left_right_up_and_down():
         sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.full((1,), 30.0))
         assert not step(45.0, 1.2, 30.2) and not step(-45.0, 1.2, 30.4)
         assert not step(-45.0, 0.95, 30.6)
+        g = sel.gate_features()[0]                                  # closed; missing: nothing sideways, 0.05 m down
+        assert float(g[0]) == 0.0 and float(g[1]) == 0.0 and float(g[2]) == 0.0 and abs(float(g[4]) - 0.05) < 1e-5
         assert step(-45.0, 0.9, 30.8)                               # down 0.1 m to scan_z_min is enough
+        assert float(sel.gate_features()[0, 0]) == 1.0 and float(sel.gate_features()[0, 1:].abs().sum()) == 0.0
 
 
 def test_local_window_subset_detects_the_same_windows():
