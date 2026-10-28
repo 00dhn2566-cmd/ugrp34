@@ -128,7 +128,9 @@ tensorboard --logdir /data/runs/rl_planner
 에는 yaw 가 없으니 제어기에 yaw 입력을 따로 넣어야 한다. 이때 검출 메시지의 `order_index` 는 추적 번호(창문마다 고정)로 쓰인다.
 통과는 `mark_passed()` 로 알려 주거나 플래너가 스스로 센다 (`auto_pass=True` 기본: 추정한 창문 면을 개구부 안 ±0.2 m 로 지날 때).
 
-배포 후보는 `window_mission/*_scan_c2/export_6000` + 안전 필터 (`safety.scan_hold: true`; 평가 시드: 꺾인 코스 L4 94%, 창문 50 개 L4 70%, 극한 배치 37%; RESULTS.md §12).
+배포 후보는 `window_mission/*_scan_fx/export_6900` + 안전 필터 (`safety.scan_hold: true`; 실제 기체(FX450) 판정, 평가 시드: 꺾인
+코스 L4 94%, 창문 50 개 L4 78%, 극한 배치 41%; RESULTS.md §13). scan_c2 (`export_6000`, §12) 에서 판정만 실제 기체로 바꿔 이어 학습한
+것이라 관측·행동·온보드 코드는 같다.
 **스캔 게이트** (`mission.scan_yaw_deg / scan_dz_m / scan_z_min / scan_z_max / scan_timeout_s`, 기본 끔; `configs/train/scan_gate.yaml`)
 를 켜면 통과 직후 좌우 ±70°·위아래 ±0.5 m 를 다 훑기 전에는 목표를 고르지 않는다 — 규칙대로 둘러보지만 아직 실험 단계다 (§12).
 
@@ -165,7 +167,9 @@ convex layer (`planners/convex_layer.py`)를 붙인다: 웨이포인트 제어�
 센서 = 갈고리 기준 짐 위치·속도, 창문 추정). 온보드는 `OnboardPlanner(export, n_windows, slung=<base.yaml 의 slung 절>)`
 (줄 짐으로 학습한 정책이면 `slung` 생략)에 `drone_state["load"] = {"offset", "vel"}` (갈고리에서 짐까지, 짐 속도 − 기체 속도;
 둘 다 기체 축)를 더 주면 같은 layer 가 마지막에 투영한다 — 학습 환경과 관측·투영 행동이 1e-6 안으로 같다 (`tests/test_onboard.py`).
-`done` 은 짐이 마지막 창문을 지나야 참이다.
+`done` 은 짐이 마지막 창문을 지나야 참이다. 일자 코스 41 조건 (FX450 판정): 신경망만 0.5%, 재학습 없이 + layer 79.0%,
+layer 를 환경 안에 두고 줄 센서 관측을 더해 이어 학습한 **slung_a (`window_mission/*_slung_a/export`) + layer 95.6%** (명목 L4 100%)
+— 줄 짐 배포 후보.
 
 ```bash
 # 평가: 신경망만 / + convex layer (재학습 없이)
@@ -176,8 +180,10 @@ $PY rl_planner/scripts/expand_obs.py --run <gen_mlp run> --ckpt model_3997.pt --
 $PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 800 --resume ws.pt \
     --config rl_planner/configs/train/general.yaml --config rl_planner/configs/slung/base.yaml \
     --config rl_planner/configs/slung/train.yaml --set "observation.policy=[...,slung]"   # expand_obs 가 출력하는 목록
-# 렌더: 기체 + 줄 + 짐 (머리줄에 흔들림 각)
+# 렌더: 기체 + 줄 + 짐 (머리줄에 흔들림 각) / 같은 장면 옆모습, 정책·계획기별로 한 줄씩
 $PY rl_planner/scripts/play_isaac.py --policy <export> --config rl_planner/configs/slung/base.yaml --level 4 --safe --layer
+$PY rl_planner/scripts/plot_slung.py --policy g=<export> --policy s=<slung_a export> \
+    --planner g:rl+safe --planner g:rl+safe+layer --planner s:rl+safe+layer --level 4 --seed 5 --png side.png
 ```
 
 ## 5. MDP 정의 (설정: `configs/default.yaml`)
