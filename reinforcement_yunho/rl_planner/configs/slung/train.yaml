@@ -3,5 +3,6 @@
 slung:
   convex_layer:
     in_env: true
+    center_weight: 5.0               # 개구부 가운데로 (평가 7 조건에서 +0.6~3.4 %p, RESULTS §14)
 reward:
   load_swing: -0.5                   # (짐의 수평 흔들림 / 줄 길이)^2 — 잔잔한 진자
