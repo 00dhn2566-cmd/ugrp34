@@ -10,7 +10,8 @@ next pass. "In view" = the next window was detected within 0.3 s of the pass. Fo
 look-around is summarised at the first detection: the largest heading change since the pass (|turn|) and the largest
 altitude change (|dz|); the legs found only after more than 15 cm of altitude change count as found up/down.
 Motion: mean |yaw rate|, share of flight time turning faster than 40 deg/s, mean |vertical speed| — how much the
-drone swings its head and bobs to look around.
+drone swings its head and bobs to look around — overall and split into searching (the next window not seen yet in this
+leg) and approaching (seen): an appropriate look-around turns while searching and flies steady once the window is found.
 """
 from __future__ import annotations
 
@@ -80,7 +81,7 @@ def main(argv=None) -> int:
     found_dz = torch.zeros(E)
     legs = []                                   # (in view, search s, |turn| deg, |dz| m, leg s, found)
     end = {"success": 0, "crash": {}, "timeout": 0, "phase_crash": [0, 0]}
-    motion = {"yaw_rate": 0.0, "fast": 0.0, "vz": 0.0, "n": 0}
+    motion = {k: [0.0, 0.0] for k in ("yaw_rate", "fast", "vz", "n")}   # [searching, approaching]
     prev_yaw = core.yaw.clone()
     post = core.post_decision
 
@@ -89,10 +90,11 @@ def main(argv=None) -> int:
         t = core.episode_time
         rate = torch.atan2(torch.sin(core.yaw - prev_yaw), torch.cos(core.yaw - prev_yaw)).abs() / core.step_dt
         prev_yaw.copy_(core.yaw)
-        motion["yaw_rate"] += float(rate[active].sum())
-        motion["fast"] += float((rate[active] > math.radians(40.0)).float().sum())
-        motion["vz"] += float(core.state.vel_w[active, 2].abs().sum())
-        motion["n"] += int(active.sum())
+        for i, m in enumerate((active & (found_t < 0), active & (found_t >= 0))):
+            motion["yaw_rate"][i] += float(rate[m].sum())
+            motion["fast"][i] += float((rate[m] > math.radians(40.0)).float().sum())
+            motion["vz"][i] += float(core.state.vel_w[m, 2].abs().sum())
+            motion["n"][i] += int(m.sum())
         sel = core.selector
         tgt = core.mission.target.clamp_max(core.W - 1)
         det_now = core.det.detected.gather(1, tgt[:, None]).squeeze(1)
@@ -132,9 +134,15 @@ def main(argv=None) -> int:
     print(f"{a.policy or a.planner} {a.planner}{'+safe' if a.safe else ''} L{a.level} {' '.join(a.config)}: "
           f"{E} scenes, success {end['success']}, crash {end['crash']} (before / after the next window was seen: "
           f"{end['phase_crash'][0]} / {end['phase_crash'][1]}), timeout {end['timeout']}")
-    m = max(1, motion["n"])
-    print(f"  motion: |yaw rate| mean {math.degrees(motion['yaw_rate'] / m):.0f} deg/s, turning > 40 deg/s "
-          f"{motion['fast'] / m * 100:.0f}% of the time, |vertical speed| mean {motion['vz'] / m:.2f} m/s")
+    def mot(i):
+        m = max(1, sum(motion["n"][j] for j in i))
+        tot = lambda k: sum(motion[k][j] for j in i)  # noqa: E731
+        return (f"|yaw rate| mean {math.degrees(tot('yaw_rate') / m):.0f} deg/s, turning > 40 deg/s "
+                f"{tot('fast') / m * 100:.0f}% of the time, |vertical speed| mean {tot('vz') / m:.2f} m/s")
+    share = motion["n"][0] / max(1, sum(motion["n"])) * 100
+    print(f"  motion: {mot((0, 1))}")
+    print(f"    searching ({share:.0f}% of the time): {mot((0,))}")
+    print(f"    approaching: {mot((1,))}")
     if len(L):
         inview = L[:, 0] > 0
         scan = ~inview & (L[:, 5] > 0)

@@ -90,6 +90,15 @@ def ang_vel(core):
     return core.state.omega_b.pow(2).sum(-1)
 
 
+@register("approach_turn")
+def approach_turn(core):
+    """|yaw rate|^2 [rad^2/s^2] while the chosen window (core/selector.py) is in view: look around while searching,
+    then fly to the window without swinging the camera off it."""
+    sel = core.selector
+    in_view = core.det.detected.gather(1, sel.sel[:, None]).squeeze(1) & sel.has
+    return core.state.omega_b[:, 2].pow(2) * in_view.float()
+
+
 def active_terms(cfg: Mapping) -> Dict[str, float]:
     out = {}
     for k, w in cfg["reward"].items():

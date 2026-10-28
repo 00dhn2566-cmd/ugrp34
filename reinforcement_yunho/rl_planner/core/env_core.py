@@ -560,7 +560,7 @@ class WindowMissionCore:
             w = sp.float().argmax(-1)
             self.selector.on_pass(switched, s.pos, s.vel_w, self.yaw, self.episode_time,
                                   _gather(self.est.center, w), _gather(self.est.valid, w), _gather(self.est.normal, w))
-        self.selector.scan(self.yaw, s.pos[:, 2])
+        self.selector.scan(self.yaw, s.pos[:, 2], self.episode_time)
         self.selector.select(self.scene, self.mission, self.est, self.perception)
         dist = (_gather(self.scene.center, tgt) - s.pos).norm(dim=-1)
         self.progress_delta = torch.where(switched, torch.zeros_like(dist), self.prev_dist - dist)

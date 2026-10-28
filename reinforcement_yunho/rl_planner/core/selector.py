@@ -10,6 +10,11 @@
               candidate yet. scene.layout = scatter builds courses whose order follows this rule (every other window
               at least scene.nearest_margin times farther), and the referee still checks that order.
 
+Scan gate (nearest mode, ``mission.scan_yaw_deg`` / ``scan_dz_m`` > 0): after the start and every pass, no window is
+chosen until the look-around has covered left and right (heading +-scan_yaw_deg off the direction the drone left the
+window in) and up and down (+-scan_dz_m off the pass altitude) — or ``scan_timeout_s`` has run out. Only then is the
+nearest window seen so far the target, so a nearer window outside the first view is not skipped. Off by default.
+
 Both use only what the real stack has (own pose, the windows passed, detections and estimates), so the same class
 runs in simulation and on board. The look-around bookkeeping (``scan``) feeds the ``search_state`` observation:
 heading relative to the direction the drone left the last window in (unwrapped), the extremes of that heading and
@@ -37,6 +42,10 @@ class TargetSelector:
             raise ValueError(f"mission.selection must be order or nearest, got {self.mode!r}")
         self.size = float(m.get("nominal_size_m", 1.0))
         self.fx = float(cfg["perception"]["camera"]["fx"])
+        self.gate_yaw = math.radians(float(m.get("scan_yaw_deg", 0.0)))
+        self.gate_dz = float(m.get("scan_dz_m", 0.0))
+        self.gate_t = float(m.get("scan_timeout_s", 0.0))
+        self.gated = self.mode == "nearest" and (self.gate_yaw > 0.0 or self.gate_dz > 0.0)
         E, W = int(num_envs), int(max_windows)
         self.E, self.W, self.device = E, W, device
         z = lambda *s: torch.zeros(*s, device=device)  # noqa: E731
@@ -55,6 +64,7 @@ class TargetSelector:
         self.ref_dir = z(E, 3)
         self.ref_dir[:, 0] = 1.0
         self.ref_has = torch.zeros(E, dtype=torch.bool, device=device)
+        self.gate_open = torch.ones(E, dtype=torch.bool, device=device)   # scan gate: look-around done since the pass
 
     # ------------------------------------------------------------------ look-around bookkeeping
     def reset(self, env_ids, pos: torch.Tensor, yaw: torch.Tensor, t: torch.Tensor) -> None:
@@ -70,6 +80,7 @@ class TargetSelector:
         self.ref_t[env_ids] = t
         for v in (self.psi, self.psi_hi, self.psi_lo, self.dz_hi, self.dz_lo):
             v[env_ids] = 0.0
+        self.gate_open[env_ids] = not self.gated
 
     def on_pass(self, passed_now: torch.Tensor, pos: torch.Tensor, vel: torch.Tensor, yaw: torch.Tensor,
                 t: torch.Tensor, est_center: torch.Tensor, est_valid: torch.Tensor,
@@ -98,8 +109,8 @@ class TargetSelector:
         self.psi_hi[ids] = self.psi[ids].clamp_min(0.0)
         self.psi_lo[ids] = self.psi[ids].clamp_max(0.0)
 
-    def scan(self, yaw: torch.Tensor, z: torch.Tensor) -> None:
-        """Advance the unwrapped heading and the explored extremes (call once per decision)."""
+    def scan(self, yaw: torch.Tensor, z: torch.Tensor, t: torch.Tensor | None = None) -> None:
+        """Advance the unwrapped heading and the explored extremes (call once per decision); t (E,) for the scan gate."""
         d = _wrap(yaw - self.ref_yaw)
         self.psi = self.psi + _wrap(d - _wrap(self.psi))
         self.psi_hi = torch.maximum(self.psi_hi, self.psi)
@@ -107,6 +118,12 @@ class TargetSelector:
         dz = z - self.ref_z
         self.dz_hi = torch.maximum(self.dz_hi, dz)
         self.dz_lo = torch.minimum(self.dz_lo, dz)
+        if self.gated:
+            done = ((self.psi_hi >= self.gate_yaw) & (self.psi_lo <= -self.gate_yaw)
+                    & (self.dz_hi >= self.gate_dz) & (self.dz_lo <= -self.gate_dz))
+            if self.gate_t > 0.0 and t is not None:
+                done = done | (t - self.ref_t >= self.gate_t)
+            self.gate_open = self.gate_open | done
 
     # ------------------------------------------------------------------ choice
     def candidate_positions(self, est, perception) -> torch.Tensor:
@@ -125,7 +142,7 @@ class TargetSelector:
             self.n_cand = torch.ones_like(self.n_cand)
             return
         seen = (perception.det_age < 1e3) | est.valid
-        cand = scene.valid & ~mission.passed & seen                       # (E,W)
+        cand = scene.valid & ~mission.passed & seen & self.gate_open[:, None]   # (E,W)
         p = self.candidate_positions(est, perception)
         d = (p - self.ref_pos[:, None, :]).norm(dim=-1).masked_fill(~cand, INF)
         dmin, sel = d.min(dim=-1)

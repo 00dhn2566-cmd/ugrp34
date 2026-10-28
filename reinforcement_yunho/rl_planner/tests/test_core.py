@@ -760,6 +760,45 @@ def test_nearest_selection_uses_only_seen_windows_measured_from_the_last_pass():
     assert int(sel.sel[0]) == 2 and not bool(sel.has_nxt[0])
 
 
+def test_scan_gate_chooses_only_after_looking_left_right_up_and_down():
+    """mission.scan_yaw_deg / scan_dz_m: a window in view is not chosen until the look-around since the pass covered
+    +-yaw and +-dz (or scan_timeout_s ran out); without the gate it is chosen at once."""
+    from rl_planner.core.selector import TargetSelector
+    lay = [[{"center": (3.0, 0.0, 1.0), "ow": 1.0, "oh": 1.0}]]
+    sc = scene_from_layout(lay, 1, (0.0, 0.0, 1.0), "cpu")
+    for gate in (True, False):
+        sets = ["mission.selection=nearest"] + (["mission.scan_yaw_deg=40", "mission.scan_dz_m=0.2",
+                                                 "mission.scan_timeout_s=3"] if gate else [])
+        cfg = cfg_cpu(*sets)
+        pr = PerceptionSurrogate(cfg, 1, 1, "cpu")
+        mission = MissionTracker(cfg, 1, 1, "cpu")
+        mission.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), sc)
+        sel = TargetSelector(cfg, 1, 1, "cpu")
+        pr.last_cam[0, 0] = torch.tensor([0.0, 0.0, 1.0])
+        pr.last_bearing[0, 0] = torch.tensor([1.0, 0.0, 0.0])
+        pr.last_side_max[0, 0] = 763.0 / 3.0
+        pr.det_age[0, 0] = 0.0                                      # the window is in view from the start
+        est = pr.estimate()
+
+        def step(yaw_deg, z, t):
+            sel.scan(torch.tensor([math.radians(yaw_deg)]), torch.tensor([z]), torch.tensor([t]))
+            sel.select(sc, mission, est, pr)
+            return bool(sel.has[0])
+
+        sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.zeros(1))
+        if not gate:
+            assert step(0.0, 1.0, 0.1)
+            continue
+        assert not step(0.0, 1.0, 0.1)                              # in view, but no look-around yet
+        assert not step(45.0, 1.0, 0.5)                             # left
+        assert not step(-45.0, 1.0, 1.0)                            # right; up / down still to do
+        assert not step(-45.0, 1.25, 1.3)                           # up
+        assert step(-45.0, 0.75, 1.6) and int(sel.sel[0]) == 0      # down: look-around complete, the window is chosen
+        sel.reset(torch.arange(1), torch.tensor([[0.0, 0.0, 1.0]]), torch.zeros(1), torch.full((1,), 10.0))
+        assert not step(0.0, 1.0, 12.9)
+        assert step(0.0, 1.0, 13.0)                                 # timeout: chosen without the full look-around
+
+
 def test_local_window_subset_detects_the_same_windows():
     """perception.local_windows K: the K windows nearest the camera get the same detections as the full model."""
     cfg_full = cfg_cpu("scene.wall_half_extent=0.8")

@@ -231,7 +231,7 @@ class OnboardPlanner:
             self.det = self.perception.add_detections(cam_c, R_WC, torch.zeros(1, self.W, 4, 2, device=self.device),
                                                       no, torch.zeros(1, self.W, device=self.device), no[:, 0])
         self._framed = False
-        self.selector.scan(self.yaw, self.state.pos[:, 2])
+        self.selector.scan(self.yaw, self.state.pos[:, 2], torch.tensor([self.t_now], device=self.device))
         self.selector.select(self.scene, self.mission, self.est, self.perception)
         obs = compute_group(self, self.policy_spec)
         self.last_obs = obs                      # exactly what the policy saw (debug / logging)
