@@ -92,7 +92,7 @@ def run(a) -> int:
         for p in todo:
             groups.setdefault(p[1], []).append(p)
         for pol, items in groups.items():
-            fsm_extra = [a.fsm_config] if a.fsm_config else []
+            fsm_extra = ([a.fsm_config] if a.fsm_config else []) + list(a.config)
             if pol is None:
                 cfg = load_config(fsm_extra + extra, a.set)
             else:
@@ -123,8 +123,12 @@ def run(a) -> int:
                                              a.num_scenes, env.device, env.core.step_dt)
                 else:
                     raise SystemExit(f"unknown planner kind {kind!r}")
-                if guard == "safe":
+                guards = guard.split("+") if guard else []
+                if "safe" in guards:
                     planner = SafePlanner(planner, cfg, a.num_scenes, env.device, env.core.step_dt)
+                if "layer" in guards:                 # convex layer for the slung load, last (planners/convex_layer.py)
+                    from rl_planner.planners.convex_layer import SlungLayerPlanner
+                    planner = SlungLayerPlanner(planner, cfg, a.num_scenes, env.device, env.core.step_dt)
                 rec = run_planner(env, planner, record_k=0)
                 summ = summarize(rec)
                 meta = {"condition": c["name"], "level": int(c["level"]), "configs": c.get("configs", []), "set": a.set,
@@ -285,6 +289,8 @@ def main(argv=None) -> int:
     ap.add_argument("--policy", action="append", default=[], help="name=<export dir>")
     ap.add_argument("--planner", action="append", default=[], help="fsm | fsm+safe | <policy>:rl | <policy>:rl+safe")
     ap.add_argument("--fsm-config", default=None, help="tuned state-machine yaml (merged into every condition)")
+    ap.add_argument("--config", action="append", default=[], help="extra yaml merged into every condition before "
+                    "its own (e.g. configs/slung/base.yaml)")
     ap.add_argument("--only", default=None, help="comma-separated condition names")
     ap.add_argument("--set", action="append", default=[], help="dotted override applied to every condition (sweeps)")
     ap.add_argument("--shard", default="0/1", help="k/n: run every n-th condition starting at k")

@@ -35,6 +35,7 @@ from .perception import PerceptionSurrogate
 from .rewards import REGISTRY as REWARDS, active_terms
 from .scene import LevelTable, SceneTensors, sample_scene
 from .selector import TargetSelector
+from .slung import SlungLoad
 
 
 class WindowMissionCore:
@@ -72,6 +73,10 @@ class WindowMissionCore:
         self.controller = make_controller(cfg, self.E, self.device)
         self.motor = MotorLag(self.E, self.device)
         self.state = RigidBodyState(self.E, self.device)
+        # a load hanging from the drone on a cable (core/slung.py): integrated here, refereed with the drone
+        self.slung = SlungLoad(cfg, self.E, self.device) if (cfg.get("slung") or {}).get("enabled") else None
+        self.layer = None                       # convex layer applied to every action (slung.convex_layer.in_env)
+        self._wind_now = None
 
         a = cfg["action"]
         self.yaw_action = bool(a["yaw"])
@@ -180,8 +185,16 @@ class WindowMissionCore:
         self.err_at_pass = torch.zeros(self.E, self.W, device=self.device)
         self.yaw = torch.zeros(self.E, device=self.device)
         self.body_x_w = torch.zeros(self.E, 3, device=self.device)
+        if self.slung is not None and ((cfg["slung"].get("convex_layer") or {}).get("in_env")):
+            from ..planners.convex_layer import SlungLayerFilter
+            self.layer = SlungLayerFilter(cfg, self.E, self.device, self.step_dt)
 
     # ------------------------------------------------------------------ helpers
+    @property
+    def body_mass(self) -> torch.Tensor:
+        """Mass the backend integrates: the drone alone when the load hangs on its cable (integrated here)."""
+        return self.mass if self.slung is None else self.mass - self.slung.m
+
     @property
     def target_idx(self) -> torch.Tensor:
         return self.mission.target_index()
@@ -329,7 +342,13 @@ class WindowMissionCore:
         if env_ids.numel() == 0:
             return
         s = self.state
-        self.mission.reset(env_ids, s.pos[env_ids], self.scene)
+        if self.slung is not None:
+            self.slung.reset(env_ids, s.pos[env_ids], s.quat[env_ids])
+            self.mission.reset(env_ids, s.pos[env_ids], self.scene, load_pos=self.slung.pos[env_ids])
+            if self.layer is not None:
+                self.layer.reset(env_ids)
+        else:
+            self.mission.reset(env_ids, s.pos[env_ids], self.scene)
         self.actions[env_ids] = 0.0
         self.prev_actions[env_ids] = 0.0
         self.wp[env_ids] = s.pos[env_ids]
@@ -498,6 +517,8 @@ class WindowMissionCore:
     def pre_decision(self, actions: torch.Tensor) -> None:
         self.prev_actions = self.actions.clone()
         self.actions = actions.clamp(-1.0, 1.0)
+        if self.layer is not None:               # the convex layer in the loop: the env flies the projected action
+            self.actions = self.layer.filter(self.actions, self)
         if self._gust_on:                        # Ornstein-Uhlenbeck gusts, stationary std = gust_sigma
             a = math.exp(-self.step_dt / self.gust_tau)
             w = torch.randn(self.E, 2, generator=self.dist_gen, device=self.device)
@@ -520,13 +541,25 @@ class WindowMissionCore:
                                                  self.mass, self.inertia_ctrl, self.thrust_max)
         f, tau = self.motor.step(f_cmd, tau_cmd, self.dt)
         wind = self.wind_acc + self.gust if self._gust_on else self.wind_acc
-        f_ext = self.mass[:, None] * wind - self.drag[:, None] * s.vel_w
-        return f, tau, f_ext
+        if self.slung is None:
+            f_ext = self.mass[:, None] * wind - self.drag[:, None] * s.vel_w
+            return f, tau, f_ext
+        # the load pulls on the hook: a force on the drone and a torque about its centre of mass
+        f_cable, tau_cable = self.slung.cable_force(s.pos, s.vel_w, s.quat, s.omega_b)
+        self._wind_now = wind
+        f_ext = self.body_mass[:, None] * wind - self.drag[:, None] * s.vel_w + f_cable
+        return f, tau + tau_cable, f_ext
 
     def after_substep(self) -> None:
         self._sub += 1
         t = (self.episode_step.float() * self.step_dt) + self._sub * self.dt
-        self.mission.substep(self.state.pos, self.state.quat, self.scene, t)
+        if self.slung is None:
+            self.mission.substep(self.state.pos, self.state.quat, self.scene, t)
+            return
+        sl = self.slung
+        sl.integrate(self.dt, self._wind_now)
+        hook, _ = sl.hook(self.state.pos, self.state.quat)
+        self.mission.substep(self.state.pos, self.state.quat, self.scene, t, load=(sl.pos, hook, sl.radius))
 
     def post_decision(self) -> None:
         """Call after the backend has advanced ``episode_step`` for this decision."""

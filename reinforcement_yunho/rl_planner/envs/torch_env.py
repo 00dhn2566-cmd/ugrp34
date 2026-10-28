@@ -82,7 +82,7 @@ class TorchWindowEnv(_VecEnvBase):
         core.pre_decision(actions.to(self.device))
         for _ in range(core.decimation):
             f, tau, f_ext = core.control()
-            self.body.step(f, tau, f_ext, core.dt, core.mass, core.inertia)
+            self.body.step(f, tau, f_ext, core.dt, core.body_mass, core.inertia)
             core.after_substep()
         core.episode_step += 1
         core.post_decision()

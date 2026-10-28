@@ -172,6 +172,14 @@ def scan_gate(core):
     return core.selector.gate_features()
 
 
+@register("slung", 6)
+def slung(core):
+    """The cable sensor (core/slung.py): the load's offset from the hook / cable length and its velocity relative to
+    the hook [m/s], heading frame — a 2-axis cable-angle sensor at the hook and its rate."""
+    st = core.state
+    return core.slung.features(st.pos, st.vel_w, st.quat, core.yaw)
+
+
 # ----------------------------------------------------------------------------- critic
 @register("target_gt", 8, privileged=True)
 def target_gt(core):

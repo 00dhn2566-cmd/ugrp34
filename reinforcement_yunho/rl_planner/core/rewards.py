@@ -90,6 +90,14 @@ def ang_vel(core):
     return core.state.omega_b.pow(2).sum(-1)
 
 
+@register("load_swing")
+def load_swing(core):
+    """Horizontal load offset from the hook / cable length, squared (core/slung.py): a calm pendulum."""
+    st = core.state
+    hook, _ = core.slung.hook(st.pos, st.quat)
+    return ((core.slung.pos - hook)[:, :2] / core.slung.L).pow(2).sum(-1)
+
+
 @register("approach_turn")
 def approach_turn(core):
     """|yaw rate|^2 [rad^2/s^2] while the chosen window (core/selector.py) is in view: look around while searching,

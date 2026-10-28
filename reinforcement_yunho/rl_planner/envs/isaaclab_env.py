@@ -223,7 +223,7 @@ class WindowMissionIsaacEnv(DirectRLEnv):
         self.drone.write_root_pose_to_sim_index(root_pose=pose, env_ids=env_ids)
         self.drone.write_root_velocity_to_sim_index(root_velocity=torch.zeros(n, 6, device=self.device),
                                                     env_ids=env_ids)
-        self.drone.set_masses_index(masses=self.core.mass[env_ids].unsqueeze(1), env_ids=env_ids)
+        self.drone.set_masses_index(masses=self.core.body_mass[env_ids].unsqueeze(1), env_ids=env_ids)
         I = torch.diag_embed(self.core.inertia[env_ids]).reshape(n, 1, 9)
         self.drone.set_inertias_index(inertias=I, env_ids=env_ids)
         st = self.core.state

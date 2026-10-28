@@ -36,7 +36,7 @@ class Airframe:
         self.rotors = torch.tensor([[rr * math.cos(a), rr * math.sin(a), rz] for a in self.angles], device=device)
         self.rho = float(af["prop_radius"])
         self.ht = 0.5 * float(af["prop_thickness"])
-        self.box_names = list(af["boxes"])
+        self.box_names = [k for k, v in af["boxes"].items() if v is not None]     # null: part taken off
         b = torch.tensor([[float(x) for x in af["boxes"][k]] for k in self.box_names], device=device)
         self.box_c = b[:, :3] + torch.tensor([0.0, 0.0, zc], device=device)
         self.box_a = b[:, 3:] / 2

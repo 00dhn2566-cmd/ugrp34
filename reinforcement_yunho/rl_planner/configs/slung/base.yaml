@@ -1,0 +1,33 @@
+# 줄에 매단 짐 (core/slung.py) — 기체 아래 갈고리에 짐 1 kg 을 줄로 매단다 (지금까지는 기체에 용접한 짐)
+#   진자: 줄은 당기기만 하는 스프링·감쇠 (느슨해질 수 있음), 짐은 질점 + 판정 구. 짐·줄도 창문 개구부를 지나야 하고,
+#   코스 완주는 짐이 마지막 창문을 지나야 인정 (core/mission.py).
+drone:
+  inertia: [9.334e-3, 9.384e-3, 1.797e-2]   # 짐 없는 기체 (성진 DYNAMICS.md §9.2, 0 kg) — 제어기도 이 값을 씀
+  # mass 2.2726 은 총질량 그대로: 제어기 호버 추력·추력 한계의 기준. 적분하는 기체 질량 = mass - load_mass
+  airframe:
+    chassis_z: -0.00773              # 짐 없는 기체: 무게중심이 섀시 원점보다 7.7 mm 위 (§9.2)
+    boxes:
+      package: null                  # 용접 짐 대신 줄 끝의 짐
+domain_randomization:                # 질량 DR 0.56~1.0 은 용접 짐 0~1 kg 용 — 여기서는 짐이 줄 끝에 있으니 기체만 조금 흔든다
+  mass_scale: [0.95, 1.05]           # 총질량 ±5% (기체 ±9%)
+  inertia_scale: [0.9, 1.1]
+slung:
+  enabled: true
+  cable_length: 0.4                  # [m] 갈고리 → 짐 중심
+  load_mass: 1.0                     # [kg] 지금까지의 용접 짐과 같은 1 kg
+  load_radius: 0.12                  # [m] 판정 구 (0.14 m 상자의 반대각 0.121)
+  cable_stiffness: 5000.0            # [N/m] 1 kg 에 2 mm 늘어남 (실제 줄 수준; 10 ms 물리 스텝에서 안정)
+  cable_damping: 30.0                # [N s/m] 줄 방향 감쇠 (ζ ≈ 0.3; 명시 적분 안정 여유 2 배)
+  load_drag: 0.05                    # [N/(m/s)]
+  attach: [0.0, 0.0, -0.05]          # [m] 갈고리 (무게중심 기준 기체 좌표: 하판 아래)
+  convex_layer:                      # planners/convex_layer.py — 신경망 뒤의 QP (진자 동역학 예측)
+    in_env: false                    # true: 학습·평가 환경이 매 행동을 투영해서 비행
+    horizon_s: 1.0                   # 예측 구간
+    block: 3                         # 첫 행동 뒤 웨이포인트를 이 결정 수씩 묶어 변수로
+    max_swing_deg: 25.0              # 짐 흔들림 한계 (수직에서)
+    margin_m: 0.05                   # 개구부 여유
+    gate_band_m: 0.35                # 창문면에서 이 거리 안이면 개구부 제약
+    drone_half_m: [0.30, 0.08]       # 창문 안에서 기체의 반폭 (가로, 세로)
+    iters: 40                        # ADMM 반복 (이전 결정에서 웜스타트)
+    rho: 1.0
+    future_weight: 1.0

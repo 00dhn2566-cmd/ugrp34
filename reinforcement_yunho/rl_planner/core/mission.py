@@ -27,8 +27,8 @@ from . import math3d as m3
 from .airframe import Airframe
 from .scene import SceneTensors
 
-CRASH_NONE, CRASH_WALL, CRASH_GROUND, CRASH_BOUNDS, CRASH_TILT, CRASH_ORDER, CRASH_BACK = range(7)
-CRASH_NAMES = ("none", "wall", "ground", "bounds", "tilt", "order", "backwards")
+CRASH_NONE, CRASH_WALL, CRASH_GROUND, CRASH_BOUNDS, CRASH_TILT, CRASH_ORDER, CRASH_BACK, CRASH_LOAD, CRASH_CABLE = range(9)
+CRASH_NAMES = ("none", "wall", "ground", "bounds", "tilt", "order", "backwards", "load", "cable")
 
 
 class MissionTracker:
@@ -53,13 +53,17 @@ class MissionTracker:
         self.pass_time = torch.zeros(E, W, device=device)
         self.prev_d = torch.zeros(E, W, device=device)
         self.prev_pos = torch.zeros(E, 3, device=device)
+        # slung load (core/slung.py), when one hangs from the drone: it must clear every window too
+        self.load_past = torch.zeros(E, W, dtype=torch.bool, device=device)   # load through the opening
+        self.prev_dL = torch.zeros(E, W, device=device)
+        self.prev_load = torch.zeros(E, 3, device=device)
         # per decision step
         self.step_pass = torch.zeros(E, W, dtype=torch.bool, device=device)
         self.crashed = torch.zeros(E, dtype=torch.bool, device=device)
         self.crash_reason = torch.zeros(E, dtype=torch.long, device=device)
         self.success = torch.zeros(E, dtype=torch.bool, device=device)
 
-    def reset(self, env_ids, pos, scene: SceneTensors) -> None:
+    def reset(self, env_ids, pos, scene: SceneTensors, load_pos=None) -> None:
         self.target[env_ids] = 0
         self.passed[env_ids] = False
         self.clearance[env_ids] = 0.0
@@ -70,6 +74,10 @@ class MissionTracker:
         self.crashed[env_ids] = False
         self.crash_reason[env_ids] = CRASH_NONE
         self.success[env_ids] = False
+        if load_pos is not None:
+            self.load_past[env_ids] = False
+            self.prev_load[env_ids] = load_pos
+            self.prev_dL[env_ids] = ((load_pos[:, None, :] - scene.center[env_ids]) * scene.normal[env_ids]).sum(-1)
 
     def begin_step(self) -> None:
         self.step_pass[:] = False
@@ -80,8 +88,10 @@ class MissionTracker:
         self.crashed |= new
 
     @torch.no_grad()
-    def substep(self, pos: torch.Tensor, quat: torch.Tensor, scene: SceneTensors, t_now: torch.Tensor) -> None:
-        """Call after every physics sub-step with the new body position."""
+    def substep(self, pos: torch.Tensor, quat: torch.Tensor, scene: SceneTensors, t_now: torch.Tensor,
+                load=None) -> None:
+        """Call after every physics sub-step with the new body position; ``load`` = (load position (E,3), hook
+        position (E,3), load radius) when a load hangs from the drone."""
         live = ~(self.crashed | self.success)
         c, n = scene.center, scene.normal
         d = ((pos[:, None, :] - c) * n).sum(-1)                       # (E,W)
@@ -147,7 +157,10 @@ class MissionTracker:
             self.passed |= good
             self.step_pass |= good
             self.target = self.target + good.any(-1).long()
-            self.success |= self.target >= scene.n_windows
+            if load is None:
+                self.success |= self.target >= scene.n_windows
+        if load is not None:
+            self._load_substep(*load, scene, live)
 
         # bounds / ground / tilt
         R22 = m3.quat_to_rotmat(quat)[..., 2, 2]
@@ -158,6 +171,43 @@ class MissionTracker:
 
         self.prev_d = d
         self.prev_pos = pos.clone()
+
+    def _load_substep(self, pL, hook, rL: float, scene: SceneTensors, live) -> None:
+        """The load (a ball of radius rL) and the cable (a segment hook -> load) against every wall: the load is
+        refereed like the sphere drone (touching a wall outside the opening, or its centre crossing a wall plane
+        outside the opening), the cable must cut a wall plane inside the opening. Success needs the load through
+        the last window as well."""
+        c, n = scene.center, scene.normal
+        hw, hh = scene.size[..., 0] / 2, scene.size[..., 1] / 2
+        rel = pL[:, None, :] - c
+        dL = (rel * n).sum(-1)
+        uc, vc = (rel * scene.right).sum(-1), (rel * scene.up).sum(-1)
+        rho = (rL ** 2 - dL ** 2).clamp_min(0.0).sqrt()
+        leaves = (uc.abs() + rho > hw) | (vc.abs() + rho > hh)
+        touch = (dL.abs() < rL) & scene.valid & leaves & (uc.abs() <= self.wall_half + rL) & (vc.abs() <= self.wall_half + rL)
+        dp = self.prev_dL
+        fwd = (dp > 0) & (dL <= 0) & scene.valid
+        crossed = fwd | ((dp <= 0) & (dL > 0) & scene.valid)
+        t = dp / (dp - dL).where(crossed, torch.ones_like(dL))
+        X = self.prev_load[:, None, :] + t[..., None] * (pL - self.prev_load)[:, None, :]
+        u, v = ((X - c) * scene.right).sum(-1), ((X - c) * scene.up).sum(-1)
+        inside = (u.abs() <= hw) & (v.abs() <= hh)
+        on_wall = (u.abs() <= self.wall_half) & (v.abs() <= self.wall_half)
+        self._flag_crash(live & (touch.any(-1) | (crossed & ~inside & on_wall).any(-1)), CRASH_LOAD)
+        self.load_past |= fwd & inside
+        dH = ((hook[:, None, :] - c) * n).sum(-1)
+        cut = (dH * dL < 0) & scene.valid
+        s = dH / (dH - dL).where(cut, torch.ones_like(dL))
+        Xc = hook[:, None, :] + s[..., None] * (pL - hook)[:, None, :]
+        uk, vk = ((Xc - c) * scene.right).sum(-1), ((Xc - c) * scene.up).sum(-1)
+        out = (uk.abs() > hw) | (vk.abs() > hh)
+        self._flag_crash(live & (cut & out & (uk.abs() <= self.wall_half) & (vk.abs() <= self.wall_half)).any(-1),
+                         CRASH_CABLE)
+        self._flag_crash(live & (pL[:, 2] < rL), CRASH_GROUND)
+        last = (scene.n_windows - 1).clamp_min(0)[:, None]
+        self.success |= (self.target >= scene.n_windows) & self.load_past.gather(1, last).squeeze(1) & ~self.crashed
+        self.prev_dL = dL
+        self.prev_load = pL.clone()
 
     def target_index(self) -> torch.Tensor:
         """(E,) current target slot clamped to a valid index (after success: last window)."""
