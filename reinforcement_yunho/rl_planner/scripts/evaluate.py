@@ -54,7 +54,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     from rl_planner.core.config import load_config
-    planners = [p.strip() for p in a.planners.split(",") if p.strip()]   # "+safe" suffix = behind SafetyFilter
+    planners = [p.strip() for p in a.planners.split(",") if p.strip()]   # "+safe" = behind SafetyFilter, "+layer" = convex layer
     if any(p.split("+")[0] == "rl" for p in planners) and not a.policy:
         raise SystemExit("--policy <export dir> is required for the rl planner")
 
@@ -123,11 +123,15 @@ def main(argv=None) -> int:
             planner = PolicyPlanner(a.policy, device=env.device, cfg=cfg)
         else:
             raise SystemExit(f"unknown planner {name!r}")
-        if guard == "safe":
+        guards = guard.split("+") if guard else []
+        if set(guards) - {"safe", "layer"}:
+            raise SystemExit(f"unknown planner suffix {guard!r} (+safe, +layer)")
+        if "safe" in guards:
             from rl_planner.planners.safety import SafePlanner
             planner = SafePlanner(planner, cfg, n, env.device, env.core.step_dt)
-        elif guard:
-            raise SystemExit(f"unknown planner suffix {guard!r} (only +safe)")
+        if "layer" in guards:                  # slung-load convex layer, last (planners/convex_layer.py)
+            from rl_planner.planners.convex_layer import SlungLayerPlanner
+            planner = SlungLayerPlanner(planner, cfg, n, env.device, env.core.step_dt)
         rec = run_planner(env, planner, record_k=a.record)
         if "traj" in rec:
             os.makedirs(out, exist_ok=True)
