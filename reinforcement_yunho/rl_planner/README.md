@@ -126,13 +126,20 @@ tensorboard --logdir /data/runs/rl_planner
 고른 창문만 본다. 정책이 yaw 를 직접 돌리고 (`action.yaw`, ±90°/s; 좌우는 몸을 돌려, 위아래는 고도를 바꿔 훑음) 통과 뒤 어디까지
 둘러봤는지(`search_state`)를 관측한다. 온보드는 `out["yaw"]` (heading 설정점, world, rad)를 함께 낸다 — 팀 `waypoints_config`
 에는 yaw 가 없으니 제어기에 yaw 입력을 따로 넣어야 한다. 이때 검출 메시지의 `order_index` 는 추적 번호(창문마다 고정)로 쓰인다.
+통과는 `mark_passed()` 로 알려 주거나 플래너가 스스로 센다 (`auto_pass=True` 기본: 추정한 창문 면을 개구부 안 ±0.2 m 로 지날 때).
+
+배포 후보는 `window_mission/*_scan_c2/export_6000` + 안전 필터 (`safety.scan_hold: true`; 평가 시드: 꺾인 코스 L4 94%, 창문 50 개 L4 70%, 극한 배치 37%; RESULTS.md §12).
+**스캔 게이트** (`mission.scan_yaw_deg / scan_dz_m / scan_z_min / scan_z_max / scan_timeout_s`, 기본 끔; `configs/train/scan_gate.yaml`)
+를 켜면 통과 직후 좌우 ±70°·위아래 ±0.5 m 를 다 훑기 전에는 목표를 고르지 않는다 — 규칙대로 둘러보지만 아직 실험 단계다 (§12).
 
 ```bash
-# 학습 (1단계: 일자 코스 정책에서 yaw·관측을 붙여 웜스타트)
-$PY rl_planner/scripts/expand_obs.py --run <speed_a run> --yaw --add search_state --out ws.pt
-$PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 3000 --resume ws.pt \
-    --config rl_planner/configs/train/general.yaml --config rl_planner/configs/train/speed.yaml \
-    --config rl_planner/configs/scan/course.yaml --config rl_planner/configs/train/scan.yaml
+# 학습 (1단계: 범용 정책에 yaw 출력·관측을 가중치 0 으로 붙여 웜스타트 → 2단계: 창문 10~20 개·극한 배치 레벨)
+$PY rl_planner/scripts/expand_obs.py --run <gen_mlp run> --yaw --add search_state --out ws.pt
+$PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 600 --resume ws.pt \
+    --config rl_planner/configs/train/general.yaml --config rl_planner/configs/scan/course.yaml --config rl_planner/configs/train/scan.yaml
+$PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 1400 --resume <1단계 run>/model_4600.pt \
+    --config rl_planner/configs/train/general.yaml --config rl_planner/configs/scan/course.yaml --config rl_planner/configs/train/scan.yaml \
+    --config rl_planner/configs/train/scan_long.yaml
 # 평가 세트 (꺾인 코스 + 창문 50 개 + 교란 26 조건) / 비행 그림·애니메이션 / 둘러보기 통계
 $PY rl_planner/scripts/benchmark.py --suite rl_planner/configs/scan/suite.yaml --out <root> --policy p=<export> --planner p:rl+safe --set safety.scan_hold=true
 $PY rl_planner/scripts/plot_course.py --policy <export> --config rl_planner/configs/scan/long50.yaml --png c.png --gif c.gif
@@ -261,4 +268,5 @@ latency + U{0..값}, 이미 받은 것보다 옛 프레임은 버림), 프레임
    (RESULTS.md §11). 2 m/s 에서의 실제 모션 블러·검출기 지연은 실기로 확인해야 한다.
 7. 둘러보기 모드 (RESULTS.md §12): ① 저수준 제어기에 yaw 설정점 입력 (지금 `waypoints_config` 는 위치만) ② 실제 대회 규칙이
    "통과 직후 가장 가까운 창문" 인지, 아니면 색 순서인지 ③ 창문 추적기 (검출을 창문별로 이어 붙이기 — 둘러보기에서는 색이 순서가
-   아니다) ④ yaw 속도 상한 (지금 90°/s; 모션 블러와 맞바꿈).
+   아니다) ④ yaw 속도 상한 (지금 90°/s; 모션 블러와 맞바꿈) ⑤ 통과 직후 매번 정해진 범위를 다 훑을지 (스캔 게이트: 규칙은 확실히
+   지키지만 창문당 7 s 로 느림) 아니면 필요한 만큼만 훑을지 (학습 정책: 창문당 2.7 s, 고개를 계속 흔듦).
