@@ -251,4 +251,6 @@ class SlungLayerPlanner:
 
     @torch.no_grad()
     def act(self, core) -> torch.Tensor:
+        if getattr(core, "layer", None) is not None:      # the env already projects every action (in_env): once only
+            return self.base.act(core)
         return self.filt.filter(self.base.act(core), core)

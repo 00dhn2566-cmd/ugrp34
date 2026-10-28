@@ -32,6 +32,14 @@ Look-around policies (RESULTS.md §12; policy_meta action.yaw, mission.selection
 ``out["yaw"]`` is the heading set-point [rad, world] (the waypoints_config schema has no yaw — the controller needs
 it as a separate input), and the target is the nearest window seen from the last pass (core/selector.py), so the
 vision message's ``order_index`` is only a track id there, not the course order.
+
+Slung load (RESULTS.md §14): with a load on a cable — a policy trained with one (policy_meta ``slung.enabled``), or
+``slung=<the rig's slung section, configs/slung/base.yaml>`` for a policy trained without — drone_state also carries
+the cable sensor, ``drone_state["load"] = {"offset": [x, y, z], "vel": [vx, vy, vz]}``: the load's position from the
+hook and its velocity minus the drone's, both in body axes [m, m/s]. From a 2-axis cable-angle sensor at the hook
+(taut cable): offset = L dir_b, vel = d(offset)/dt + ang_vel x (attach + offset). The convex layer
+(planners/convex_layer.py, the class the training env and ``+layer`` evaluation run) projects every action last
+(``layer=False``: off), and ``done`` waits until the load is through the last window as well.
 """
 from __future__ import annotations
 
@@ -43,12 +51,14 @@ from typing import Mapping, Optional
 import torch
 
 from ..core import math3d as m3
-from ..core.config import Cfg, default_section
+from ..core.config import Cfg, deep_merge, default_section
 from ..core.dynamics import RigidBodyState
 from ..core.observations import build_spec, compute_group, _gather
 from ..core.perception import PerceptionSurrogate
 from ..core.scene import window_frame
 from ..core.selector import TargetSelector
+from ..core.slung import SlungLoad
+from .convex_layer import SlungLayerFilter
 from .policy import PolicyPlanner
 from .safety import SafetyFilter
 
@@ -75,12 +85,15 @@ class _Scene:
 class OnboardPlanner:
     PASS_TOL = 0.2                       # [m] slack on the estimated opening for the planner's own pass check
     def __init__(self, export_dir: str, n_windows: int, device: str = "cpu", limits: Optional[dict] = None,
-                 safety: Optional[Mapping] = None, auto_pass: bool = True):
+                 safety: Optional[Mapping] = None, auto_pass: bool = True, slung: Optional[Mapping] = None,
+                 layer: Optional[bool] = None):
         self.device = torch.device(device)
         self.auto_pass = bool(auto_pass)
         self.policy = PolicyPlanner(export_dir, device=device)
         self.cfg = Cfg(self.policy.meta["config"])
         self.cfg["perception"]["frame_every"] = 1
+        if slung is not None:                    # the rig on board (cable, load, layer settings)
+            self.cfg["slung"] = deep_merge({**(self.cfg.get("slung") or {}), "enabled": True}, slung)
         self.E, self.W = 1, int(self.cfg["scene"]["max_windows"])
         if n_windows > self.W:
             raise ValueError(f"policy was trained for at most {self.W} windows")
@@ -101,6 +114,10 @@ class OnboardPlanner:
         self.step_dt = float(self.policy.meta["timing"]["decision_dt_s"])
         self.cfg["safety"] = {**default_section("safety"), **(safety or {})}   # runtime setting, not the training snapshot
         self.safety = SafetyFilter(self.cfg, 1, self.device, self.step_dt)
+        self.slung = SlungLoad(self.cfg, 1, self.device) if (self.cfg.get("slung") or {}).get("enabled") else None
+        use_layer = self.slung is not None and (layer is None or bool(layer))
+        self.layer = SlungLayerFilter(self.cfg, 1, self.device, self.step_dt) if use_layer else None
+        self._last_passed: Optional[torch.Tensor] = None
         self._seen = False                       # any window detected since the last step()
         self._framed = False                     # a camera frame arrived since the last step()
         self.episode_length_s = float(self.cfg["sim"]["episode_length_s"])
@@ -173,6 +190,7 @@ class OnboardPlanner:
         """The drone flew through the window it was flying to (the selector's choice). The look-around restarts from
         the drone state of the next step() (in simulation: the state right after the decision with the pass)."""
         k = self.selector.sel.clone()
+        self._last_passed = k
         self.mission.passed[0, k] = True
         self.mission.target += 1
         self._prev_d = None
@@ -196,6 +214,23 @@ class OnboardPlanner:
         s.omega_b = torch.tensor([drone_state.get("ang_vel", [0.0, 0.0, 0.0])], dtype=torch.float32, device=self.device)
         self.yaw = m3.yaw_from_quat(s.quat)
         self.body_x_w = m3.quat_to_rotmat(s.quat)[..., :, 0]
+        if self.slung is not None:                                            # cable sensor, body axes
+            if "load" not in drone_state:
+                raise ValueError("slung load on board: drone_state needs 'load' {offset, vel} (cable sensor)")
+            ld = drone_state["load"]
+            off = torch.tensor([ld["offset"]], dtype=torch.float32, device=self.device)
+            dv = torch.tensor([ld.get("vel", [0.0, 0.0, 0.0])], dtype=torch.float32, device=self.device)
+            hook, _ = self.slung.hook(s.pos, s.quat)
+            self.slung.pos = hook + m3.quat_rotate(s.quat, off)
+            self.slung.vel = s.vel_w + m3.quat_rotate(s.quat, dv)
+
+    def _load_clear(self) -> bool:
+        """The load is through the window the drone passed last (its estimated plane)."""
+        k = self._last_passed
+        if k is None or not bool(_gather(self.est.valid, k)[0]):
+            return True
+        d = ((self.slung.pos - _gather(self.est.center, k)) * _gather(self.est.normal, k)).sum()
+        return bool(d < -self.slung.radius)
 
     def _auto_pass(self) -> None:
         """Advance the target when the drone crosses the ESTIMATED window plane inside the opening (estimated size
@@ -255,6 +290,9 @@ class OnboardPlanner:
         sel = self.selector.sel
         act = self.safety.filter(raw, seen, _gather(self.est.valid, sel) & self.selector.has, self.state.pos, self.yaw,
                                  self.step_max, _gather(self.est.sigma, sel), self.state.vel_w, self.target_idx)
+        pre_layer = act
+        if self.layer is not None:               # convex layer last, as in the env loop and "+layer"
+            act = self.layer.filter(act, self)
         if self.action_dim == 4:                 # heading set-point, integrated like the training env
             self.yaw_cmd = self.yaw_cmd + act[:, 3] * self.yaw_rate * self.step_dt
         self.prev_actions, self.actions = self.actions, act
@@ -264,11 +302,18 @@ class OnboardPlanner:
         cur = [float(v) for v in self.state.pos[0]]
         nxt = [float(v) for v in wp[0]]
         wc = {"waypoints": [cur, nxt], "limits": self.limits, "dt": 0.01}
-        return {"waypoint": nxt, "action": [float(v) for v in act[0]], "policy_action": [float(v) for v in raw[0]],
-                "hold": bool(self.safety.holding[0]), "target_index": int(self.mission.target[0]),
-                "done": int(self.mission.target[0]) >= self.mission.n, "waypoints_config": wc,
-                "estimate_valid": bool(_gather(self.est.valid, sel)[0] & self.selector.has[0]),
-                "yaw": float(self.yaw_cmd[0]), "selected_window": int(sel[0]) if bool(self.selector.has[0]) else -1}
+        done = int(self.mission.target[0]) >= self.mission.n
+        if done and self.slung is not None:      # ... and the load through the last window as well
+            done = self._load_clear()
+        out = {"waypoint": nxt, "action": [float(v) for v in act[0]], "policy_action": [float(v) for v in raw[0]],
+               "hold": bool(self.safety.holding[0]), "target_index": int(self.mission.target[0]),
+               "done": done, "waypoints_config": wc,
+               "estimate_valid": bool(_gather(self.est.valid, sel)[0] & self.selector.has[0]),
+               "yaw": float(self.yaw_cmd[0]), "selected_window": int(sel[0]) if bool(self.selector.has[0]) else -1}
+        if self.layer is not None:
+            out["pre_layer_action"] = [float(v) for v in pre_layer[0]]
+            out["layer_changed"] = bool(self.layer.changed[0])
+        return out
 
     def validate_waypoints_config(self, wc: dict) -> None:
         """Validate against 성진's schema (reinforcement_yunho/interface)."""

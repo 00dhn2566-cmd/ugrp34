@@ -162,7 +162,10 @@ $PY rl_planner/scripts/scan_stats.py --policy <export> --config rl_planner/confi
 convex layer (`planners/convex_layer.py`)를 붙인다: 웨이포인트 제어기 폐루프 + 선형화한 진자로 1 s 앞을 예측해, 흔들림 25° 안,
 목표 창문과 방금 지난 창문(짐이 아직 안 지났으면)의 개구부 안, 행동 상자 안을 지키는 행동 중 신경망 행동에 가장 가까운 것을 QP 로
 고른다. QP 는 모든 환경을 한 번에 푸는 GPU 배치 ADMM (`core/qp.py`, osqp 와 대조). 드론에 있는 정보만 쓴다 (자기 자세, 줄
-센서 = 갈고리 기준 짐 위치·속도, 창문 추정).
+센서 = 갈고리 기준 짐 위치·속도, 창문 추정). 온보드는 `OnboardPlanner(export, n_windows, slung=<base.yaml 의 slung 절>)`
+(줄 짐으로 학습한 정책이면 `slung` 생략)에 `drone_state["load"] = {"offset", "vel"}` (갈고리에서 짐까지, 짐 속도 − 기체 속도;
+둘 다 기체 축)를 더 주면 같은 layer 가 마지막에 투영한다 — 학습 환경과 관측·투영 행동이 1e-6 안으로 같다 (`tests/test_onboard.py`).
+`done` 은 짐이 마지막 창문을 지나야 참이다.
 
 ```bash
 # 평가: 신경망만 / + convex layer (재학습 없이)
