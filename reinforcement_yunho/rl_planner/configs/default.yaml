@@ -30,6 +30,18 @@ drone:
   thrust_to_weight: 2.0              # 총 최대추력 / 무게 (planner_limits 물리 한계 근거)
   torque_max: [2.0, 2.0, 0.3]        # [N m] 몸체 토크 포화 (유효 모멘트 암 0.093 m × 최대 차동추력 근사)
   collision_radius: 0.30             # [m] 충돌 판정 구 반경 (휠베이스 450 mm/2 + 프롭 일부)
+  shape: sphere                      # 충돌 판정 모양: sphere (collision_radius 구) | airframe (아래 실제 기체: 프롭 원판 4 + 몸체 + 짐 상자, core/airframe.py)
+  airframe:                          # FX450 = DJI F450 급 X 쿼드 (공식 스펙: 휠베이스 450 mm, 10 인치 프롭) + 성진 Gazebo SDF·CAD 실측 (docs/DYNAMICS.md §9)
+    chassis_z: 0.031754              # [m] 섀시 원점이 무게중심보다 높은 거리 (짐 1 kg 이 아래에 붙어 무게중심이 3.2 cm 내려감)
+    rotor_radius: 0.225              # [m] 중심 → 모터 (휠베이스 450 mm 의 절반)
+    rotor_angles_deg: [-135.0, 135.0, -45.0, 45.0]   # 모터 1~4 방위 (x 앞, y 왼쪽): 뒤오른쪽·뒤왼쪽·앞오른쪽·앞왼쪽 (성진 믹서 실측표)
+    rotor_spin: [1, -1, -1, 1]       # +1 = 위에서 보아 반시계 (렌더용)
+    rotor_z: 0.020                   # [m] 섀시 원점 기준 프롭 높이
+    prop_radius: 0.127               # [m] 10 인치 (D 0.254, qc_motor.hpp)
+    prop_thickness: 0.006            # [m] 판정용 원판 두께
+    boxes:                           # [중심 x, y, z (섀시 원점 기준), 크기 x, y, z] [m]
+      body: [0.0, 0.0, 0.0, 0.20, 0.20, 0.06]          # 상·하판 + 비행 컴퓨터·배터리
+      package: [0.0, 0.0, -0.082, 0.14, 0.14, 0.14]    # 짐 1 kg (아래 부착면 z = −12 mm)
   safety_margin: 0.35                # [m] planner_limits.clearance_margin — 보상·평가의 "안전 통과" 기준
   linear_drag: 0.10                  # [N/(m/s)] 선형 항력 계수
   motor_time_constant: 0.03          # [s] 추력·토크 1차 지연

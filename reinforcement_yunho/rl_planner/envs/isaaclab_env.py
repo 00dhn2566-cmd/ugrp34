@@ -15,13 +15,15 @@ Notes
 * Isaac Lab 3.0 quaternions are (x, y, z, w); the core uses (w, x, y, z). The
   conversion happens only in ``_sync_state`` / ``_reset_idx``.
 * The drone body has no collider: contacts are refereed analytically by the core
-  (MissionTracker), and inter-env collisions cannot happen.
+  (MissionTracker), and inter-env collisions cannot happen. It is drawn as the real
+  airframe (core/airframe.py: FX450 propellers, arms, body, package), visual only.
 * Windows are not spawned for training (nothing physical touches them); the
   play script spawns visual frames when rendering a rollout.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import MISSING
 
 import gymnasium as gym
 import torch
@@ -30,11 +32,14 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import SimulationCfg
+from isaaclab.sim import SimulationCfg, schemas
+from isaaclab.sim.spawners.utils import apply_schema_props
+from isaaclab.sim.utils import bind_visual_material, clone, create_prim, get_current_stage
 from isaaclab.utils import configclass
 from isaaclab_physx.sim.schemas import PhysxRigidBodyCfg
 
 from ..core import math3d as m3
+from ..core.airframe import Airframe
 from ..core.config import load_config
 from ..core.env_core import WindowMissionCore
 
@@ -49,11 +54,55 @@ def _wxyz_to_xyzw(q: torch.Tensor) -> torch.Tensor:
     return torch.cat((q[..., 1:4], q[..., 0:1]), dim=-1)
 
 
+@clone
+def spawn_airframe(prim_path: str, cfg: "AirframeCfg", translation=None, orientation=None, **kwargs):
+    """The real airframe as one rigid body with visual-only parts (Airframe.visual_parts). No colliders: the core
+    referees contacts. Mass and inertia are written per env at reset; the centre of mass is the body origin."""
+    from pxr import Gf, UsdPhysics
+    stage = get_current_stage()
+    prim = create_prim(prim_path, prim_type="Xform", translation=translation, orientation=orientation, stage=stage)
+    for part in cfg.parts:
+        path = f"{prim_path}/geometry/{part['name']}"
+        q = _wxyz_to_xyzw(m3.quat_from_rotmat(torch.tensor(part["R"]))).tolist()
+        if part["kind"] == "box":
+            create_prim(path, "Cube", translation=part["center"], orientation=q, scale=part["size"],
+                        attributes={"size": 1.0}, stage=stage)
+        else:
+            create_prim(path, "Cylinder", translation=part["center"], orientation=q, stage=stage,
+                        attributes={"radius": part["radius"], "height": part["length"], "axis": "Z"})
+        look_path = f"/World/Looks/airframe_{part['name']}"             # shared by every env
+        if not stage.GetPrimAtPath(look_path).IsValid():
+            look = sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(part["rgb"]), opacity=float(part["opacity"]))
+            look.func(look_path, look)
+        bind_visual_material(path, look_path, stage=stage)
+    apply_schema_props(cfg.mass_props, prim_path, schemas.apply_mass_properties, schemas.define_mass_properties, stage)
+    UsdPhysics.MassAPI(prim).CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, 0.0))
+    apply_schema_props(cfg.rigid_props, prim_path, schemas.apply_rigid_body_properties,
+                       schemas.define_rigid_body_properties, stage)
+    return prim
+
+
+@configclass
+class AirframeCfg(sim_utils.RigidObjectSpawnerCfg):
+    """Spawner for :func:`spawn_airframe`; ``parts`` = Airframe(cfg).visual_parts()."""
+
+    func: Callable = spawn_airframe
+    parts: list = MISSING
+
+
+def airframe_spawn_cfg(mission_cfg) -> AirframeCfg:
+    return AirframeCfg(
+        parts=Airframe(mission_cfg, "cpu").visual_parts(),
+        rigid_props=PhysxRigidBodyCfg(disable_gravity=False, linear_damping=0.0, angular_damping=0.0,
+                                      enable_gyroscopic_forces=True, max_depenetration_velocity=1.0),
+        mass_props=sim_utils.MassCfg(mass=float(mission_cfg["drone"]["mass"])))
+
+
 @configclass
 class WindowMissionSceneCfg(InteractiveSceneCfg):
     drone: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Drone",
-        spawn=sim_utils.CuboidCfg(
+        spawn=sim_utils.CuboidCfg(                          # replaced by the airframe in WindowMissionIsaacEnv
             size=(0.45, 0.45, 0.10),                       # FX450 footprint (visual only)
             rigid_props=PhysxRigidBodyCfg(disable_gravity=False, linear_damping=0.0, angular_damping=0.0,
                                           enable_gyroscopic_forces=True, max_depenetration_velocity=1.0),
@@ -106,6 +155,7 @@ class WindowMissionIsaacEnv(DirectRLEnv):
     def __init__(self, cfg: WindowMissionEnvCfg, render_mode: str | None = None, **kwargs):
         if cfg.mission is None:
             cfg.mission = load_config().to_dict()
+        cfg.scene.drone.spawn = airframe_spawn_cfg(cfg.mission)
         self.core = None
         super().__init__(cfg, render_mode, **kwargs)
         self.drone = self.scene["drone"]

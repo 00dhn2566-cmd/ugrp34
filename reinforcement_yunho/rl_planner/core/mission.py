@@ -6,6 +6,9 @@ Geometry (all from GROUND TRUTH — this is the referee, never an observation):
   change; the crossing point is interpolated and expressed in window (u, v).
   The drone is a sphere of radius r. Near a wall plane (|d| < r) it touches the
   wall if the disk where the sphere cuts the plane leaves the opening rectangle.
+  drone.shape: airframe replaces the sphere with the real airframe (core/airframe.py): it
+  touches the wall if any part's cut leaves the opening, and the clearance at a pass is
+  measured from its shadow on the window plane.
 
 Events per decision step (OR-ed over the physics sub-steps):
   pass        target window crossed front->back with the centre inside the opening
@@ -21,6 +24,7 @@ from typing import Mapping
 import torch
 
 from . import math3d as m3
+from .airframe import Airframe
 from .scene import SceneTensors
 
 CRASH_NONE, CRASH_WALL, CRASH_GROUND, CRASH_BOUNDS, CRASH_TILT, CRASH_ORDER, CRASH_BACK = range(7)
@@ -31,6 +35,10 @@ class MissionTracker:
     def __init__(self, cfg: Mapping, num_envs: int, max_windows: int, device):
         sc = cfg["scene"]
         self.r = float(cfg["drone"]["collision_radius"])
+        shape = str(cfg["drone"].get("shape", "sphere"))
+        if shape not in ("sphere", "airframe"):
+            raise ValueError(f"drone.shape: {shape} (sphere | airframe)")
+        self.airframe = Airframe(cfg, device) if shape == "airframe" else None
         self.margin = float(cfg["drone"]["safety_margin"])
         self.wall_half = float(sc["wall_half_extent"])
         b = sc["bounds"]
@@ -89,13 +97,23 @@ class MissionTracker:
         inside = (u.abs() <= hw) & (v.abs() <= hh)
         on_wall = (u.abs() <= self.wall_half) & (v.abs() <= self.wall_half)
 
-        # sphere touching the wall around the current position
-        uc = ((pos[:, None, :] - c) * scene.right).sum(-1)
-        vc = ((pos[:, None, :] - c) * scene.up).sum(-1)
-        rho = (self.r ** 2 - d ** 2).clamp_min(0.0).sqrt()
-        near = (d.abs() < self.r) & scene.valid
-        leaves = (uc.abs() + rho > hw) | (vc.abs() + rho > hh)
-        wall_touch = near & leaves & (uc.abs() <= self.wall_half + self.r) & (vc.abs() <= self.wall_half + self.r)
+        if self.airframe is None:
+            # sphere touching the wall around the current position
+            uc = ((pos[:, None, :] - c) * scene.right).sum(-1)
+            vc = ((pos[:, None, :] - c) * scene.up).sum(-1)
+            rho = (self.r ** 2 - d ** 2).clamp_min(0.0).sqrt()
+            near = (d.abs() < self.r) & scene.valid
+            leaves = (uc.abs() + rho > hw) | (vc.abs() + rho > hh)
+            wall_touch = near & leaves & (uc.abs() <= self.wall_half + self.r) & (vc.abs() <= self.wall_half + self.r)
+        else:
+            # any part of the airframe meeting the wall plane outside the opening, on the panel
+            Rb = m3.quat_to_rotmat(quat)
+            meets, ctr, half = self.airframe.cut(pos, Rb, c, n, scene.right, scene.up)
+            lim = torch.stack((hw, hh), -1)[:, :, None]
+            leaves = ((ctr - half < -lim) | (ctr + half > lim)).any(-1)
+            on_panel = ((ctr + half >= -self.wall_half) & (ctr - half <= self.wall_half)).all(-1)
+            near = (d.abs() < self.airframe.reach) & scene.valid
+            wall_touch = near & (meets & leaves & on_panel).any(-1)
 
         self._flag_crash(live & (wall_touch.any(-1) | (crossed & ~inside & on_wall).any(-1)), CRASH_WALL)
         self._flag_crash(live & (crossed_back & inside).any(-1), CRASH_BACK)
@@ -107,7 +125,12 @@ class MissionTracker:
 
         good = through & tgt_onehot & live[:, None] & ~self.crashed[:, None]
         if good.any():
-            slack = torch.minimum(hw - u.abs(), hh - v.abs()) - self.r
+            if self.airframe is None:
+                slack = torch.minimum(hw - u.abs(), hh - v.abs()) - self.r
+            else:                                   # room left around the airframe's shadow at the crossing point
+                lo, hi = self.airframe.shadow(X, Rb, c, scene.right, scene.up)
+                lim = torch.stack((hw, hh), -1)
+                slack = torch.minimum(lim - hi, lim + lo).amin(-1)
             self.clearance = torch.where(good, slack, self.clearance)
             self.pass_time = torch.where(good, t_now[:, None].expand_as(self.pass_time), self.pass_time)
             self.passed |= good

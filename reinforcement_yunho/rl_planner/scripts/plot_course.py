@@ -5,7 +5,8 @@
 
 Windows are drawn as their wall panels (thick: the opening) with an arrow along the pass direction, numbered in
 course order (= the nearest-exit order). The path is coloured by what the drone was doing: orange while it turns
-faster than 40 deg/s (looking around), blue otherwise. The GIF follows the drone with the camera's
+faster than 40 deg/s (looking around), blue otherwise. The GIF follows the drone, drawn true to scale as
+the airframe from above (core/airframe.py: red front arms, propeller discs), with the camera's
 horizontal field of view drawn as a wedge, so the look-around shows as the wedge sweeping. Same seeded scenes as
 benchmark.py (CPU). ``--planner`` picks a scripted baseline instead of a policy (fsmscan, or <policy>:scan with --policy).
 """
@@ -46,7 +47,9 @@ def main(argv=None) -> int:
     import matplotlib.pyplot as plt
     import numpy as np
     import torch
+    from matplotlib.patches import Circle
 
+    from rl_planner.core.airframe import Airframe
     from rl_planner.core.config import config_for_policy, load_config
     from rl_planner.core.mission import CRASH_NAMES
     from rl_planner.envs.torch_env import TorchWindowEnv
@@ -118,6 +121,25 @@ def main(argv=None) -> int:
             if focus is None or np.hypot(*(c[:2] - focus)) < 9:
                 ax.text(c[0] + 0.25, c[1] + 0.25, str(k + 1), fontsize=7 if focus is None else 9, color=col)
 
+    af = Airframe(cfg, "cpu")
+    body_half = float(af.box_a[af.box_names.index("body"), 0]) if "body" in af.box_names else 0.1
+
+    def draw_drone(ax, x, y, yw):
+        """The airframe from above, true to scale: red front arms, propeller discs, body, camera."""
+        c, s = math.cos(yw), math.sin(yw)
+        rot = lambda px, py: (x + c * px - s * py, y + s * px + c * py)  # noqa: E731
+        for a in af.angles:
+            ex, ey = rot(af.rotor_radius * math.cos(a), af.rotor_radius * math.sin(a))
+            ax.plot([x, ex], [y, ey], "-", color="#c0392b" if math.cos(a) > 0 else "#7b8a8b", lw=1.8,
+                    solid_capstyle="round", zorder=5)
+            ax.add_patch(Circle((ex, ey), af.rho, facecolor="#5d6d7e", edgecolor="#2c3e50", alpha=0.45, lw=0.6,
+                                zorder=6))
+        sq = np.array([rot(px, py) for px, py in ((body_half, body_half), (-body_half, body_half),
+                                                   (-body_half, -body_half), (body_half, -body_half))])
+        ax.fill(sq[:, 0], sq[:, 1], color="#1f2a30", zorder=7)
+        tri = np.array([rot(body_half + 0.09, 0.0), rot(body_half, 0.05), rot(body_half, -0.05)])
+        ax.fill(tri[:, 0], tri[:, 1], color="#c0392b", zorder=7)
+
     def draw_path(ax, upto):
         seg = L[:upto + 1]
         for i in range(1, len(seg)):
@@ -153,7 +175,7 @@ def main(argv=None) -> int:
             wedge = np.array([[x, y]] + [[x + 4.5 * math.cos(yw + s), y + 4.5 * math.sin(yw + s)]
                                          for s in np.linspace(-hfov, hfov, 12)])
             ax.fill(wedge[:, 0], wedge[:, 1], color="#f5b041", alpha=0.25, lw=0)
-            ax.plot(x, y, "o", color="#d9661f", ms=7)
+            draw_drone(ax, x, y, yw)
             ax.set_xlim(x - 7, x + 7)
             ax.set_ylim(y - 5.25, y + 5.25)
             ax.set_aspect("equal")

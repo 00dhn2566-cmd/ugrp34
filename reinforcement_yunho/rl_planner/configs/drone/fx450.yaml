@@ -1,0 +1,4 @@
+# 공(판정 구) 대신 실제 기체 모양으로 충돌 판정 — FX450 (DJI F450 급 X 쿼드): 10 인치 프롭 원판 4 + 몸체 + 짐 상자
+# 치수는 default.yaml drone.airframe, 판정은 core/airframe.py
+drone:
+  shape: airframe

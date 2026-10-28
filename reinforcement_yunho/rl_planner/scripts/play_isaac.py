@@ -4,7 +4,9 @@
     python rl_planner/scripts/play_isaac.py --planner fsm --level 3 --seed 5 --out fsm.gif
 
 Windows are spawned as visual USD prims (coloured frame bars + translucent grey wall)
-from the episode's sampled scene; physics/referee are exactly the training env's.
+from the episode's sampled scene; physics/referee are exactly the training env's. The drone is
+drawn as the real airframe (core/airframe.py: FX450, red front arms, the camera at the front)
+whatever the referee's shape (drone.shape: sphere | airframe).
 """
 from __future__ import annotations
 
@@ -51,6 +53,8 @@ def main(argv=None) -> int:
     from PIL import Image, ImageDraw
     from pxr import Gf, UsdGeom, UsdShade, Sdf
 
+    from rl_planner.core import math3d as m3
+    from rl_planner.core.airframe import Airframe
     from rl_planner.core.config import config_for_policy, load_config
     from rl_planner.envs.isaaclab_env import WindowMissionIsaacEnv, make_env_cfg
     from rl_planner.planners.fsm import FSMPlanner, STATE_NAMES
@@ -142,13 +146,31 @@ def main(argv=None) -> int:
         box(f"/World/Viz/w{w}_wt", base + np.array([0, 0, (z_hi + z_top) / 2]), R, (2 * (hw + bar), z_top - z_hi, th), wall_mat)
         box(f"/World/Viz/w{w}_wb", base + np.array([0, 0, z_lo / 2]), R, (2 * (hw + bar), max(z_lo, 0.02), th), wall_mat)
 
-    # The cloned drone's pose lives in Fabric, so draw the referee's collision sphere
-    # (radius = drone.collision_radius) as our own USD marker, moved every frame.
-    drone_mat = material("/World/Looks/drone", (1.0, 0.55, 0.1), 0.85)
-    marker = UsdGeom.Sphere.Define(stage, "/World/Viz/drone")
-    marker.CreateRadiusAttr(float(cfg["drone"]["collision_radius"]))
-    UsdShade.MaterialBindingAPI(marker.GetPrim()).Bind(drone_mat)
-    marker_op = UsdGeom.Xformable(marker).AddTranslateOp()
+    def cylinder(path, center, R, radius, length, mat):
+        cyl = UsdGeom.Cylinder.Define(stage, path)
+        cyl.CreateRadiusAttr(float(radius))
+        cyl.CreateHeightAttr(float(length))
+        cyl.CreateAxisAttr("Z")
+        M = Gf.Matrix4d(1.0)
+        M.SetRotateOnly(Gf.Matrix3d(*[float(v) for v in R.T.reshape(-1)]))
+        M.SetTranslateOnly(Gf.Vec3d(*[float(v) for v in center]))
+        UsdGeom.Xformable(cyl).AddTransformOp().Set(M)
+        UsdShade.MaterialBindingAPI(cyl.GetPrim()).Bind(mat)
+
+    # The cloned drone's pose lives in Fabric, so draw the airframe (core/airframe.py: the FX450's propellers,
+    # arms, body, package and camera) as our own USD prims under one Xform, posed every frame (position + attitude).
+    env_drone = stage.GetPrimAtPath("/World/envs/env_0/Drone")
+    if env_drone.IsValid():
+        UsdGeom.Imageable(env_drone).MakeInvisible()
+    drone = UsdGeom.Xform.Define(stage, "/World/Viz/drone")
+    drone_op = drone.AddTransformOp()
+    for part in Airframe(cfg, "cpu").visual_parts():
+        mat = material(f"/World/Looks/drone_{part['name']}", part["rgb"], part["opacity"])
+        path, c, R = f"/World/Viz/drone/{part['name']}", np.array(part["center"]), np.array(part["R"])
+        if part["kind"] == "box":
+            box(path, c, R, part["size"], mat)
+        else:
+            cylinder(path, c, R, part["radius"], part["length"], mat)
 
     cams = {}
     for name in ("chase", "side"):
@@ -183,11 +205,15 @@ def main(argv=None) -> int:
         if a.max_seconds is not None and float(core.episode_time[0]) > a.max_seconds:
             break
         p = core.state.pos[0].cpu().numpy() + origin
-        marker_op.Set(Gf.Vec3d(*[float(v) for v in p]))
+        Rb = m3.quat_to_rotmat(core.state.quat[:1])[0].cpu().numpy()
+        M = Gf.Matrix4d(1.0)
+        M.SetRotateOnly(Gf.Matrix3d(*[float(v) for v in Rb.T.reshape(-1)]))
+        M.SetTranslateOnly(Gf.Vec3d(*[float(v) for v in p]))
+        drone_op.Set(M)
         if scatter:                                       # behind the drone along its heading (it turns)
             yw = float(core.yaw[0])
             f, l = np.array([np.cos(yw), np.sin(yw), 0.0]), np.array([-np.sin(yw), np.cos(yw), 0.0])
-            look_at(cams["chase"][0], p - 2.4 * f + 0.7 * l + np.array([0, 0, 1.0]), p + 1.5 * f + np.array([0, 0, -0.1]))
+            look_at(cams["chase"][0], p - 1.9 * f + 0.55 * l + np.array([0, 0, 0.8]), p + 1.5 * f + np.array([0, 0, -0.1]))
         else:
             look_at(cams["chase"][0], p + np.array([-2.2, -0.9, 0.9]), p + np.array([1.5, 0.0, -0.1]))
         if top:                                           # top-down, following the drone

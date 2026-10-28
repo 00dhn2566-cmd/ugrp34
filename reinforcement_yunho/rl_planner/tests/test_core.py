@@ -110,8 +110,8 @@ def test_occlusion_by_nearer_wall():
 
 
 # ----------------------------------------------------------------------------- referee
-def _tracker():
-    cfg = cfg_cpu()
+def _tracker(*overrides):
+    cfg = cfg_cpu(*overrides)
     lay = [[{"center": [3.0, 0.0, 1.2], "size_wh": [1.0, 1.0]}]]
     sc = scene_from_layout(lay, 1, [0, 0, 1.2], DEV)
     mt = MissionTracker(cfg, 1, 1, DEV)
@@ -119,10 +119,10 @@ def _tracker():
     return mt, sc
 
 
-def _fly(mt, sc, pts):
-    q = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+def _fly(mt, sc, pts, q=(1.0, 0.0, 0.0, 0.0)):
+    q = torch.tensor([q])
     for p in pts:
-        mt.substep(torch.tensor([p]), q, sc, torch.tensor([0.0]))
+        mt.substep(torch.tensor([p], dtype=torch.float32), q, sc, torch.tensor([0.0]))
 
 
 def test_pass_through_centre():
@@ -142,6 +142,47 @@ def test_backwards_passage_flagged():
     mt, sc = _tracker()
     _fly(mt, sc, [[x, 0.0, 1.2] for x in np.linspace(0.0, 4.0, 41)] + [[x, 0.0, 1.2] for x in np.linspace(4.0, 2.0, 21)])
     assert int(mt.crash_reason[0]) in (0, CRASH_BACK)    # success latches first; never a silent pass
+
+
+def test_airframe_referee_uses_the_real_fx450_shape():
+    """The FX450 is flat and 0.70 m across its diagonal: it clears a 1 m opening 0.30 m off-centre vertically where
+    the 0.60 m sphere hits the frame, and 0.20 m off-centre sideways when it flies straight (half-width
+    0.159 + 0.127 m), but not once it is yawed 45 degrees (a propeller tip leads: 0.225 + 0.127 m)."""
+    af = ("drone.shape=airframe",)
+    yaw45 = (math.cos(math.pi / 8), 0.0, 0.0, math.sin(math.pi / 8))
+    for sets, (dy, dz), q, crash in (((), (0.0, 0.30), (1.0, 0.0, 0.0, 0.0), True),
+                                     (af, (0.0, 0.30), (1.0, 0.0, 0.0, 0.0), False),
+                                     (af, (0.20, 0.0), (1.0, 0.0, 0.0, 0.0), False),
+                                     (af, (0.20, 0.0), yaw45, True)):
+        mt, sc = _tracker(*sets)
+        _fly(mt, sc, [[x, dy, 1.2 + dz] for x in np.linspace(0.0, 4.0, 81)], q)
+        assert bool(mt.crashed[0]) == crash, (sets, dy, dz, q)
+        assert (int(mt.crash_reason[0]) == CRASH_WALL) if crash else bool(mt.success[0])
+    mt, sc = _tracker(*af)
+    _fly(mt, sc, [[x, 0.0, 1.2] for x in np.linspace(0.0, 4.0, 81)])
+    assert float(mt.clearance[0, 0]) == pytest.approx(0.5 - (0.225 / math.sqrt(2) + 0.127), abs=1e-4)
+
+
+def test_airframe_cut_is_the_chord_of_a_tilted_propeller():
+    """A propeller rolled 30 degrees, its centre 5 cm in front of a wall: the cut is the chord at 5 / sin(60 deg)
+    cm from the centre along the disc, tilted with the disc."""
+    from rl_planner.core.airframe import Airframe
+    cfg = cfg_cpu("drone.shape=airframe")
+    af = Airframe(cfg, DEV)
+    phi = math.radians(30.0)
+    R = torch.tensor([[[1.0, 0.0, 0.0], [0.0, math.cos(phi), -math.sin(phi)], [0.0, math.sin(phi), math.cos(phi)]]])
+    k = 3                                                  # front-left propeller
+    pk = R[0] @ af.rotors[k]
+    n = torch.tensor([[[0.0, -1.0, 0.0]]])                 # wall plane y = c_y, facing -y
+    c = (pk + torch.tensor([0.0, 0.05, 0.0]))[None, None]
+    u, v = torch.tensor([[[1.0, 0.0, 0.0]]]), torch.tensor([[[0.0, 0.0, 1.0]]])
+    meets, ctr, half = af.cut(torch.zeros(1, 3), R, c, n, u, v)
+    delta = 0.05 / math.cos(phi)                           # along the disc's in-plane y axis
+    h = math.sqrt(af.rho ** 2 - delta ** 2)
+    assert bool(meets[0, 0, k])
+    assert float(ctr[0, 0, k, 1]) == pytest.approx(delta * math.sin(phi), abs=1e-6)      # chord centre height
+    assert float(half[0, 0, k, 0]) == pytest.approx(h + af.ht, abs=1e-6)                  # chord along x
+    assert float(half[0, 0, k, 1]) == pytest.approx(af.ht, abs=1e-6)
 
 
 # ----------------------------------------------------------------------------- env

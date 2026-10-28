@@ -1,0 +1,5 @@
+# fx450.yaml + 추력을 F450 급 공식 추진계 수준으로: DJI E310 최대 추력 800 g/로터 (@12 V, 3S)
+#   총 3.2 kgf / 2.2726 kg (짐 1 kg 포함) = 추력/무게 1.41 (기본값 2.0)
+drone:
+  shape: airframe
+  thrust_to_weight: 1.41
