@@ -1,0 +1,7 @@
+# 줄에 매단 짐 학습: convex layer 를 환경 안에 두고 (정책은 투영된 행동으로 비행) 케이블 센서 관측을 더해 기존 정책에서 이어 학습
+#   observation.policy 에 slung 추가 — scripts/expand_obs.py --add slung 이 출력하는 --set 을 함께 쓴다
+slung:
+  convex_layer:
+    in_env: true
+reward:
+  load_swing: -0.5                   # (짐의 수평 흔들림 / 줄 길이)^2 — 잔잔한 진자
