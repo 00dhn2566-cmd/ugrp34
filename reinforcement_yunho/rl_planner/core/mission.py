@@ -176,7 +176,7 @@ class MissionTracker:
         """The load (a ball of radius rL) and the cable (a segment hook -> load) against every wall: the load is
         refereed like the sphere drone (touching a wall outside the opening, or its centre crossing a wall plane
         outside the opening), the cable must cut a wall plane inside the opening. Success needs the load through
-        the last window as well."""
+        the last window as well (on its far side when the drone is through)."""
         c, n = scene.center, scene.normal
         hw, hh = scene.size[..., 0] / 2, scene.size[..., 1] / 2
         rel = pL[:, None, :] - c
@@ -194,7 +194,9 @@ class MissionTracker:
         inside = (u.abs() <= hw) & (v.abs() <= hh)
         on_wall = (u.abs() <= self.wall_half) & (v.abs() <= self.wall_half)
         self._flag_crash(live & (touch.any(-1) | (crossed & ~inside & on_wall).any(-1)), CRASH_LOAD)
-        self.load_past |= fwd & inside
+        # through = on the far side now: a load that swings back through the opening owes the window again (with a
+        # cable as long as the window is tall it can pass first and swing back before the drone is through)
+        self.load_past = (self.load_past | (fwd & inside)) & ~(crossed & ~fwd)
         dH = ((hook[:, None, :] - c) * n).sum(-1)
         cut = (dH * dL < 0) & scene.valid
         s = dH / (dH - dL).where(cut, torch.ones_like(dL))

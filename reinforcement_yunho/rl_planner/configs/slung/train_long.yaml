@@ -1,0 +1,7 @@
+# 긴 줄 학습 (RESULTS.md §15): convex layer (scp) 를 환경 안에 두고 slung_a 에서 이어 학습 — configs/slung/long.yaml 뒤에 합친다
+#   개구부 높이를 단계마다 줄이는 커리큘럼은 --set "curriculum.override={opening_h: [...]}" 로 준다 (평가에서는 기본값으로 돌아감)
+slung:
+  convex_layer:
+    in_env: true
+reward:
+  load_swing: 0.0                    # 흔들어 올리거나 던지는 해를 벌하지 않음 (0.4 m 줄 학습은 -0.5)

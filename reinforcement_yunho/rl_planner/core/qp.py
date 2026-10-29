@@ -14,13 +14,16 @@ import torch
 
 
 def solve_qp(P, q, A, l, u, iters: int = 60, rho: float = 1.0, sigma: float = 1e-6, alpha: float = 1.6,
-             warm=None):
-    """-> (x (B,n), z (B,m), y (B,m), primal residual (B,), dual residual (B,))."""
+             warm=None, inverse: bool = False):
+    """-> (x (B,n), z (B,m), y (B,m), primal residual (B,), dual residual (B,)). ``inverse``: invert K once and
+    multiply in the iterations instead of triangular solves (same iterates to rounding, fewer kernels: faster for
+    many small problems)."""
     B, n = q.shape
     m = A.shape[1]
     At = A.transpose(-1, -2)
     K = P + sigma * torch.eye(n, device=q.device, dtype=q.dtype) + rho * At @ A
     Lc = torch.linalg.cholesky(K)
+    Ki = torch.cholesky_inverse(Lc) if inverse else None
     if warm is None:
         x = torch.zeros(B, n, device=q.device, dtype=q.dtype)
         z = torch.zeros(B, m, device=q.device, dtype=q.dtype)
@@ -29,7 +32,7 @@ def solve_qp(P, q, A, l, u, iters: int = 60, rho: float = 1.0, sigma: float = 1e
         x, z, y = warm
     for _ in range(iters):
         rhs = sigma * x - q + (At @ (rho * z - y)[..., None])[..., 0]
-        xt = torch.cholesky_solve(rhs[..., None], Lc)[..., 0]
+        xt = (Ki @ rhs[..., None])[..., 0] if inverse else torch.cholesky_solve(rhs[..., None], Lc)[..., 0]
         zt = (A @ xt[..., None])[..., 0]
         x = alpha * xt + (1 - alpha) * x
         zr = alpha * zt + (1 - alpha) * z
