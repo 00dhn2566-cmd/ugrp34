@@ -42,6 +42,9 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--modes", default="surrogate,yolo", help="comma list of surrogate | yolo | yolo+edge")
     ap.add_argument("--gif-episodes", type=int, default=1, help="onboard GIF of the first N episodes of each image mode")
+    ap.add_argument("--assoc", choices=("gt", "track"), default="gt",
+                    help="detections -> windows: gt = the true projection (the surrogate's assumption); track = as on the "
+                         "drone (vision/detector.py associate_tracked: the current estimates, else course order)")
     ap.add_argument("--blur-samples", type=int, default=6,
                     help="with a camera exposure (perception.exposure_s, e.g. general/blur10.yaml): the yolo image is the "
                          "mean of this many renders along the exposure (the surrogate's blur model streaks the corners)")
@@ -59,7 +62,7 @@ def main(argv=None) -> int:
     from rl_planner.core.mission import CRASH_NAMES
     from rl_planner.envs.torch_env import TorchWindowEnv
     from rl_planner.planners.policy import PolicyPlanner
-    from rl_planner.vision.detector import YoloCorners, associate, project, refine_corners, visible
+    from rl_planner.vision.detector import YoloCorners, associate, associate_tracked, project, refine_corners, visible
     from rl_planner.vision.isaac_view import OnboardView
     from rl_planner.vision.overlay import annotate
 
@@ -86,7 +89,7 @@ def main(argv=None) -> int:
     state = {"fp": None, "stats": None, "frames": None, "refine": False, "ep": 0, "trace": None}
 
     def new_stats():
-        return dict(frames=0, visible=0, found=0, extra=0, false=0, corner_err=[], rows=[])
+        return dict(frames=0, visible=0, found=0, extra=0, false=0, corner_err=[], rows=[], assoc_err=0)
 
     def account(st, vis, det, uv, uv_gt, n_false, cam_c, centers):
         st["frames"] += 1
@@ -144,6 +147,14 @@ def main(argv=None) -> int:
                 dets = [(c, cf, q, kc) for c, cf, kp, kc in dets for q, ok in [refine_corners(img, kp, c)] if ok.all()]
             uv_gt, z_gt = project(pr, scene.corners[0].cpu(), cam_c[0].cpu(), R_img[0].cpu())
             u1, d1, c1, n_false = associate(dets, uv_gt, z_gt, scene.color[0].cpu(), scene.valid[0].cpu())
+            if a.assoc == "track":                # the estimates so far, projected from the estimated camera pose
+                est = pr.estimate()
+                ray_c0 = (cam_c if ray_offset is None else cam_c + ray_offset)[0].cpu()
+                uv_e, z_e = project(pr, est.corners[0].cpu(), ray_c0, R_WC[0].cpu())
+                ug, dg = u1, d1
+                u1, d1, c1, n_false = associate_tracked(dets, uv_e, z_e, est.valid[0].cpu(), scene.color[0].cpu(),
+                                                        int(core.mission.target[0]), n)
+                state["stats"]["assoc_err"] += int((d1 & (~dg | ((u1 - ug).norm(dim=-1).amax(-1) > 1e-3))).sum())
             side = (u1 - u1.roll(-1, dims=1)).norm(dim=-1).min(-1).values
             inside = ((u1[..., 0] >= mg) & (u1[..., 0] <= pr.width - mg) & (u1[..., 1] >= mg)
                       & (u1[..., 1] <= pr.height - mg)).all(-1)     # the surrogate's rule, on the detected corners
@@ -228,13 +239,14 @@ def main(argv=None) -> int:
             crash_reasons={c: sum(r["crash_reason"] == c for r in eps) for c in set(r["crash_reason"] for r in eps) if c},
             frames=st["frames"], recall=st["found"] / max(st["visible"], 1),
             extra_per_frame=st["extra"] / max(st["frames"], 1), false_per_frame=st["false"] / max(st["frames"], 1),
+            assoc_err_per_frame=st["assoc_err"] / max(st["frames"], 1),
             corner_err_px_median=float(np.nanmedian(ce)), corner_err_px_p90=float(np.nanpercentile(ce, 90)),
             corner_err_px_rms=float(np.sqrt(np.nanmean(ce ** 2))), seconds=time.time() - t0)
         results[mode] = dict(summary=summ, episodes=eps)
         np.save(os.path.join(a.out, f"seen_{mode.replace('+', '_')}.npy"), np.array(st["rows"], dtype=np.float64))
         print(f"[vision_loop] {mode}: " + json.dumps({k: v for k, v in summ.items()}), flush=True)
     meta = dict(policy=a.policy, planner=a.planner, config=a.config, set=a.set, weights=a.weights, imgsz=a.imgsz,
-                blur_samples=a.blur_samples, level=a.level, episodes=a.episodes, seed=a.seed)
+                blur_samples=a.blur_samples, assoc=a.assoc, level=a.level, episodes=a.episodes, seed=a.seed)
     with open(os.path.join(a.out, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(dict(meta=meta, results=results), f, indent=1)
     print(f"[vision_loop] wrote {a.out}/summary.json")

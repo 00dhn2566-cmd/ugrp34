@@ -82,3 +82,20 @@ def test_refine_corners_snaps_perturbed_corners_to_the_inner_edge_of_the_frame(b
     assert np.abs(out - true).max() < tol                  # from 5-8 px off
     _, ok_red = refine_corners(img, kp, 0)                 # no red frame there: nothing to snap to
     assert not ok_red.any()
+
+
+def test_associate_tracked_uses_the_estimates_then_course_order():
+    from rl_planner.vision.detector import associate_tracked
+    color = torch.tensor([0, 1, 2, 0, 1])                  # windows 0..4: red green blue red green; 0 already passed
+    uv_est = torch.stack([_square(0, 0, 10)] * 5)
+    uv_est[1] = _square(500, 300, 100)                     # window 1 has an estimate, predicted here
+    valid = torch.tensor([True, True, False, False, False])
+    dets = [(1, 0.6, _square(503, 302, 98).numpy(), None),     # green at window 1's prediction -> 1
+            (1, 0.9, _square(100, 100, 40).numpy(), None),     # another green: no estimate there -> 4, next green ahead
+            (0, 0.8, _square(700, 100, 60).numpy(), None),     # red, smaller: no red window left -> false
+            (0, 0.7, _square(200, 200, 150).numpy(), None),    # red, larger -> 3, first red ahead (nearer = larger)
+            (2, 0.5, _square(900, 500, 30).numpy(), None)]     # blue -> 2
+    uv, det, conf, false = associate_tracked(dets, uv_est, torch.ones(5, 4), valid, color, target=1, n=5)
+    assert det.tolist() == [False, True, True, True, True] and false == 1
+    for w, j in ((1, 0), (2, 4), (3, 3), (4, 1)):
+        assert torch.allclose(uv[w], torch.as_tensor(dets[j][2]))

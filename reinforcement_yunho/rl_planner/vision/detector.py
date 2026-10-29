@@ -154,3 +154,39 @@ def associate(dets: list, uv_gt: torch.Tensor, z_gt: torch.Tensor, color: torch.
         w = int(torch.where(ok, d, torch.full_like(d, float("inf"))).argmin())
         uv[w], det[w], conf[w] = k, True, float(cf)
     return uv, det, conf, false
+
+
+def associate_tracked(dets: list, uv_est: torch.Tensor, z_est: torch.Tensor, est_valid: torch.Tensor, color: torch.Tensor,
+                      target: int, n: int, gate_frac: float = 0.35, gate_min_px: float = 25.0):
+    """Detections -> windows without the truth, as on the drone: only the windows still ahead (target..n-1) of the
+    detection's colour. A window with a triangulated estimate takes the most confident detection whose corners are
+    within the gate of its prediction (the estimate projected from the estimated camera pose); the windows without an
+    estimate take the remaining detections of their colour in course order, largest in the image first (nearer =
+    earlier). A detection matching neither counts as false. -> (corners (W,4,2), det (W,), conf (W,), false)"""
+    W = uv_est.shape[0]
+    uv, det, conf = torch.zeros(W, 4, 2), torch.zeros(W, dtype=torch.bool), torch.zeros(W)
+    ahead = torch.zeros(W, dtype=torch.bool)
+    ahead[target:n] = True
+    tracked = ahead & est_valid & (z_est > 0.2).all(-1)
+    size = (uv_est - uv_est.roll(-1, dims=1)).norm(dim=-1).mean(-1)
+    rest, false = [], 0
+    for cls, cf, kp, kc in sorted(dets, key=lambda d: -d[1]):
+        k = torch.as_tensor(kp, dtype=torch.float32)
+        d = (uv_est - k[None]).norm(dim=-1).mean(-1)
+        ok = tracked & ((color % 3) == cls) & ~det & (d < (size * gate_frac).clamp_min(gate_min_px))
+        if bool(ok.any()):
+            w = int(torch.where(ok, d, torch.full_like(d, float("inf"))).argmin())
+            uv[w], det[w], conf[w] = k, True, float(cf)
+        else:
+            rest.append((cls, cf, k))
+
+    def area(q):                                                          # shoelace, px^2
+        return 0.5 * abs(float((q[:, 0] * q[:, 1].roll(-1) - q[:, 0].roll(-1) * q[:, 1]).sum()))
+    for cls, cf, k in sorted(rest, key=lambda d: -area(d[2])):
+        free = ahead & ~est_valid & ((color % 3) == cls) & ~det
+        if not bool(free.any()):
+            false += 1
+            continue
+        w = int(torch.nonzero(free)[0])
+        uv[w], det[w], conf[w] = k, True, float(cf)
+    return uv, det, conf, false
