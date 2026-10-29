@@ -14,7 +14,7 @@ import torch
 from .observations import _gather
 
 REGISTRY: Dict[str, Callable] = {}
-NON_TERM_KEYS = {"estimate_error_cap"}
+NON_TERM_KEYS = {"estimate_error_cap", "load_clearance_range"}
 
 
 def register(name: str):
@@ -85,6 +85,14 @@ def action_rate(core):
     return (core.actions - core.prev_actions).pow(2).sum(-1)
 
 
+@register("action_excess")
+def action_excess(core):
+    """Squared excess of the policy's raw action over the [-1, 1] the env flies (it is clipped): a mean parked far
+    outside the box no longer explores — every sample clips to the same bound (rl_games' bounds loss, as a reward).
+    Costs nothing inside the box, so it removes no behaviour."""
+    return (core.raw_actions.abs() - 1.0).clamp_min(0.0).pow(2).sum(-1)
+
+
 @register("ang_vel")
 def ang_vel(core):
     return core.state.omega_b.pow(2).sum(-1)
@@ -96,6 +104,17 @@ def load_swing(core):
     st = core.state
     hook, _ = core.slung.hook(st.pos, st.quat)
     return ((core.slung.pos - hook)[:, :2] / core.slung.L).pow(2).sum(-1)
+
+
+@register("load_clearance")
+def load_clearance(core):
+    """Slung load: the room it had in the opening when it first reached a wall (core/mission.py; < 0 = by how much
+    it missed the sill or lintel), mapped to [0, 1] over reward.load_clearance_range [m] — graded credit for nearly
+    clearing that crash and success alone do not give (a cable as long as the window is tall, RESULTS.md §15)."""
+    m = core.mission
+    lo, hi = (float(x) for x in core.cfg["reward"]["load_clearance_range"])
+    val = ((m.load_clear - lo) / (hi - lo)).clamp(0.0, 1.0)
+    return (val * m.step_load_arrive.float()).sum(-1)
 
 
 @register("approach_turn")

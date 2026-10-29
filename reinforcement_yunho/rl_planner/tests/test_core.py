@@ -138,6 +138,41 @@ def test_frame_hit_when_offset():
     assert bool(mt.crashed[0]) and int(mt.crash_reason[0]) == CRASH_WALL
 
 
+@pytest.mark.parametrize("drop, room, crash", [(0.30, 0.5 - 0.30 - 0.12, False), (0.45, 0.5 - 0.45 - 0.12, True)])
+def test_load_clearance_is_the_room_where_the_load_first_reaches_the_wall(drop, room, crash):
+    """Load `drop` m below the drone through a 1 m window: its room at the crossing (0.08 m), or where it first
+    touches the sill (-0.07 m, a crash) — and the reward term maps it over load_clearance_range [-0.3, 0.1]."""
+    from types import SimpleNamespace
+
+    from rl_planner.core.mission import CRASH_LOAD
+    from rl_planner.core.rewards import REGISTRY
+    cfg = cfg_cpu()
+    sc = scene_from_layout([[{"center": [3.0, 0.0, 1.2], "size_wh": [1.0, 1.0]}]], 1, [0, 0, 1.2], DEV)
+    mt = MissionTracker(cfg, 1, 1, DEV)
+    below = torch.tensor([[0.0, 0.0, drop]])
+    mt.reset(torch.tensor([0]), torch.tensor([[0.0, 0.0, 1.2]]), sc, load_pos=torch.tensor([[0.0, 0.0, 1.2]]) - below)
+    q = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    for x in np.linspace(0.0, 4.0, 81):
+        p = torch.tensor([[x, 0.0, 1.2]], dtype=torch.float32)
+        mt.substep(p, q, sc, torch.tensor([0.0]), load=(p - below, p - torch.tensor([[0.0, 0.0, 0.05]]), 0.12))
+    assert bool(mt.load_seen[0, 0]) and float(mt.load_clear[0, 0]) == pytest.approx(room, abs=1e-5)
+    assert bool(mt.crashed[0]) == crash and (not crash or int(mt.crash_reason[0]) == CRASH_LOAD)
+    assert bool(mt.success[0]) != crash
+    r = REGISTRY["load_clearance"](SimpleNamespace(mission=mt, cfg=cfg))
+    assert float(r[0]) == pytest.approx((room + 0.3) / 0.4, abs=1e-4)
+    mt.begin_step()
+    assert float(REGISTRY["load_clearance"](SimpleNamespace(mission=mt, cfg=cfg))[0]) == 0.0   # paid once
+
+
+def test_action_excess_is_zero_inside_the_box_and_squared_outside():
+    from types import SimpleNamespace
+
+    from rl_planner.core.rewards import REGISTRY
+    raw = torch.tensor([[0.9, -1.0, 0.0], [2.0, 0.5, -1.5]])
+    r = REGISTRY["action_excess"](SimpleNamespace(raw_actions=raw))
+    assert r.tolist() == pytest.approx([0.0, 1.0 + 0.25])
+
+
 def test_backwards_passage_flagged():
     mt, sc = _tracker()
     _fly(mt, sc, [[x, 0.0, 1.2] for x in np.linspace(0.0, 4.0, 41)] + [[x, 0.0, 1.2] for x in np.linspace(4.0, 2.0, 21)])

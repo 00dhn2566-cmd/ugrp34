@@ -199,8 +199,11 @@ reward:
   time: -0.02                        # 매 스텝
   action_rate: -0.02                 # |a_t - a_t-1|^2
   ang_vel: -0.005                    # |omega|^2
+  action_excess: 0.0                 # 정책 행동이 [-1,1] 밖으로 나간 양^2 (잘리기 전): 평균이 상자 밖에 박히면 표본이 다 같은 경계로 잘려 탐색이 죽는다
   approach_turn: 0.0                 # 고른 창문이 보이는 동안 |yaw rate|^2 — 찾을 때만 돌아보고 가는 동안은 고개를 고정 (둘러보기)
   estimate_error_cap: 1.0            # estimate_improve 의 오차 상한 [m]
+  load_clearance: 0.0                # 매단 짐이 벽에 처음 닿을 때 개구부 안 여유 (빗나간 정도까지 점수로 — RESULTS.md §15)
+  load_clearance_range: [-0.3, 0.1]  # load_clearance 의 0..1 구간 [m]: 0.3 m 이상 빗나가면 0, 0.1 m 이상 여유면 1
 
 # ---------------------------------------------------------------------------
 # 커리큘럼 — 환경별 레벨. 성공하면 +1, 충돌하면 -1 (Isaac Lab terrain level 방식).

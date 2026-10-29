@@ -86,6 +86,7 @@ class WindowMissionCore:
         self.step_max = torch.tensor(a["step_max"], dtype=torch.float32, device=self.device)
         self.actions = torch.zeros(self.E, self.action_dim, device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
+        self.raw_actions = torch.zeros_like(self.actions)     # the policy's action before the [-1, 1] clip
         self.wp = torch.zeros(self.E, 3, device=self.device)
         self.yaw_cmd = torch.full((self.E,), float(cfg["controller"]["yaw_target"]), device=self.device)
         b = cfg["scene"]["bounds"]
@@ -352,6 +353,7 @@ class WindowMissionCore:
             self.mission.reset(env_ids, s.pos[env_ids], self.scene)
         self.actions[env_ids] = 0.0
         self.prev_actions[env_ids] = 0.0
+        self.raw_actions[env_ids] = 0.0
         self.wp[env_ids] = s.pos[env_ids]
         self.yaw_cmd[env_ids] = float(self.cfg["controller"]["yaw_target"])
         self.success_rewarded[env_ids] = False
@@ -510,6 +512,10 @@ class WindowMissionCore:
         passed = m.passed[done]
         if passed.any():
             log["Metrics/pass_clearance_m"] = float(m.clearance[done][passed].mean())
+        if self.slung is not None:
+            seen = m.load_seen[done]
+            if seen.any():
+                log["Metrics/load_clearance_m"] = float(m.load_clear[done][seen].mean())
         for code, name in enumerate(CRASH_NAMES[1:], start=1):
             log[f"Crash/{name}"] = float((m.crash_reason[done] == code).float().mean())
         if self.layer is not None and self._layer_n:
@@ -520,6 +526,7 @@ class WindowMissionCore:
     # ------------------------------------------------------------------ step
     def pre_decision(self, actions: torch.Tensor) -> None:
         self.prev_actions = self.actions.clone()
+        self.raw_actions = actions
         self.actions = actions.clamp(-1.0, 1.0)
         if self.layer is not None:               # the convex layer in the loop: the env flies the projected action
             self.actions = self.layer.filter(self.actions, self)

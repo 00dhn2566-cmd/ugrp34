@@ -57,6 +57,9 @@ class MissionTracker:
         self.load_past = torch.zeros(E, W, dtype=torch.bool, device=device)   # load through the opening
         self.prev_dL = torch.zeros(E, W, device=device)
         self.prev_load = torch.zeros(E, 3, device=device)
+        self.load_clear = torch.zeros(E, W, device=device)     # room the load had when it first reached each wall [m]
+        self.load_seen = torch.zeros(E, W, dtype=torch.bool, device=device)
+        self.step_load_arrive = torch.zeros(E, W, dtype=torch.bool, device=device)
         # per decision step
         self.step_pass = torch.zeros(E, W, dtype=torch.bool, device=device)
         self.crashed = torch.zeros(E, dtype=torch.bool, device=device)
@@ -76,11 +79,15 @@ class MissionTracker:
         self.success[env_ids] = False
         if load_pos is not None:
             self.load_past[env_ids] = False
+            self.load_clear[env_ids] = 0.0
+            self.load_seen[env_ids] = False
+            self.step_load_arrive[env_ids] = False
             self.prev_load[env_ids] = load_pos
             self.prev_dL[env_ids] = ((load_pos[:, None, :] - scene.center[env_ids]) * scene.normal[env_ids]).sum(-1)
 
     def begin_step(self) -> None:
         self.step_pass[:] = False
+        self.step_load_arrive[:] = False
 
     def _flag_crash(self, mask: torch.Tensor, code: int) -> None:
         new = mask & ~self.crashed & ~self.success
@@ -194,6 +201,14 @@ class MissionTracker:
         inside = (u.abs() <= hw) & (v.abs() <= hh)
         on_wall = (u.abs() <= self.wall_half) & (v.abs() <= self.wall_half)
         self._flag_crash(live & (touch.any(-1) | (crossed & ~inside & on_wall).any(-1)), CRASH_LOAD)
+        # graded credit for the reward (rewards.py load_clearance): the room the load had in the opening when it first
+        # reached each wall — where its centre crossed the plane, or where it first touched the frame (< 0: by how
+        # much it missed)
+        arrive = (touch | fwd) & ~self.load_seen & live[:, None]
+        room = torch.minimum(hw - torch.where(touch, uc, u).abs(), hh - torch.where(touch, vc, v).abs()) - rL
+        self.load_clear = torch.where(arrive, room, self.load_clear)
+        self.load_seen |= arrive
+        self.step_load_arrive |= arrive
         # through = on the far side now: a load that swings back through the opening owes the window again (with a
         # cable as long as the window is tall it can pass first and swing back before the drone is through)
         self.load_past = (self.load_past | (fwd & inside)) & ~(crossed & ~fwd)
