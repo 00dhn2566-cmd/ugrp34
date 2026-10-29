@@ -306,7 +306,10 @@ def main(argv=None) -> int:
         dr.rectangle((0, 0, 2 * a.width, 30), fill=(20, 20, 20))
         dr.text((8, 5), label, fill=(255, 255, 255), font=font)
         if crashed:
-            msg = f"CRASH: {CRASH_NAMES[int(core.mission.crash_reason[0])]} (window {int(core.mission.target[0]) + 1})"
+            reason = CRASH_NAMES[int(core.mission.crash_reason[0])]
+            # the load / cable hits the window the load is not through yet (the drone may be past it already)
+            k = int(core.mission.load_past[0].sum()) if reason in ("load", "cable") else int(core.mission.target[0])
+            msg = f"CRASH: {reason} (window {min(k, int(core.scene.n_windows[0]) - 1) + 1})"
             dr.rectangle((0, a.height - 36, 2 * a.width, a.height), fill=(170, 20, 20))
             dr.text((8, a.height - 31), msg, fill=(255, 255, 255), font=font)
         frames.append(canvas)
