@@ -196,7 +196,7 @@ def main(argv=None) -> int:
         axes[0].legend(loc="upper left", fontsize=8, frameon=False, ncol=2)
         for ax, r in zip(axes, runs):               # lay out once, for the longest titles
             ax.set_title(r["summary"], fontsize=9, loc="left")
-        axes[0].set_title("t = 00.0 s", fontsize=9, loc="right")
+        clock = axes[0].text(0.99, 0.97, "", transform=axes[0].transAxes, ha="right", va="top", fontsize=9)
         fig.tight_layout()
         fig.set_dpi(GIF_PX / fig.get_figwidth())
         dt = float(runs[0]["L"][1, 0] - runs[0]["L"][0, 0])
@@ -220,7 +220,7 @@ def main(argv=None) -> int:
                 else:
                     ax.set_title(f"{r['label']}: {int(L[i, 10])}/{r['n']} windows, swing {L[i, 9]:.0f}°", fontsize=9,
                                  loc="left")
-            axes[0].set_title(f"t = {t:.1f} s", fontsize=9, loc="right")
+            clock.set_text(f"t = {t:.1f} s")       # inside the axes: a narrow course leaves no room beside the title
             fig.canvas.draw()
             frames.append(Image.fromarray(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()))
             for art in now:
