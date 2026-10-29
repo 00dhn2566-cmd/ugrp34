@@ -29,6 +29,7 @@ from typing import Mapping
 import torch
 
 from ..core import math3d as m3
+from ..core.airframe import Airframe
 from ..core.qp import solve_qp
 from ..core.scene import window_frame
 
@@ -119,7 +120,7 @@ class SlungConvexLayer:
             t[env_ids] = 0.0
 
     # ------------------------------------------------------------------ the QP
-    def project(self, a, pos, vel, yaw, load_rel, load_vel, gates, quat=None, omega_b=None):
+    def project(self, a, pos, vel, yaw, load_rel, load_vel, gates, quat=None, omega_b=None, motor=None, wp=None):
         """a (E,4) network action; pos/vel (E,3) drone; load_rel/load_vel (E,3) load offset from the drone's centre
         of mass and its velocity relative to the drone (world); gates: list of (centre (E,3), normal (E,3),
         half size (E,2), active (E,), load_only bool). -> (projected action (E,4), changed (E,) bool)."""
@@ -211,8 +212,10 @@ class SlungSCPLayer:
     (core/controller.py) commands a force F; the thrust f = F.b3 acts along the body axis b3, whose tilt b_h (its
     horizontal part) follows F/|F| through the attitude loop and is tipped by the cable pulling at the hook below
     the centre of mass,
-        b_h'' = -k_rot (b_h - F_h/|F|) - k_omega b_h' - s (h T / J) e_h     (h hook depth, J roll/pitch inertia;
-    s = ``tip_scale``, identified on simulator flights); drone and load are point masses joined by the simulator's cable
+        b_h'' = alpha - s (h T / J) e_h,   alpha = lag[-k_rot (b_h - F_h/|F|) - k_omega b_h']
+    (h hook depth, J roll/pitch inertia, s = ``tip_scale`` identified on simulator flights; the controller's torque and
+    the thrust go through the simulator's motor lag, which a hard manoeuvre makes worth degrees of tilt); drone and
+    load are point masses joined by the simulator's cable
     (core/slung.py) — tension-only, T = max(0, k (|r| - L) + c d|r|/dt) along e = r/|r|, r = load - hook — so the
     cable may go slack and the load fly free (a toss) and the jerk when it tightens again is in the prediction:
         m_Q a_Q = f b3 - c_d v + m_Q g + T e,      m_L a_L = -T e - c_L v_L + m_L g,
@@ -221,12 +224,17 @@ class SlungSCPLayer:
     that trajectory (forward-mode autodiff), solve the QP, roll the solution out and linearise again
     (``scp_iters``), with a trust region around the reference. The crossing events are read from each new
     prediction, so the convex constraints follow the solution:
-      * the load centre where it crosses a window plane (interpolated between predicted steps) or within its
-        radius of the plane: inside the opening shrunk by its radius and ``margin_m``,
+      * the load centre where it crosses a window plane (interpolated between predicted steps): inside the
+        opening shrunk by its radius and ``margin_m``; within its radius of the plane: shrunk by the radius of
+        its cut with the plane, sqrt(r^2 - d^2) (the referee's touch),
       * the cable (the segment hook -> load, as the referee sees it) where it cuts a window plane: inside the
         opening shrunk by ``margin_m``,
-      * the drone within ``gate_band_m`` of the target's plane: inside the opening shrunk by its size, as above,
+      * the airframe where it meets the target's plane: its cut (propeller discs and boxes, core/airframe.py —
+        the referee's geometry, at the predicted attitude) inside the opening; a drone that is shape: sphere
+        keeps the band box above,
       * the load off the ground.
+    The window constraints mirror the referee with a small margin: a manoeuvre that clears the frame by
+    centimetres (as the swing-through does) must stay open.
     No swing limit and no taut-cable assumption: swinging the load up, or throwing it, is left to the network."""
 
     def __init__(self, cfg: Mapping, num_envs: int, device, step_dt: float):
@@ -250,6 +258,10 @@ class SlungSCPLayer:
         self.drone_half = [float(v) for v in cl.get("drone_half_m", [0.32, 0.10])]
         self.margin = float(cl.get("margin_m", 0.05))
         self.band = float(cl.get("gate_band_m", 0.35))
+        # act only on predicted violations beyond the model's error at that lead time (m per s of prediction):
+        # a manoeuvre that clears the frame by centimetres is left to the network, a clear one is projected
+        self.tol = float(cl.get("tolerance_per_s", 0.0))
+        self.drone_rows = bool(cl.get("drone_constraint", True))
         self.iters = int(cl.get("iters", 40))
         self.rho = float(cl.get("rho", 1.0))
         self.w_future = float(cl.get("future_weight", 1.0))
@@ -272,6 +284,9 @@ class SlungSCPLayer:
         J = cfg["drone"]["inertia"]
         self.tip = -float(s["attach"][2]) / (0.5 * (float(J[0]) + float(J[1]))) * float(cl.get("tip_scale", 1.0))
         self.f_max = float(cfg["drone"]["thrust_to_weight"]) * self.m_tot * self.g
+        dt_sim = float(cfg["sim"]["physics_dt"])            # the motor lag of controller.py MotorLag, per model step
+        a_sim = min(1.0, dt_sim / max(float(cfg["drone"]["motor_time_constant"]), dt_sim))
+        self.lag = 1.0 - (1.0 - a_sim) ** (step_dt / self.sub / dt_sim)
         b = cfg["scene"]["bounds"]
         self.wp_z = (float(b["z_min"]) + 0.25, float(b["z_max"]) - 0.3)
         self.gvec = torch.tensor([0.0, 0.0, -self.g], device=device)
@@ -280,6 +295,7 @@ class SlungSCPLayer:
             j = 3 + 3 * ((k - 1) // self.blk)
             D[k, :, j:j + 3] = torch.diag(self.sW)
         self.D = D
+        self.airframe = Airframe(cfg, device) if cfg["drone"].get("shape") == "airframe" else None
         self._jac = torch.func.vmap(torch.func.jacfwd(self._step, argnums=(0, 1)))
         self.warm = None
 
@@ -291,8 +307,8 @@ class SlungSCPLayer:
             t[env_ids] = 0.0
 
     # ------------------------------------------------------------------ the model
-    def _acc(self, p, v, pL, vL, bh, bhd, w):
-        """Accelerations of the drone, the load and the tilt, and the cable tension (any batch shape)."""
+    def _cmd(self, p, v, bh, bhd, w):
+        """The controller's thrust and tilt acceleration commands (before the motor lag) and the body axis."""
         vc = torch.maximum(torch.minimum(self.kp * (w - p), self.v_max), -self.v_max)
         ac = self.kv * (vc - v)
         axy = ac[..., :2]
@@ -303,30 +319,35 @@ class SlungSCPLayer:
         F = torch.cat((Fh, Fz), -1)
         b3 = torch.cat((bh, (1.0 - (bh * bh).sum(-1, keepdim=True)).clamp_min(1e-6).sqrt()), -1)
         f = (F * b3).sum(-1, keepdim=True).clamp(0.0, self.f_max)
-        r = pL - (p + self.off)
-        dist = r.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-        e = r / dist
-        T = (self.k * (dist - self.L0) + self.c * ((vL - v) * e).sum(-1, keepdim=True)).clamp_min(0.0) \
-            * (dist > self.L0)
-        aQ = (f * b3 - self.drag * v + T * e) / self.m_Q + self.gvec
-        aL = (-T * e - self.drag_L * vL) / self.m_L + self.gvec
-        bhdd = -self.k_rot * (bh - Fh / F.norm(dim=-1, keepdim=True)) - self.k_om * bhd - self.tip * T * e[..., :2]
-        return aQ, aL, bhdd
+        al = -self.k_rot * (bh - Fh / F.norm(dim=-1, keepdim=True)) - self.k_om * bhd
+        return f, al, b3
 
     def _step(self, X, w):
-        """One decision with the waypoint held: ``substeps`` semi-implicit Euler steps (as the simulator).
-        X = (p, v, load p, load v, b_h, b_h') world (any batch shape)."""
-        p, v, pL, vL, bh, bhd = X[..., 0:3], X[..., 3:6], X[..., 6:9], X[..., 9:12], X[..., 12:14], X[..., 14:16]
+        """One decision with the waypoint held: ``substeps`` semi-implicit Euler steps (as the simulator: commands,
+        motor lag, cable force from the state at the start of the step, then the integration).
+        X = (p, v, load p, load v, b_h, b_h', alpha (lagged tilt acceleration), f (lagged thrust)) world."""
+        p, v, pL, vL = X[..., 0:3], X[..., 3:6], X[..., 6:9], X[..., 9:12]
+        bh, bhd, al, f = X[..., 12:14], X[..., 14:16], X[..., 16:18], X[..., 18:19]
         h = self.dt / self.sub
         for _ in range(self.sub):
-            aQ, aL, bhdd = self._acc(p, v, pL, vL, bh, bhd, w)
+            f_c, al_c, b3 = self._cmd(p, v, bh, bhd, w)
+            f = f + self.lag * (f_c - f)
+            al = al + self.lag * (al_c - al)
+            r = pL - (p + self.off)
+            dist = r.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+            e = r / dist
+            T = (self.k * (dist - self.L0) + self.c * ((vL - v) * e).sum(-1, keepdim=True)).clamp_min(0.0) \
+                * (dist > self.L0)
+            aQ = (f * b3 - self.drag * v + T * e) / self.m_Q + self.gvec
+            aL = (-T * e - self.drag_L * vL) / self.m_L + self.gvec
+            bhdd = al - self.tip * T * e[..., :2]
             v = v + h * aQ
             p = p + h * v
             vL = vL + h * aL
             pL = pL + h * vL
             bhd = bhd + h * bhdd
             bh = bh + h * bhd
-        return torch.cat((p, v, pL, vL, bh, bhd), -1)
+        return torch.cat((p, v, pL, vL, bh, bhd, al, f), -1)
 
     def _waypoint(self, p, u, M, k):
         st = (M @ u[:, :3, None])[..., 0] if k == 0 else (self.D[k] @ u[..., None])[..., 0]
@@ -334,7 +355,7 @@ class SlungSCPLayer:
         return torch.cat((w[:, :2], w[:, 2:].clamp(*self.wp_z)), -1)
 
     def rollout(self, X0, u, M):
-        """-> states (E,N+1,16), waypoints (E,N,3) under decision vector u (E,n)."""
+        """-> states (E,N+1,19), waypoints (E,N,3) under decision vector u (E,n)."""
         Xs, Ws = [X0], []
         X = X0
         for k in range(self.N):
@@ -344,18 +365,27 @@ class SlungSCPLayer:
             Ws.append(w)
         return torch.stack(Xs, 1), torch.stack(Ws, 1)
 
-    def state(self, pos, vel, load_rel, load_vel, quat=None, omega_b=None):
-        """(E,16) model state from the drone (pose, velocity, attitude and body rates; level when not given) and
-        the cable sensor (load offset / velocity relative to the CoM, world)."""
+    def state(self, pos, vel, load_rel, load_vel, quat=None, omega_b=None, motor=None, wp=None):
+        """(E,19) model state from the drone (pose, velocity, attitude and body rates; level when not given), the
+        cable sensor (load offset / velocity relative to the CoM, world) and the motors (lagged thrust, body torque
+        per inertia) when known — else the controller's commands now (toward ``wp``, or hovering)."""
         if quat is None:
             bh = torch.zeros_like(pos[:, :2])
             bhd = torch.zeros_like(bh)
+            R = None
         else:
             R = m3.quat_to_rotmat(quat)
             bh = R[:, :2, 2]
             w = torch.zeros_like(pos) if omega_b is None else omega_b
             bhd = (R @ torch.stack((w[:, 1], -w[:, 0], torch.zeros_like(w[:, 0])), -1)[..., None])[:, :2, 0]
-        return torch.cat((pos, vel, pos + load_rel, vel + load_vel, bh, bhd), -1)
+        if motor is not None:
+            f, tau_J = motor
+            ab = torch.stack((tau_J[:, 1], -tau_J[:, 0], torch.zeros_like(tau_J[:, 0])), -1)
+            al = (ab if R is None else (R @ ab[..., None])[..., 0])[:, :2]
+            f = f[:, None]
+        else:
+            f, al, _ = self._cmd(pos, vel, bh, bhd, pos if wp is None else wp)
+        return torch.cat((pos, vel, pos + load_rel, vel + load_vel, bh, bhd, al, f), -1)
 
     # ------------------------------------------------------------------ the QP
     def _linearise(self, X0, u_ref, M):
@@ -363,36 +393,37 @@ class SlungSCPLayer:
         E, N, n = X0.shape[0], self.N, self.n
         Xr, Wr = self.rollout(X0, u_ref, M)
         with torch.inference_mode(False):                 # forward-mode AD; rsl_rl rolls out in inference mode
-            Jx, Jw = self._jac(Xr[:, :-1].reshape(-1, 16).clone(), Wr.reshape(-1, 3).clone())
-        Jx, Jw = Jx.view(E, N, 16, 16), Jw.view(E, N, 16, 3)
+            Jx, Jw = self._jac(Xr[:, :-1].reshape(-1, 19).clone(), Wr.reshape(-1, 3).clone())
+        Jx, Jw = Jx.view(E, N, 19, 19), Jw.view(E, N, 19, 3)
         A = Jx.clone()
         A[..., 0:3] = A[..., 0:3] + Jw                           # the waypoint moves with the drone: w = p + step
         D = self.D.expand(E, N, 3, n).clone()
         D[:, 0, :, :3] = M
-        S = [torch.zeros(E, 16, n, device=X0.device)]
+        S = [torch.zeros(E, 19, n, device=X0.device)]
         for k in range(N):
             S.append(A[:, k] @ S[k] + Jw[:, k] @ D[:, k])
         return Xr, torch.stack(S, 1)
 
-    def project(self, a, pos, vel, yaw, load_rel, load_vel, gates, quat=None, omega_b=None):
-        """Same contract as SlungConvexLayer.project, plus the attitude (quaternion, body rates)."""
+    def project(self, a, pos, vel, yaw, load_rel, load_vel, gates, quat=None, omega_b=None, motor=None, wp=None):
+        """Same contract as SlungConvexLayer.project, plus the attitude (quaternion, body rates) and the motors
+        (lagged thrust, body torque / inertia) or the last waypoint."""
         E, dev, n = a.shape[0], a.device, self.n
         a3 = a[:, :3].clamp(-1.0, 1.0)
         c, s_ = torch.cos(yaw), torch.sin(yaw)
         Rz = torch.zeros(E, 3, 3, device=dev)
         Rz[:, 0, 0], Rz[:, 0, 1], Rz[:, 1, 0], Rz[:, 1, 1], Rz[:, 2, 2] = c, -s_, s_, c, 1.0
         M = Rz * self.step_max
-        X0 = self.state(pos, vel, load_rel, load_vel, quat, omega_b)
+        X0 = self.state(pos, vel, load_rel, load_vel, quat, omega_b, motor, wp)
         d_ref = (M @ a3[..., None])[..., 0] / self.sW
         x_ref = torch.cat((a3, d_ref.clamp(-1, 1).repeat(1, self.nb)), -1)   # the network's action held
         w = torch.ones(n, device=dev)
         w[3:] = self.w_future
-        P = torch.diag_embed((w + self.w_trust).expand(E, n))
+        P = torch.diag_embed((w * (1.0 + self.w_trust)).expand(E, n))     # the trust region scales like w
         u_ref = x_ref
         for _ in range(self.scp_iters):
             Xr, S = self._linearise(X0, u_ref, M)
-            A, l, u = self._constraints(Xr, S, u_ref, gates)
-            q = -w * x_ref - self.w_trust * u_ref
+            A, l, u = self._constraints(Xr, S, u_ref, gates, yaw)
+            q = -w * x_ref - self.w_trust * w * u_ref
             warm = self.warm if self.warm is not None and self.warm[1].shape == l.shape else None
             x, z, y, _, _ = solve_qp(P, q, A, l, u, iters=self.iters, rho=self.rho, warm=warm, inverse=True)
             self.warm = (x.detach(), z.detach(), y.detach())
@@ -402,7 +433,35 @@ class SlungSCPLayer:
         changed = (out[:, :3] - a3).abs().amax(-1) > 1e-3
         return out, changed
 
-    def _constraints(self, Xr, S, u_ref, gates):
+    def _airframe_cut(self, pQ, SQ, bh, yaw, gc, gn, right, up):
+        """The airframe's cut with a window plane at each predicted step (reference pose): the parts that meet it
+        span [ctr - half, ctr + half] in (right, up); as offsets from the drone centre they move with its position
+        in the QP. -> (drone positions, their sensitivities, meets (E,N), ((below, above) per axis))."""
+        E, N = pQ.shape[:2]
+        R = self._rot(bh, yaw[:, None].expand(E, N))
+        rep = lambda t: t[:, None].expand(E, N, 3).reshape(E * N, 1, 3)   # noqa: E731
+        meets, ctr, half = self.airframe.cut(pQ.reshape(-1, 3), R.reshape(-1, 3, 3), rep(gc), rep(gn), rep(right),
+                                             rep(up))
+        meets, ctr, half = meets.view(E, N, -1), ctr.view(E, N, -1, 2), half.view(E, N, -1, 2)
+        own = torch.stack((((pQ - gc[:, None]) * right[:, None]).sum(-1), ((pQ - gc[:, None]) * up[:, None]).sum(-1)),
+                          -1)                                                          # (E,N,2)
+        lo = torch.where(meets[..., None], ctr - half, torch.full_like(ctr, INF)).amin(2)
+        hi = torch.where(meets[..., None], ctr + half, torch.full_like(ctr, -INF)).amax(2)
+        any_ = meets.any(-1)
+        below = torch.where(any_[..., None], own - lo, torch.zeros_like(own))      # extent under / over the centre
+        above = torch.where(any_[..., None], hi - own, torch.zeros_like(own))
+        return pQ, SQ, any_, tuple((below[..., a], above[..., a]) for a in range(2))
+
+    @staticmethod
+    def _rot(bh, yaw):
+        """Body -> world from the tilt b_h and the heading (the controller's construction): (...,3,3)."""
+        b3 = torch.cat((bh, (1.0 - (bh * bh).sum(-1, keepdim=True)).clamp_min(1e-6).sqrt()), -1)
+        b1c = torch.stack((torch.cos(yaw), torch.sin(yaw), torch.zeros_like(yaw)), -1).expand_as(b3)
+        b2 = torch.cross(b3, b1c, dim=-1)
+        b2 = b2 / b2.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        return torch.stack((torch.cross(b2, b3, dim=-1), b2, b3), -1)
+
+    def _constraints(self, Xr, S, u_ref, gates, yaw):
         """Linear constraints l <= A u <= u around the reference (fixed row layout: unused rows get infinite
         bounds, so the ADMM warm start carries over)."""
         E, dev, n = Xr.shape[0], Xr.device, self.n
@@ -418,6 +477,7 @@ class SlungSCPLayer:
         pL, SL = Xr[..., 6:9], S[:, :, 6:9]
         pH = pQ + self.off
         full = lambda t, m: torch.where(m, t, torch.full_like(t, INF))   # noqa: E731
+        lead = self.tol * self.dt * torch.arange(1, self.N + 1, device=dev, dtype=Xr.dtype)    # (N,) tolerance by lead
         add(SL[:, 1:, 2], pL[:, 1:, 2], torch.full_like(pL[:, 1:, 2], self.r_load + 0.05),   # load off the ground
             torch.full_like(pL[:, 1:, 2], INF))
         for (gc, gn, ghalf, gact, load_only) in gates:
@@ -430,23 +490,30 @@ class SlungSCPLayer:
             sL = (dL[:, :-1] / (dL[:, :-1] - dL[:, 1:]).where(cross, torch.ones_like(dL[:, 1:]))).clamp(0, 1)
             Pc = pL[:, :-1] + sL[..., None] * (pL[:, 1:] - pL[:, :-1])
             Sc = SL[:, :-1] + sL[..., None, None] * (SL[:, 1:] - SL[:, :-1])
-            touch = dL[:, 1:].abs() < self.r_load + self.margin
+            touch = dL[:, 1:].abs() < self.r_load
+            rho = (self.r_load ** 2 - dL[:, 1:] ** 2).clamp_min(0.0).sqrt()        # the ball's cut with the plane
             # cable cutting the plane at predicted step k (1..N): hook and load on opposite sides
             cut = dH[:, 1:] * dL[:, 1:] < 0
             sK = (dH[:, 1:] / (dH[:, 1:] - dL[:, 1:]).where(cut, torch.ones_like(dL[:, 1:]))).clamp(0, 1)
             Pk = pH[:, 1:] + sK[..., None] * (pL[:, 1:] - pH[:, 1:])
             Sk = SQ[:, 1:] + sK[..., None, None] * (SL[:, 1:] - SQ[:, 1:])
-            objs = [(Pc, Sc, cross, self.r_load), (pL[:, 1:], SL[:, 1:], touch, self.r_load), (Pk, Sk, cut, 0.0)]
-            if not load_only:
-                objs.append((pQ[:, 1:], SQ[:, 1:], dQ[:, 1:].abs() <= self.band, None))
+            zero = torch.zeros_like(rho)
+            objs = [(Pc, Sc, cross, (zero + self.r_load,) * 2), (pL[:, 1:], SL[:, 1:], touch, (rho, rho)),
+                    (Pk, Sk, cut, (zero, zero))]
+            if not load_only and self.drone_rows:
+                if self.airframe is None:
+                    objs.append((pQ[:, 1:], SQ[:, 1:], dQ[:, 1:].abs() <= self.band,
+                                 tuple((zero + h, zero + h) for h in self.drone_half)))
+                else:
+                    objs.append(self._airframe_cut(pQ[:, 1:], SQ[:, 1:], Xr[:, 1:, 12:14], yaw, gc, gn, right, up))
             for P_, S_, m, size in objs:
                 m = m & gact[:, None]
                 for ax_i, (axis, half) in enumerate(axes):
                     row = (S_ * axis[:, None, :, None]).sum(2)                      # (E,N,n)
                     ref = ((P_ - gc[:, None]) * axis[:, None]).sum(-1)
-                    sz = self.drone_half[ax_i] if size is None else size
-                    lim = (half[:, None] - sz - self.margin).clamp_min(0.0).expand_as(ref)
-                    add(row, ref, -full(lim, m), full(lim, m))
+                    lo_sz, hi_sz = size[ax_i] if isinstance(size[ax_i], tuple) else (size[ax_i], size[ax_i])
+                    lim = half[:, None] - self.margin + lead
+                    add(row, ref, -full(lim - lo_sz, m), full(lim - hi_sz, m))
         A = torch.cat([r.reshape(E, -1, n) for r in rows], 1)
         l = torch.cat([v.reshape(E, -1) for v in lo], 1)
         u = torch.cat([v.reshape(E, -1) for v in hi], 1)
@@ -496,8 +563,10 @@ class SlungLayerFilter:
         tgt_ok = core.selector.has & g(est.valid, sel)
         gates = [(g(est.center, sel), g(est.normal, sel), g(est.size, sel) / 2, tgt_ok, False),
                  (prev_c, prev_n, g(est.size, self.prev) / 2, owes & g(est.valid, self.prev), True)]
+        mot = getattr(core, "motor", None)                 # the simulator's motor states; on board: unknown
+        motor = (mot.f, mot.tau / core.inertia_ctrl) if mot is not None else None
         out, self.changed = self.layer.project(a, st.pos, st.vel_w, core.yaw, sl.pos - st.pos, sl.vel - st.vel_w,
-                                               gates, st.quat, st.omega_b)
+                                               gates, st.quat, st.omega_b, motor, getattr(core, "wp", None))
         return out
 
 
