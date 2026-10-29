@@ -3,10 +3,11 @@ in the torch env itself (true window and state, nominal model — no domain rand
 the demonstrations scripts/bc_warmstart.py distils into the policy.
 
 A batch holds S scenes x P samples; every sample of a scene shares it (one draw from the level's geometry, restored
-after every reset). A robust pass: drone and load through the first window and nothing hit until the end of the
-horizon — a second window 8 m on keeps the episode running past the first (a pass that ends just before the load
-swings back into the wall is not one). Among robust passes the score prefers room: the smaller of the referee's
-clearance around the airframe and the load's room in the opening (core/mission.py).
+after every reset). A robust pass: drone and load through the first --passes K windows and nothing hit until the end
+of the horizon — one more window 8 m after the K-th keeps the episode running past it (a pass that ends just before
+the load swings back into the wall is not one); the first K keep the level's spacing. Among robust passes the score
+prefers room: the smallest over the K windows of the referee's clearance around the airframe and the load's room in
+the opening (core/mission.py).
 
     python rl_planner/scripts/teach_cem.py --config C/train/general.yaml --config C/slung/base.yaml \
         --config C/slung/long.yaml --config C/drone/agile.yaml --level 0 --scenes 8 --pop 512 --batches 4 --out DIR
@@ -27,10 +28,11 @@ DRONE_HALF_H, DRONE_HALF_SPAN = 0.10, 0.35     # FX450 body half height, arm + p
 
 
 class FixedScenes:
-    """Pins env i to scene (i // P) * P of a snapshot across resets (the env draws new scenes on every reset)."""
+    """Pins env i to scene (i // P) * P of a snapshot across resets (the env draws new scenes on every reset).
+    far_after = K > 1: window K is moved to 8 m after window K-1 (the line layout runs along +x)."""
 
-    def __init__(self, env, P: int):
-        self.env, self.core, self.P = env, env.core, P
+    def __init__(self, env, P: int, far_after: int = 0):
+        self.env, self.core, self.P, self.far_after = env, env.core, P, far_after
         self._orig = env._reset_all
         env._reset_all = self.reset
         self.redraw()
@@ -40,6 +42,11 @@ class FixedScenes:
         sc = self.core.scene
         idx = (torch.arange(self.core.E, device=sc.center.device) // self.P) * self.P
         self.snap = {k: getattr(sc, k)[idx].clone() for k in SCENE_KEYS}
+        K = self.far_after
+        if K > 1:
+            dx = self.snap["center"][:, K - 1, 0] + 8.0 - self.snap["center"][:, K, 0]
+            self.snap["center"][:, K, 0] += dx
+            self.snap["corners"][:, K, :, 0] += dx[:, None]
         self.reset()
 
     def reset(self) -> None:
@@ -56,39 +63,40 @@ class FixedScenes:
         return {k: v[i].cpu() for k, v in self.snap.items()}
 
 
-def rollout(env, acts: torch.Tensor) -> dict:
-    """acts (E,T,3) open loop from a reset -> per-env outcome (first window along +x, as the line layout builds it)."""
+def rollout(env, acts: torch.Tensor, K: int = 1) -> dict:
+    """acts (E,T,3) open loop from a reset -> per-env outcome for the first K windows (along +x, as the line layout
+    builds them); the shaping terms are kept per window and read at the first window the drone has not passed."""
     core = env.core
     env._reset_all()
     E, T, _ = acts.shape
     sc, m = core.scene, core.mission
     rL = core.slung.radius
-    xw, yw, zc = sc.center[:, 0, 0].clone(), sc.center[:, 0, 1].clone(), sc.center[:, 0, 2].clone()
-    hw, hh = sc.size[:, 0, 0] / 2, sc.size[:, 0, 1] / 2
+    xw, yw, zc = sc.center[:, :K, 0].clone(), sc.center[:, :K, 1].clone(), sc.center[:, :K, 2].clone()   # (E,K)
+    hw, hh = sc.size[:, :K, 0] / 2, sc.size[:, :K, 1] / 2
     zreq, ztop = zc - hh + rL, zc + hh - DRONE_HALF_H - 0.05
     dev = acts.device
     fin = torch.zeros(E, dtype=torch.bool, device=dev)
     crash = torch.zeros_like(fin)
     reason = torch.zeros(E, dtype=torch.long, device=dev)
     passed = torch.zeros(E, dtype=torch.long, device=dev)
-    o = {k: torch.full((E,), v, device=dev) for k, v in
-         (("maxQ", -9.0), ("lastL", -9.0), ("hL", -1.0), ("hQ", -1.0), ("latQ", 0.0), ("latL", 0.0))}
+    o = {k: torch.full((E,), v, device=dev) for k, v in (("maxQ", -9.0), ("lastL", -9.0))}
+    o.update({k: torch.full((E, K), v, device=dev) for k, v in (("hL", -1.0), ("hQ", -1.0), ("latQ", 0.0), ("latL", 0.0))})
     orig = core.after_substep
 
     def hook():
-        live = ~(m.crashed | m.success) & ~fin
+        live = (~(m.crashed | m.success) & ~fin)[:, None]
         orig()
-        pQ, pL = core.state.pos, core.slung.pos
-        near = (pL[:, 0] - xw).abs() < 0.3
-        o["hL"].copy_(torch.where(live & near, torch.maximum(o["hL"], pL[:, 2] - zreq), o["hL"]))
-        o["latL"].copy_(torch.where(live & near, torch.maximum(o["latL"], ((pL[:, 1] - yw).abs() - (hw - rL)).clamp_min(0)),
+        pQ, pL = core.state.pos[:, None, :], core.slung.pos[:, None, :]
+        near = live & ((pL[..., 0] - xw).abs() < 0.3)
+        o["hL"].copy_(torch.where(near, torch.maximum(o["hL"], pL[..., 2] - zreq), o["hL"]))
+        o["latL"].copy_(torch.where(near, torch.maximum(o["latL"], ((pL[..., 1] - yw).abs() - (hw - rL)).clamp_min(0)),
                                     o["latL"]))
-        closing = (pQ[:, 0] > xw - 0.6) & (pQ[:, 0] < xw + 0.1)
-        o["hQ"].copy_(torch.where(live & closing, torch.maximum(o["hQ"], (ztop - pQ[:, 2]).clamp(-1.0, 0.05)), o["hQ"]))
-        o["latQ"].copy_(torch.where(live & closing, torch.maximum(
-            o["latQ"], ((pQ[:, 1] - yw).abs() - (hw - DRONE_HALF_SPAN)).clamp_min(0)), o["latQ"]))
-        o["maxQ"].copy_(torch.where(live, torch.maximum(o["maxQ"], pQ[:, 0]), o["maxQ"]))
-        o["lastL"].copy_(torch.where(live, pL[:, 0], o["lastL"]))
+        closing = live & (pQ[..., 0] > xw - 0.6) & (pQ[..., 0] < xw + 0.1)
+        o["hQ"].copy_(torch.where(closing, torch.maximum(o["hQ"], (ztop - pQ[..., 2]).clamp(-1.0, 0.05)), o["hQ"]))
+        o["latQ"].copy_(torch.where(closing, torch.maximum(
+            o["latQ"], ((pQ[..., 1] - yw).abs() - (hw - DRONE_HALF_SPAN)).clamp_min(0)), o["latQ"]))
+        o["maxQ"].copy_(torch.where(live[:, 0], torch.maximum(o["maxQ"], pQ[:, 0, 0]), o["maxQ"]))
+        o["lastL"].copy_(torch.where(live[:, 0], pL[:, 0, 0], o["lastL"]))
 
     core.after_substep = hook
     try:
@@ -106,15 +114,18 @@ def rollout(env, acts: torch.Tensor) -> dict:
                 break
     finally:
         core.after_substep = orig
-    succ = ~fin & (m.target >= 1) & m.load_past[:, 0]
-    room = torch.minimum(m.clearance[:, 0], m.load_clear[:, 0])
-    return dict(succ=succ, crash=crash, reason=reason, passed=passed, pQ=o["maxQ"] - xw, pLe=o["lastL"] - xw,
-                hL=o["hL"], hQ=o["hQ"], lat=o["latQ"] + o["latL"], room=torch.where(succ, room, torch.zeros_like(room)))
+    succ = ~fin & (m.target >= K) & m.load_past[:, :K].all(-1)
+    room = torch.minimum(m.clearance[:, :K], m.load_clear[:, :K]).amin(-1)
+    f = passed.clamp(max=K - 1)[:, None]                                 # the window the shaping looks at
+    at = lambda x: x.gather(1, f)[:, 0]                                  # noqa: E731
+    return dict(succ=succ, crash=crash, reason=reason, passed=passed.clamp(max=K), pQ=o["maxQ"] - at(xw),
+                pLe=o["lastL"] - at(xw), hL=at(o["hL"]), hQ=at(o["hQ"]), lat=at(o["latQ"] + o["latL"]),
+                room=torch.where(succ, room, torch.zeros_like(room)))
 
 
 def score(o: dict) -> torch.Tensor:
     base = (5.0 * o["pQ"].clamp(-3.0, 0.6) + 8.0 * o["pLe"].clamp(-3.0, 0.6) + 20.0 * o["hL"].clamp(-1.0, 0.1)
-            + 10.0 * o["hQ"] + 10.0 * (o["passed"] >= 1).float() - 5.0 * o["crash"].float() - 20.0 * o["lat"].clamp(max=1.0))
+            + 10.0 * o["hQ"] + 10.0 * o["passed"].float() - 5.0 * o["crash"].float() - 20.0 * o["lat"].clamp(max=1.0))
     return torch.where(o["succ"], 100.0 + 100.0 * o["room"].clamp(max=0.15), base)
 
 
@@ -140,6 +151,7 @@ def main(argv=None) -> int:
     ap.add_argument("--set", action="append", default=[])
     ap.add_argument("--level", type=int, default=0)
     ap.add_argument("--opening-h", type=float, nargs=2, default=None, help="override the level's opening height range")
+    ap.add_argument("--passes", type=int, default=1, help="K: windows a robust pass covers (the level's spacing for K > 1)")
     ap.add_argument("--scenes", type=int, default=8, help="scenes per batch (S)")
     ap.add_argument("--pop", type=int, default=512, help="samples per scene (P)")
     ap.add_argument("--batches", type=int, default=1)
@@ -156,7 +168,9 @@ def main(argv=None) -> int:
 
     from rl_planner.core.config import load_config
     from rl_planner.envs.torch_env import TorchWindowEnv
-    over = "n_windows: [2, 2], spacing: [8.0, 8.0]" + (f", opening_h: [{a.opening_h[0]}, {a.opening_h[1]}]" if a.opening_h else "")
+    K = a.passes
+    over = (f"n_windows: [{K + 1}, {K + 1}]" + (", spacing: [8.0, 8.0]" if K == 1 else "")
+            + (f", opening_h: [{a.opening_h[0]}, {a.opening_h[1]}]" if a.opening_h else ""))
     sets = ["domain_randomization.enabled=false", "drone.start_pos_noise=[0.0, 0.0, 0.0]", f"curriculum.fixed_level={a.level}",
             f"curriculum.override={{{over}}}", "slung.convex_layer.in_env=false", f"device={a.device}"] + a.set
     cfg = load_config(a.config, sets)
@@ -165,7 +179,7 @@ def main(argv=None) -> int:
     torch.manual_seed(a.seed)
     env = TorchWindowEnv(cfg, num_envs=E, device=a.device, seed=a.seed)
     env.core.fixed_level = a.level
-    fixed = FixedScenes(env, P)
+    fixed = FixedScenes(env, P, far_after=K)
     os.makedirs(a.out, exist_ok=True)
     dev = torch.device(a.device)
     g = torch.arange(E, device=dev) // P
@@ -191,7 +205,7 @@ def main(argv=None) -> int:
                 eps[:, t] = 0.6 * eps[:, t - 1] + 0.8 * eps[:, t]
             acts = (mu[g] + sig[g] * eps).clamp(-1.0, 1.0)
             acts[::P] = best                         # elitism: each scene's best so far stays in the population
-            o = rollout(env, acts)
+            o = rollout(env, acts, K)
             s = score(o).view(S, P)
             top = s.topk(k, dim=1).indices                                      # (S,k)
             el = acts.view(S, P, T, 3).gather(1, top[..., None, None].expand(-1, -1, T, 3))

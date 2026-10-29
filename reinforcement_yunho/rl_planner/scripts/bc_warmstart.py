@@ -7,6 +7,9 @@ curriculum) keeps the rest of what it knows: search, approach, later windows. Th
 normaliser are kept; PPO continues from the result with train.py --resume.
 
     python rl_planner/scripts/bc_warmstart.py --resume model.pt --demos 'DIR/batch_*.pt' --config ... --set OBS --out bc.pt
+
+--demos may repeat (teachers with different settings, e.g. teach_cem.py --passes 1 and 2): each teacher env is
+replayed on its own.
 """
 from __future__ import annotations
 
@@ -23,31 +26,30 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from rl_planner.scripts.teach_cem import SCENE_KEYS  # noqa: E402
 
 
-def load_demos(pattern: str):
-    files = sorted(glob.glob(pattern))
+def load_demos(patterns) -> list:
+    """-> [(robust demonstrations, batch meta)] per teacher env (configs, settings, horizon, level, passes)."""
+    files = sorted({f for p in ([patterns] if isinstance(patterns, str) else patterns) for f in glob.glob(p)})
     if not files:
-        raise FileNotFoundError(pattern)
-    out, meta = [], None
-    env_of = lambda d: (d["configs"], [s for s in d["sets"] if not s.startswith("device=")], d["T"], d["level"])  # noqa: E731
+        raise FileNotFoundError(patterns)
+    env_of = lambda d: (tuple(d["configs"]), tuple(s for s in d["sets"] if not s.startswith("device=")), d["T"],  # noqa: E731
+                        d["level"], d.get("args", {}).get("passes", 1))
+    groups = {}
     for f in files:
         d = torch.load(f, weights_only=False)
-        if meta is None:
-            meta = d
-        elif env_of(d) != env_of(meta):
-            raise ValueError(f"{f}: demonstrations from a different teacher env")
-        out += [x for x in d["demos"] if x["robust"]]
-    return out, meta
+        g = groups.setdefault(env_of(d), ([], d))
+        g[0].extend(x for x in d["demos"] if x["robust"])
+    return [g for g in groups.values() if g[0]]
 
 
 @torch.no_grad()
 def replay(demos, meta, device: str, tail_s: float):
     """Open-loop replay of every demonstration in the teacher's env -> (obs, action) pairs up to tail_s after the
-    load is through, and how many still pass robustly (the replay is deterministic: all of them should)."""
+    load is through the teacher's K windows, and how many still pass robustly (deterministic: all of them should)."""
     from rl_planner.core.config import load_config
     from rl_planner.envs.torch_env import TorchWindowEnv
     sets = [s for s in meta["sets"] if not s.startswith("device=")] + [f"device={device}"]
     cfg = load_config(meta["configs"], sets)
-    E, T = len(demos), meta["T"]
+    E, T, K = len(demos), meta["T"], meta.get("args", {}).get("passes", 1)
     env = TorchWindowEnv(cfg, num_envs=E, device=device, seed=0)
     core = env.core
     core.fixed_level = meta["level"]
@@ -69,9 +71,9 @@ def replay(demos, meta, device: str, tail_s: float):
         act_l.append(acts[keep, t].clone())
         _, _, d, _ = env.step(acts[:, t])
         fin |= d.bool()
-        both = (m.target >= 1) & m.load_past[:, 0] & ~fin
+        both = (m.target >= K) & m.load_past[:, :K].all(-1) & ~fin
         through_t = torch.where(both & torch.isinf(through_t), torch.full_like(through_t, (t + 1) * core.step_dt), through_t)
-    ok = ~fin & (m.target >= 1) & m.load_past[:, 0]
+    ok = ~fin & (m.target >= K) & m.load_past[:, :K].all(-1)
     return torch.cat(obs_l), torch.cat(act_l), int(ok.sum())
 
 
@@ -101,7 +103,7 @@ def interval_mse(y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--resume", required=True, help="model_*.pt to start from")
-    ap.add_argument("--demos", required=True, help="glob of teach_cem.py batch files")
+    ap.add_argument("--demos", action="append", required=True, help="glob of teach_cem.py batch files (repeatable)")
     ap.add_argument("--config", action="append", required=True, help="the training configs (PPO continues with them)")
     ap.add_argument("--set", action="append", default=[])
     ap.add_argument("--tail-s", type=float, default=0.5, help="clone until this long after the load is through [s]")
@@ -122,10 +124,15 @@ def main(argv=None) -> int:
     from rl_planner.envs.torch_env import TorchWindowEnv
     from rl_planner.scripts.train import runner_cfg
     t0 = time.time()
-    demos, meta = load_demos(a.demos)
-    obs_d, act_d, ok = replay(demos, meta, a.device, a.tail_s)
-    print(f"[bc] {len(demos)} demonstrations, {obs_d.shape[0]} (obs, action) pairs; replay passes robustly: {ok}/{len(demos)}",
-          flush=True)
+    parts = []
+    for demos, meta in load_demos(a.demos):
+        o, ac, ok = replay(demos, meta, a.device, a.tail_s)
+        K = meta.get("args", {}).get("passes", 1)
+        print(f"[bc] level {meta['level']} passes {K}: {len(demos)} demonstrations, {o.shape[0]} (obs, action) pairs; "
+              f"replay passes robustly: {ok}/{len(demos)}", flush=True)
+        parts.append((o, ac, len(demos)))
+    obs_d, act_d = torch.cat([x[0] for x in parts]), torch.cat([x[1] for x in parts])
+    n_demos = sum(x[2] for x in parts)
     cfg = load_config(a.config, a.set + [f"device={a.device}"])
     env = TorchWindowEnv(cfg, num_envs=a.self_envs, device=a.device, seed=1)
     runner = OnPolicyRunner(env, runner_cfg(cfg), log_dir=None, device=a.device)
@@ -157,7 +164,7 @@ def main(argv=None) -> int:
         if ep % 5 == 0 or ep == a.epochs - 1:
             print(f"[bc] epoch {ep:3d} demo mse {tot_d / nd:.4f} (start {before:.4f}) own mse {tot_s / nd:.5f}", flush=True)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-    runner.save(a.out, infos={"bc_warmstart": dict(resume=a.resume, demos=a.demos, n=len(demos), pairs=nd)})
+    runner.save(a.out, infos={"bc_warmstart": dict(resume=a.resume, demos=a.demos, n=n_demos, pairs=nd)})
     print(f"[bc] saved {a.out} [{time.time() - t0:.0f}s]")
     return 0
 
