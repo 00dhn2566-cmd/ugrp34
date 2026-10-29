@@ -1,11 +1,13 @@
 """Vision in the loop (RESULTS.md §16): the same episodes flown once per mode — corners from the perception surrogate
 (surrogate), from Isaac-rendered onboard images through a YOLO-pose detector (yolo), and the same with the corners
-refined on the inner edge of the frame (yolo+edge, vision/detector.py refine_corners) — into the same triangulator
-(core/perception.py add_detections). Dynamics, referee, planner and the rest of the env are the torch
-env's, as in benchmark.py; only where the window corners come from changes. Per mode: success and crash rates, the
-window estimate error at each pass, and per camera frame the detector's recall of the windows the surrogate would
-see, its false detections and its corner error against the true projection; seen_<mode>.npy keeps every window seen
-per frame (episode, t, window, range, true shortest side px, surrogate-visible, detected, mean corner error px).
+refined on the inner edge of the frame and a detection kept only when all four are found there (yolo+edge,
+vision/detector.py refine_corners: a window cut by the image border has a side with no edge) — into the same triangulator
+(core/perception.py add_detections). Dynamics, referee, planner and the rest of the env are the torch env's, as in
+benchmark.py; only where the window corners come from changes. Per mode: success and crash rates, the window estimate
+error at each pass (also split into the window's normal — along the flight — and its plane, from the estimate at the
+last decision before the pass), and per camera frame the detector's recall of the windows the surrogate would see, its
+false detections and its corner error against the true projection; seen_<mode>.npy keeps every window seen per frame
+(episode, t, window, range, true shortest side px, surrogate-visible, detected, mean corner error px).
 
     python rl_planner/scripts/vision_loop.py --policy <export> --planner rl+safe+layer \
         --config rl_planner/configs/slung/base.yaml --weights best.pt --level 2 --episodes 32 --out DIR
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -137,8 +140,8 @@ def main(argv=None) -> int:
                     acc = f if acc is None else acc + f
                 img = (acc / a.blur_samples).round().astype(np.uint8)
             dets = yolo.detect(img)
-            if state["refine"]:
-                dets = [(c, cf, refine_corners(img, kp, c)[0], kc) for c, cf, kp, kc in dets]
+            if state["refine"]:                   # the detector proposes, the frame's edges verify: all four corners
+                dets = [(c, cf, q, kc) for c, cf, kp, kc in dets for q, ok in [refine_corners(img, kp, c)] if ok.all()]
             uv_gt, z_gt = project(pr, scene.corners[0].cpu(), cam_c[0].cpu(), R_img[0].cpu())
             u1, d1, c1, n_false = associate(dets, uv_gt, z_gt, scene.color[0].cpu(), scene.valid[0].cpu())
             side = (u1 - u1.roll(-1, dims=1)).norm(dim=-1).min(-1).values
@@ -187,11 +190,21 @@ def main(argv=None) -> int:
             planner.reset(torch.arange(1, device=dev))
             nw = int(core.scene.n_windows[0])        # this course (the env resets to the next one when done)
             win = {k: getattr(core.scene, k)[0, :nw].tolist() for k in ("center", "normal", "right", "up", "size", "color")}
+            axes = torch.tensor([win["normal"], win["right"], win["up"]]).transpose(0, 1)        # (nw, 3 axes, 3)
+            true_c = torch.tensor(win["center"])
+            pass_err, snap = [], None                # target estimate at the last decision before each pass
             for _ in range(int(core.max_episode_length) + 1):
+                k = int(core.mission.target[0])
+                if k < nw and core.est is not None and bool(core.est.valid[0, k]):
+                    snap = (k, core.est.center[0, k].cpu())
                 _, _, done, _ = env.step(planner.act(core))
+                passed = int(core.episode_record["windows_passed"][0]) if bool(done[0]) else int(core.mission.target[0])
+                if passed > k and snap is not None and snap[0] == k:
+                    pass_err.append((axes[k] @ (snap[1] - true_c[k])).tolist())          # (normal, right, up) [m]
                 if bool(done[0]):
                     break
             rec = {k: core.episode_record[k][0].item() for k in KEYS}
+            rec["pass_err_nru"] = pass_err
             rec["crash_reason"] = CRASH_NAMES[int(rec["crash_reason"])] if rec["crashed"] else ""
             eps.append(rec)
             if gif and state["frames"]:
@@ -210,6 +223,8 @@ def main(argv=None) -> int:
             episodes=n, success_rate=sum(r["success"] for r in eps) / n, crash_rate=sum(r["crashed"] for r in eps) / n,
             windows_passed_frac=float(np.mean([r["windows_passed"] / max(r["n_windows"], 1) for r in eps])),
             est_err_at_pass_m=float(np.mean([r["est_err_at_pass"] for r in eps if r["windows_passed"] > 0] or [np.nan])),
+            est_err_normal_m=float(np.mean([abs(e[0]) for r in eps for e in r["pass_err_nru"]] or [np.nan])),
+            est_err_inplane_m=float(np.mean([math.hypot(e[1], e[2]) for r in eps for e in r["pass_err_nru"]] or [np.nan])),
             crash_reasons={c: sum(r["crash_reason"] == c for r in eps) for c in set(r["crash_reason"] for r in eps) if c},
             frames=st["frames"], recall=st["found"] / max(st["visible"], 1),
             extra_per_frame=st["extra"] / max(st["frames"], 1), false_per_frame=st["false"] / max(st["frames"], 1),
