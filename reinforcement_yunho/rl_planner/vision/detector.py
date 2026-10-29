@@ -30,12 +30,14 @@ class YoloCorners:
 
 
 def refine_corners(img: np.ndarray, kp: np.ndarray, cls: int, samples: int = 24, search_frac: float = 0.10,
-                   search_min_px: float = 3.0, max_shift_frac: float = 0.12):
+                   search_min_px: float = 3.0, max_shift_frac: float = 0.12, rise_frac: float = 0.03):
     """Detector corners (4,2) TL,TR,BR,BL -> sub-pixel corners from the inner edge of the coloured frame (the opening's
     boundary): along each side, the strongest rise of the frame colour going outward across the side within
-    +-search_frac of its length, a line fitted to those edge points (trimmed least squares), adjacent lines intersected.
-    A corner keeps the detector's position when either of its sides has too few edge points or it would move more than
-    max_shift_frac of the shorter adjacent side. -> (corners (4,2), refined (4,) bool)"""
+    +-search_frac of its length (a rise of at least rise_frac of the profile's contrast per px, so a motion-blurred
+    edge still counts; a side outside the image has no contrast at all), a line fitted to those edge points (trimmed
+    least squares), adjacent lines intersected. A corner keeps the detector's position when either of its sides has too
+    few edge points or it would move more than max_shift_frac of the shorter adjacent side. Pixel k spans [k, k+1) as
+    in the labels and the renders. -> (corners (4,2), refined (4,) bool)"""
     import cv2
     f = img.astype(np.float32)
     o = [c for c in range(3) if c != cls % 3]
@@ -61,13 +63,18 @@ def refine_corners(img: np.ndarray, kp: np.ndarray, cls: int, samples: int = 24,
                          cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)   # pixel k spans [k, k+1) (labels, renders)
         d = (prof[:, 4:] - prof[:, :-4]) / 2.0                               # rise per px over 2 px, at ss[2:-2]
         j = d.argmax(1)
-        jj = np.clip(j, 1, d.shape[1] - 2)
-        y0, y1, y2 = (d[np.arange(samples), jj + m] for m in (-1, 0, 1))
-        den = y0 - 2 * y1 + y2
-        off = np.where(np.abs(den) > 1e-6, 0.5 * (y0 - y2) / np.where(np.abs(den) > 1e-6, den, 1.0), 0.0).clip(-0.5, 0.5)
-        s_edge = ss[jj + 2] + 0.5 * off
+        s_edge = np.empty(samples)
+        for i in range(samples):              # centroid of the rise above half its peak, around the peak: the middle
+            if d[i, j[i]] <= 0:               # of the edge, also when motion blur spreads it into a plateau
+                s_edge[i] = 0.0               # no rise (rejected below)
+                continue
+            half = d[i] >= 0.5 * d[i, j[i]]
+            lo = j[i] - np.argmin(half[j[i]::-1]) + 1 if not half[:j[i] + 1].all() else 0
+            hi = j[i] + np.argmin(half[j[i]:]) if not half[j[i]:].all() else d.shape[1]
+            w = d[i, lo:hi]
+            s_edge[i] = float((w * ss[2 + lo:2 + hi]).sum() / w.sum())
         contrast = prof.max(1) - prof.min(1)
-        ok = (j > 0) & (j < d.shape[1] - 1) & (contrast > 30.0) & (d.max(1) > 0.12 * contrast)
+        ok = (j > 0) & (j < d.shape[1] - 1) & (contrast > 30.0) & (d.max(1) > rise_frac * contrast)
         e = base + s_edge[:, None] * n
         line = None
         for _ in range(4):                                                   # trimmed total least squares

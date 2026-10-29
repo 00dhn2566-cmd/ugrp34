@@ -59,7 +59,8 @@ def test_annotate_draws_the_detection_and_keeps_the_frame_size():
     assert tuple(out[500, 300]) == (128, 128, 128)         # untouched away from the marks
 
 
-def test_refine_corners_snaps_perturbed_corners_to_the_inner_edge_of_the_frame():
+@pytest.mark.parametrize("blur_px,tol", [(0, 0.3), (14, 1.0)])
+def test_refine_corners_snaps_perturbed_corners_to_the_inner_edge_of_the_frame(blur_px, tol):
     import cv2
     import numpy as np
 
@@ -72,9 +73,12 @@ def test_refine_corners_snaps_perturbed_corners_to_the_inner_edge_of_the_frame()
     for poly, col in ((outer, (40, 190, 60)), (true, (140, 140, 140))):              # green bars, then the opening
         cv2.fillPoly(big, [np.round((poly * k - 0.5) * 16).astype(np.int32)], col, cv2.LINE_8, shift=4)
     img = cv2.resize(big, (1280, 720), interpolation=cv2.INTER_AREA)
+    if blur_px:                                            # motion blur along a diagonal, centred (mid-exposure)
+        ker = np.eye(blur_px + 1, dtype=np.float32)
+        img = cv2.filter2D(img, -1, ker / ker.sum())
     kp = true + np.array([[6.0, -4.0], [-5.0, 5.0], [7.0, 3.0], [-4.0, -6.0]])        # a detector a few px off
     out, ok = refine_corners(img, kp, 1)
     assert ok.all()
-    assert np.abs(out - true).max() < 0.3                  # from 5-8 px off
+    assert np.abs(out - true).max() < tol                  # from 5-8 px off
     _, ok_red = refine_corners(img, kp, 0)                 # no red frame there: nothing to snap to
     assert not ok_red.any()
