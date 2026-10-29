@@ -180,10 +180,10 @@ $PY rl_planner/scripts/expand_obs.py --run <gen_mlp run> --ckpt model_3997.pt --
 $PY rl_planner/scripts/train.py --backend torch --num-envs 4096 --max-iterations 800 --resume ws.pt \
     --config rl_planner/configs/train/general.yaml --config rl_planner/configs/slung/base.yaml \
     --config rl_planner/configs/slung/train.yaml --set "observation.policy=[...,slung]"   # expand_obs 가 출력하는 목록
-# 렌더: 기체 + 줄 + 짐 (머리줄에 흔들림 각) / 같은 장면 옆모습, 정책·계획기별로 한 줄씩
+# 렌더: 기체 + 줄 + 짐 (머리줄에 흔들림 각) / 같은 장면 옆모습, 정책·계획기별로 한 줄씩 (--gif: 실시간 애니메이션)
 $PY rl_planner/scripts/play_isaac.py --policy <export> --config rl_planner/configs/slung/base.yaml --level 4 --safe --layer
 $PY rl_planner/scripts/plot_slung.py --policy g=<export> --policy s=<slung_a export> \
-    --planner g:rl+safe --planner g:rl+safe+layer --planner s:rl+safe+layer --level 4 --seed 5 --png side.png
+    --planner g:rl+safe --planner g:rl+safe+layer --planner s:rl+safe+layer --level 4 --seed 5 --png side.png --gif side.gif
 ```
 
 ## 5. MDP 정의 (설정: `configs/default.yaml`)

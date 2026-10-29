@@ -1320,6 +1320,8 @@ layer (모든 환경을 한 번에 푸는 MPC QP, `planners/convex_layer.py`)를
 
 ![줄 짐 옆모습: 신경망만 / + layer / slung_a + layer](docs/figures/slung_side_L4.png)
 
+![같은 세 줄을 실시간으로 (물리 스텝마다 기록, 제목에 통과한 창문 수와 줄 흔들림 각)](docs/figures/slung_side_L4.gif)
+
 신경망만: 드론이 창문 가운데로 날아 짐이 첫 창문 아래 바에 걸린다 (2.9 s). gen_mlp + layer: 첫 창문은 지나지만 둘째 창문 아래 바
 (1.0 m)에 짐(1.1 m, 반경 0.12)이 닿는다 — layer 는 창문면 0.35 m 앞에서야 개구부 제약을 걸어 올리기에 늦다. slung_a + layer: 창문
 앞에서 미리 높이를 올려 짐이 바 위로 지난다 (4/4, 12.2 s).
@@ -1386,7 +1388,7 @@ $PY rl_planner/scripts/evaluate.py --backend isaac --device cuda:0 --planners rl
 # §14 줄 짐 — 이어 학습, 그 뒤 export·고르기·42 조건·Isaac 확인 (after_slung_a.sh)
 bash /data/runs/queue_slung_a.sh; bash /data/runs/after_slung_a.sh
 $PY rl_planner/scripts/plot_slung.py --policy gen_mlp=<export> --policy slung_a=<export> --planner gen_mlp:rl+safe \
-    --planner gen_mlp:rl+safe+layer --planner slung_a:rl+safe+layer --level 4 --seed 5 --png side.png
+    --planner gen_mlp:rl+safe+layer --planner slung_a:rl+safe+layer --level 4 --seed 5 --png side.png --gif side.gif
 $PY rl_planner/scripts/play_isaac.py --policy <slung_a export> --config rl_planner/configs/slung/base.yaml --level 4 --seed 5 --safe --layer
 RL_PLANNER_SLUNG_EXPORT=<slung_a export> $PY -m pytest rl_planner/tests/test_onboard.py -k slung
 ```
