@@ -80,7 +80,7 @@ def main(argv=None) -> int:
     conf_min, side_min, mg = float(p["det_conf_min"]), float(p["min_side_px"]), float(p["image_margin_px"])
     sl = core.slung
     orig_capture = pr.capture
-    state = {"fp": None, "stats": None, "frames": None, "refine": False, "ep": 0}
+    state = {"fp": None, "stats": None, "frames": None, "refine": False, "ep": 0, "trace": None}
 
     def new_stats():
         return dict(frames=0, visible=0, found=0, extra=0, false=0, corner_err=[], rows=[])
@@ -157,6 +157,14 @@ def main(argv=None) -> int:
                 im = annotate(img, dets, truth, f"t {t:4.1f} s    passed {tgt}/{n}    {err}",
                               title="onboard camera  ·  YOLO-pose" + (" + edge refinement" if state["refine"] else " corners"))
                 state["frames"].append(im.resize((960, 540), Image.LANCZOS))
+                est = core.est
+                state["trace"].append(dict(                  # for a composed view (drone, load, estimates) per frame
+                    t=t, target=tgt, pos=core.state.pos[0].tolist(), quat=core.state.quat[0].tolist(),
+                    load=None if sl is None else sl.pos[0].tolist(),
+                    est_valid=[bool(x) for x in est.valid[0, :n]] if est is not None else [False] * n,
+                    est_center=est.center[0, :n].tolist() if est is not None else [],
+                    est_size=est.size[0, :n].tolist() if est is not None else [],
+                    dets=[(int(c), float(cf), [list(map(float, q)) for q in kp]) for c, cf, kp, _ in dets]))
         ray_c = cam_c if ray_offset is None else cam_c + ray_offset
         return ray_c, R_WC, uv, det, conf, take
 
@@ -172,10 +180,13 @@ def main(argv=None) -> int:
             state["ep"] = e
             gif = mode != "surrogate" and e < a.gif_episodes
             state["frames"] = [] if gif else None
+            state["trace"] = [] if gif else None
             core.reseed(a.seed + e)
             core.fixed_level = a.level
             env._reset_all()
             planner.reset(torch.arange(1, device=dev))
+            nw = int(core.scene.n_windows[0])        # this course (the env resets to the next one when done)
+            win = {k: getattr(core.scene, k)[0, :nw].tolist() for k in ("center", "normal", "right", "up", "size", "color")}
             for _ in range(int(core.max_episode_length) + 1):
                 _, _, done, _ = env.step(planner.act(core))
                 if bool(done[0]):
@@ -187,6 +198,8 @@ def main(argv=None) -> int:
                 path = os.path.join(a.out, f"onboard_{mode.replace('+', '_')}_ep{e}.gif")
                 fr = [f.quantize(colors=200, dither=0) for f in state["frames"]]
                 fr[0].save(path, save_all=True, append_images=fr[1:], duration=100, loop=0)
+                with open(path[:-4] + ".json", "w", encoding="utf-8") as f:
+                    json.dump(dict(record=rec, windows=win, frames=state["trace"][:len(fr)]), f)
                 print(f"[vision_loop] wrote {path} ({len(fr)} frames)", flush=True)
             print(f"[vision_loop] {mode} ep {e}: {'success' if rec['success'] else rec['crash_reason'] or 'timeout'} "
                   f"{rec['windows_passed']}/{rec['n_windows']} [{time.time() - t0:.0f}s]", flush=True)
