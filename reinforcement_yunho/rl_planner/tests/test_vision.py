@@ -45,3 +45,36 @@ def test_associate_ignores_windows_behind_the_camera():
     uv, det, conf, false = associate([(0, 0.9, _square(100, 100, 200).numpy(), None)], uv_gt,
                                      torch.tensor([[1.0, 1.0, -1.0, 1.0]]), torch.tensor([0]), torch.tensor([True]))
     assert not bool(det[0]) and false == 1
+
+
+def test_annotate_draws_the_detection_and_keeps_the_frame_size():
+    import numpy as np
+
+    from rl_planner.vision.overlay import PAL, annotate
+    img = np.full((720, 1280, 3), 128, np.uint8)
+    kp = _square(400, 300, 200).numpy()
+    out = np.asarray(annotate(img, [(1, 0.9, kp, None)], [kp], "t 1.0 s"))
+    assert out.shape == img.shape
+    assert tuple(out[304, 404]) == PAL[1]                  # the corner marker in the class colour (off the + of truth)
+    assert tuple(out[500, 300]) == (128, 128, 128)         # untouched away from the marks
+
+
+def test_refine_corners_snaps_perturbed_corners_to_the_inner_edge_of_the_frame():
+    import cv2
+    import numpy as np
+
+    from rl_planner.vision.detector import refine_corners
+    k = 8                                                  # drawn at 8x, area-averaged: pixel coverage
+    big = np.full((720 * k, 1280 * k, 3), 140, np.uint8)
+    true = np.array([[402.3, 201.7], [801.6, 230.2], [790.4, 551.8], [395.1, 540.6]])    # a perspective quad
+    ctr = true.mean(0)
+    outer = ctr + (true - ctr) * 1.15
+    for poly, col in ((outer, (40, 190, 60)), (true, (140, 140, 140))):              # green bars, then the opening
+        cv2.fillPoly(big, [np.round((poly * k - 0.5) * 16).astype(np.int32)], col, cv2.LINE_8, shift=4)
+    img = cv2.resize(big, (1280, 720), interpolation=cv2.INTER_AREA)
+    kp = true + np.array([[6.0, -4.0], [-5.0, 5.0], [7.0, 3.0], [-4.0, -6.0]])        # a detector a few px off
+    out, ok = refine_corners(img, kp, 1)
+    assert ok.all()
+    assert np.abs(out - true).max() < 0.3                  # from 5-8 px off
+    _, ok_red = refine_corners(img, kp, 0)                 # no red frame there: nothing to snap to
+    assert not ok_red.any()

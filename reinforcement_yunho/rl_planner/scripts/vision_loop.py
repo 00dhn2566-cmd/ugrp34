@@ -1,9 +1,11 @@
-"""Vision in the loop (RESULTS.md §16): the same episodes flown twice — corners from the perception surrogate, and
-corners from Isaac-rendered onboard images through a YOLO-pose detector (rl_planner/vision) — into the same
-triangulator (core/perception.py add_detections). Dynamics, referee, planner and the rest of the env are the torch
+"""Vision in the loop (RESULTS.md §16): the same episodes flown once per mode — corners from the perception surrogate
+(surrogate), from Isaac-rendered onboard images through a YOLO-pose detector (yolo), and the same with the corners
+refined on the inner edge of the frame (yolo+edge, vision/detector.py refine_corners) — into the same triangulator
+(core/perception.py add_detections). Dynamics, referee, planner and the rest of the env are the torch
 env's, as in benchmark.py; only where the window corners come from changes. Per mode: success and crash rates, the
 window estimate error at each pass, and per camera frame the detector's recall of the windows the surrogate would
-see, its false detections and its corner error against the true projection.
+see, its false detections and its corner error against the true projection; seen_<mode>.npy keeps every window seen
+per frame (episode, t, window, range, true shortest side px, surrogate-visible, detected, mean corner error px).
 
     python rl_planner/scripts/vision_loop.py --policy <export> --planner rl+safe+layer \
         --config rl_planner/configs/slung/base.yaml --weights best.pt --level 2 --episodes 32 --out DIR
@@ -35,8 +37,11 @@ def main(argv=None) -> int:
     ap.add_argument("--level", type=int, default=2)
     ap.add_argument("--episodes", type=int, default=32)
     ap.add_argument("--seed", type=int, default=12345)
-    ap.add_argument("--modes", default="surrogate,yolo")
-    ap.add_argument("--gif-episodes", type=int, default=1, help="onboard GIF of the first N yolo episodes")
+    ap.add_argument("--modes", default="surrogate,yolo", help="comma list of surrogate | yolo | yolo+edge")
+    ap.add_argument("--gif-episodes", type=int, default=1, help="onboard GIF of the first N episodes of each image mode")
+    ap.add_argument("--blur-samples", type=int, default=6,
+                    help="with a camera exposure (perception.exposure_s, e.g. general/blur10.yaml): the yolo image is the "
+                         "mean of this many renders along the exposure (the surrogate's blur model streaks the corners)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
 
@@ -44,14 +49,16 @@ def main(argv=None) -> int:
     app = AppLauncher(headless=True, enable_cameras=True).app
     import numpy as np
     import torch
-    from PIL import Image, ImageDraw
+    from PIL import Image
 
+    from rl_planner.core import math3d as m3
     from rl_planner.core.config import config_for_policy
     from rl_planner.core.mission import CRASH_NAMES
     from rl_planner.envs.torch_env import TorchWindowEnv
     from rl_planner.planners.policy import PolicyPlanner
-    from rl_planner.vision.detector import YoloCorners, associate, project, visible
+    from rl_planner.vision.detector import YoloCorners, associate, project, refine_corners, visible
     from rl_planner.vision.isaac_view import OnboardView
+    from rl_planner.vision.overlay import annotate
 
     with open(os.path.join(a.policy, "policy_meta.json"), encoding="utf-8") as f:
         cfg = config_for_policy(json.load(f)["config"], a.config, a.set + ["device=cuda"])
@@ -70,16 +77,15 @@ def main(argv=None) -> int:
     view = OnboardView(app, cfg, randomize=False, updates=1)
     yolo = YoloCorners(a.weights, device=dev, imgsz=a.imgsz)
     p = cfg["perception"]
-    conf_min, side_min = float(p["det_conf_min"]), float(p["min_side_px"])
+    conf_min, side_min, mg = float(p["det_conf_min"]), float(p["min_side_px"]), float(p["image_margin_px"])
     sl = core.slung
     orig_capture = pr.capture
-    state = {"fp": None, "stats": None, "frames": None}
-    PAL = [(255, 70, 70), (70, 230, 90), (90, 150, 255)]
+    state = {"fp": None, "stats": None, "frames": None, "refine": False, "ep": 0}
 
     def new_stats():
-        return dict(frames=0, visible=0, found=0, extra=0, false=0, corner_err=[])
+        return dict(frames=0, visible=0, found=0, extra=0, false=0, corner_err=[], rows=[])
 
-    def account(st, vis, det, uv, uv_gt, n_false):
+    def account(st, vis, det, uv, uv_gt, n_false, cam_c, centers):
         st["frames"] += 1
         st["visible"] += int(vis.sum())
         st["found"] += int((det & vis).sum())
@@ -87,19 +93,27 @@ def main(argv=None) -> int:
         st["false"] += n_false
         if bool(det.any()):
             st["corner_err"] += (uv[det] - uv_gt[det]).norm(dim=-1).flatten().tolist()
+        rng = (centers - cam_c).norm(dim=-1)
+        side = (uv_gt - uv_gt.roll(-1, dims=1)).norm(dim=-1).min(-1).values
+        err = (uv - uv_gt).norm(dim=-1).mean(-1)
+        t = float(core.episode_time[0])
+        for w in torch.nonzero(vis | det).flatten().tolist():   # per window seen: ep, t, w, range, side, vis, det, err
+            st["rows"].append((state["ep"], t, w, float(rng[w]), float(side[w]), bool(vis[w]), bool(det[w]),
+                               float(err[w]) if bool(det[w]) else float("nan")))
 
     def surrogate_capture(cam_c, R_WC, scene, take, gen, ray_offset=None, R_err=None, motion=None):
         out = orig_capture(cam_c, R_WC, scene, take, gen, ray_offset=ray_offset, R_err=R_err, motion=motion)
         if bool(take[0]):
             R_img = R_WC if R_err is None else R_WC @ R_err
             vis, uv_gt = (t.cpu() for t in visible(pr, scene, 0, cam_c[0], R_img[0]))
-            account(state["stats"], vis, out[3][0].cpu(), out[2][0].cpu(), uv_gt, 0)
+            account(state["stats"], vis, out[3][0].cpu(), out[2][0].cpu(), uv_gt, 0, cam_c[0].cpu(), scene.center[0].cpu())
         return out
 
     def yolo_capture(cam_c, R_WC, scene, take, gen, ray_offset=None, R_err=None, motion=None):
         n = int(scene.n_windows[0])
         fp = (n, round(float(scene.center[0, :n].sum()), 5))
-        if fp != state["fp"]:                     # a new course (the env resets before the first frame)
+        new_course = fp != state["fp"]
+        if new_course:                            # a new course (the env resets before the first frame)
             view.set_course(scene, 0, load_radius=None if sl is None else sl.radius)
             state["fp"] = fp
         W = scene.center.shape[1]
@@ -111,33 +125,38 @@ def main(argv=None) -> int:
             if sl is not None:
                 hook = sl.hook(core.state.pos, core.state.quat)[0][0]
                 view.set_load(sl.pos[0].cpu().numpy(), hook.cpu().numpy())
-            img = view.render(cam_c[0].cpu().numpy(), R_img[0].cpu().numpy())
+            if motion is None or a.blur_samples < 2 or float(motion[2][0]) <= 0:
+                img = view.render(cam_c[0].cpu().numpy(), R_img[0].cpu().numpy())
+            else:                                 # the exposure: poses from its start (as in the surrogate) to now
+                vel, omega, t_exp = (x[0] for x in motion)
+                acc = None
+                for back in torch.linspace(1.0, 0.0, a.blur_samples).tolist():
+                    dt = back * float(t_exp)
+                    R_s = m3.rot_axis_angle(m3.normalize(omega), -omega.norm() * dt) @ R_img[0]
+                    f = view.render((cam_c[0] - vel * dt).cpu().numpy(), R_s.cpu().numpy()).astype(np.float32)
+                    acc = f if acc is None else acc + f
+                img = (acc / a.blur_samples).round().astype(np.uint8)
             dets = yolo.detect(img)
+            if state["refine"]:
+                dets = [(c, cf, refine_corners(img, kp, c)[0], kc) for c, cf, kp, kc in dets]
             uv_gt, z_gt = project(pr, scene.corners[0].cpu(), cam_c[0].cpu(), R_img[0].cpu())
             u1, d1, c1, n_false = associate(dets, uv_gt, z_gt, scene.color[0].cpu(), scene.valid[0].cpu())
             side = (u1 - u1.roll(-1, dims=1)).norm(dim=-1).min(-1).values
-            d1 = d1 & (c1 >= conf_min) & (side >= side_min)
+            inside = ((u1[..., 0] >= mg) & (u1[..., 0] <= pr.width - mg) & (u1[..., 1] >= mg)
+                      & (u1[..., 1] <= pr.height - mg)).all(-1)     # the surrogate's rule, on the detected corners
+            d1 = d1 & (c1 >= conf_min) & (side >= side_min) & inside
             vis = visible(pr, scene, 0, cam_c[0], R_img[0])[0].cpu()
-            account(state["stats"], vis, d1, u1, uv_gt, n_false)
+            account(state["stats"], vis, d1, u1, uv_gt, n_false, cam_c[0].cpu(), scene.center[0].cpu())
             uv[0], det[0], conf[0] = u1.to(cam_c.device), d1.to(cam_c.device), c1.to(cam_c.device)
-            if state["frames"] is not None:
-                im = Image.fromarray(img)
-                dr = ImageDraw.Draw(im)
-                for cls, cf, kp, _ in dets:
-                    pts = [tuple(map(float, q)) for q in kp]
-                    dr.line(pts + [pts[0]], fill=PAL[cls % 3], width=4)
-                    for q in pts:
-                        dr.ellipse((q[0] - 7, q[1] - 7, q[0] + 7, q[1] + 7), outline=(255, 255, 0), width=3)
-                    dr.text((pts[0][0], pts[0][1] - 24), f"{cf:.2f}", fill=(255, 255, 0))
-                for w in torch.nonzero(vis).flatten().tolist():
-                    for q in uv_gt[w].tolist():
-                        dr.ellipse((q[0] - 3, q[1] - 3, q[0] + 3, q[1] + 3), fill=(255, 255, 255))
-                tgt = int(core.mission.target[0])
-                err = float(core.est_err[0, min(tgt, W - 1)]) if core.est_err is not None else float("nan")
-                dr.rectangle((0, 0, 1280, 44), fill=(10, 14, 24))
-                dr.text((14, 12), f"onboard camera -> YOLO-pose -> triangulation    t = {float(core.episode_time[0]):4.1f} s    "
-                                  f"windows passed {tgt}/{n}    target estimate error {err * 100:4.1f} cm", fill=(235, 240, 250))
-                state["frames"].append(im.resize((960, 540)))
+            if state["frames"] is not None and not (new_course and state["frames"]):   # not the next course's reset
+                tgt, t = int(core.mission.target[0]), float(core.episode_time[0])
+                k = min(tgt, n - 1)
+                ok = t > 0 and core.est is not None and bool(core.est.valid[0, k])
+                err = f"estimate error {float(core.est_err[0, k]) * 100:4.1f} cm" if ok else "no estimate yet"
+                truth = [uv_gt[w] for w in torch.nonzero(vis).flatten().tolist()]
+                im = annotate(img, dets, truth, f"t {t:4.1f} s    passed {tgt}/{n}    {err}",
+                              title="onboard camera  ·  YOLO-pose" + (" + edge refinement" if state["refine"] else " corners"))
+                state["frames"].append(im.resize((960, 540), Image.LANCZOS))
         ray_c = cam_c if ray_offset is None else cam_c + ray_offset
         return ray_c, R_WC, uv, det, conf, take
 
@@ -145,11 +164,13 @@ def main(argv=None) -> int:
     results = {}
     for mode in a.modes.split(","):
         pr.capture = surrogate_capture if mode == "surrogate" else yolo_capture
+        state["refine"] = mode == "yolo+edge"
         state["stats"] = new_stats()
         eps = []
         t0 = time.time()
         for e in range(a.episodes):
-            gif = mode == "yolo" and e < a.gif_episodes
+            state["ep"] = e
+            gif = mode != "surrogate" and e < a.gif_episodes
             state["frames"] = [] if gif else None
             core.reseed(a.seed + e)
             core.fixed_level = a.level
@@ -163,7 +184,7 @@ def main(argv=None) -> int:
             rec["crash_reason"] = CRASH_NAMES[int(rec["crash_reason"])] if rec["crashed"] else ""
             eps.append(rec)
             if gif and state["frames"]:
-                path = os.path.join(a.out, f"onboard_ep{e}.gif")
+                path = os.path.join(a.out, f"onboard_{mode.replace('+', '_')}_ep{e}.gif")
                 fr = [f.quantize(colors=200, dither=0) for f in state["frames"]]
                 fr[0].save(path, save_all=True, append_images=fr[1:], duration=100, loop=0)
                 print(f"[vision_loop] wrote {path} ({len(fr)} frames)", flush=True)
@@ -182,9 +203,10 @@ def main(argv=None) -> int:
             corner_err_px_median=float(np.nanmedian(ce)), corner_err_px_p90=float(np.nanpercentile(ce, 90)),
             corner_err_px_rms=float(np.sqrt(np.nanmean(ce ** 2))), seconds=time.time() - t0)
         results[mode] = dict(summary=summ, episodes=eps)
+        np.save(os.path.join(a.out, f"seen_{mode.replace('+', '_')}.npy"), np.array(st["rows"], dtype=np.float64))
         print(f"[vision_loop] {mode}: " + json.dumps({k: v for k, v in summ.items()}), flush=True)
     meta = dict(policy=a.policy, planner=a.planner, config=a.config, set=a.set, weights=a.weights, imgsz=a.imgsz,
-                level=a.level, episodes=a.episodes, seed=a.seed)
+                blur_samples=a.blur_samples, level=a.level, episodes=a.episodes, seed=a.seed)
     with open(os.path.join(a.out, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(dict(meta=meta, results=results), f, indent=1)
     print(f"[vision_loop] wrote {a.out}/summary.json")
